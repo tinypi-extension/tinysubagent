@@ -65,7 +65,7 @@ const plugin = await herdrPluginInfo(PLUGIN_ID);
 if (!plugin?.enabled) fail(`plugin ${PLUGIN_ID} not installed/enabled`);
 console.log(`herdr ${status.version}, plugin ${PLUGIN_ID} ok`);
 
-const { config, warnings } = loadConfig();
+const { config, warnings } = loadConfig(process.cwd(), getAgentDir());
 for (const warning of warnings) console.log(`config warning: ${warning}`);
 
 // `bogus` deliberately points at a model that cannot resolve, so the child dies

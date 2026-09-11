@@ -11,6 +11,7 @@
  * session replays a call — which is reported as an error rather than ignored.
  */
 
+import * as path from "node:path";
 import { CONFIG_FILENAME, CURRENT_PROFILE, type TinysubagentConfig } from "./config.ts";
 import type { Profile, ThinkingLevel } from "./types.ts";
 
@@ -20,9 +21,22 @@ export interface ParentDefaults {
 	thinking?: ThinkingLevel;
 }
 
-export type ProfileResolution =
-	| { ok: true; name: string; model?: string; thinking?: ThinkingLevel }
-	| { ok: false; error: string };
+/**
+ * The triple a child was launched with: which profile was asked for, and the
+ * `{ model, thinking }` it actually resolved to.
+ *
+ * Kept structured rather than as one pre-formatted label because the two
+ * consumers want different things from it — the result message wants the label,
+ * the spawn acknowledgment colours the parts — and a label cannot be split back
+ * into its parts without guessing.
+ */
+export interface ResolvedProfile {
+	name: string;
+	model?: string;
+	thinking?: ThinkingLevel;
+}
+
+export type ProfileResolution = ({ ok: true } & ResolvedProfile) | { ok: false; error: string };
 
 /** `current` first, then configured names alphabetically. */
 export function availableProfileNames(config: TinysubagentConfig): string[] {
@@ -53,8 +67,8 @@ export function profileParamDescription(config: TinysubagentConfig): string {
 	return lines.join(" ");
 }
 
-/** Description text used when profiles are disabled and the parameter is absent. */
-export function resolvedProfileLabel(resolution: { name: string; model?: string; thinking?: ThinkingLevel }): string {
+/** One-line form of a resolved profile: `current (oc-openai/deepseek-flash, medium)`. */
+export function resolvedProfileLabel(resolution: ResolvedProfile): string {
 	const parts = [resolution.model, resolution.thinking].filter(Boolean);
 	return parts.length > 0 ? `${resolution.name} (${parts.join(", ")})` : resolution.name;
 }
@@ -76,12 +90,16 @@ export function resolveProfile(
 
 	if (!config.enableProfiles) {
 		// Any *named* profile is refused when profiles are off, because that is a
-		// request this configuration genuinely cannot honour.
+		// request this configuration genuinely cannot honour. The highest-precedence
+		// file is the one that owned the switch, so it is the one to name — as a
+		// basename, because this string ends up in a tool error, not a log.
+		const source = config.sources[0];
+		const named = source ? path.basename(source.file) : CONFIG_FILENAME;
 		return {
 			ok: false,
 		error:
 			`profile "${wanted}" cannot be used: profiles are disabled ` +
-			`("enableProfiles" is not true in ${config.source ?? CONFIG_FILENAME}). ` +
+			`("enableProfiles" is not true in ${named}). ` +
 			`Only "${CURRENT_PROFILE}" is available.`,
 		};
 	}

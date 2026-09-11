@@ -50,8 +50,9 @@ reaching into a child's turn; nothing here does that.)
 - Clean-room pi-side code. The reference (`~/Project/pi-herdr-subagents-main`) is used
   only as the spec for herdr CLI mechanics and the herdr-plugin event flow.
 - The **herdr plugin is reused as-is** — it stays a dependency.
-- Config lives in a standalone `~/.pi/agent/tinysubagent.json` (or `.jsonc` for a file that
-  can carry comments), untouched by `settings.json`.
+- Config lives in a standalone `tinysubagent.json` (or `.jsonc` for a file that can carry
+  comments), untouched by `settings.json`. The per-user file stays at `~/.pi/agent/`; a project
+  may carry its own at `<project>/.pi/`.
 - Aim for one readable `index.ts` plus small helpers, not a module tree.
 - Children inherit the user's installed pi extensions, so MCP tools resolve in the
   child; the frontmatter `tools` allowlist still gates what the child may call.
@@ -79,10 +80,44 @@ tricks · hot config reload.
 
 Missing file ⇒ same as `enableProfiles: false`.
 
-The same file may be named `tinysubagent.jsonc`, in which case it may carry `//` and `/* */`
-comments and trailing commas. When both names exist the `.jsonc` wins and the `.json` is
-ignored silently — writing a `.jsonc` is all it takes to switch over. `PI_TINYSUBAGENT_CONFIG`
-points at a specific file and beats both.
+A config is read from two scopes. **Global** is `<agentDir>/tinysubagent.json` or `.jsonc`,
+where `<agentDir>` is `~/.pi/agent` (`$PI_CODING_AGENT_DIR` when set). **Project** is
+`<project>/.pi/tinysubagent.json` or `.jsonc` — the project's `.pi/`, not `.pi/agent/`. The
+`.jsonc` variant may carry `//` and `/* */` comments and trailing commas. Precedence, highest
+first:
+
+1. `$PI_TINYSUBAGENT_CONFIG` — the only file read; nothing layers under it.
+2. `<project>/.pi/tinysubagent.jsonc`
+3. `<project>/.pi/tinysubagent.json`
+4. `<agentDir>/tinysubagent.jsonc`
+5. `<agentDir>/tinysubagent.json`
+
+Two rules, independent of each other. **Scope beats filename**: a project `.json` outranks a
+global `.jsonc`. **Within one directory** `.jsonc` outranks `.json` and the sibling `.json` is
+ignored silently — writing a `.jsonc` is all it takes to switch over.
+
+The files layer, they do not replace. `profiles` merge by name with the higher scope winning
+per name, so a project file adding one profile inherits every global profile and redefining one
+replaces only that one. `enableProfiles` comes from the highest-precedence file that specifies
+the key.
+
+A project file that cannot be read or parsed is skipped with a warning naming it, and the
+global config still applies — a repo file can never disable profiles that were already working.
+
+Repos should commit `.pi/tinysubagent.jsonc`, which needs a `.gitignore` negation pair: a bare
+`.pi/` ignore rule (very common — `.pi/` usually holds per-machine state) swallows the config
+silently, as `git check-ignore` confirms. Git cannot re-include a file whose parent directory
+is excluded, so `.pi/*` is required rather than `.pi/`:
+
+```gitignore
+.pi/*
+!.pi/tinysubagent.jsonc
+```
+
+Accepted limitation: when `<project>/.pi/agent` exists, spawned children are launched with
+`PI_CODING_AGENT_DIR` pointing at it, so a child's global scope is that directory rather than
+`~/.pi/agent`. A subagent that itself delegates may therefore resolve a different merged
+profile set than its parent. Nothing is forwarded.
 
 ## Migration
 

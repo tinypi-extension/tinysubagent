@@ -25,6 +25,7 @@
 
 import { readFileSync, rmSync } from "node:fs";
 import { herdrPaneExists } from "./herdr.ts";
+import type { ResolvedProfile } from "./profiles.ts";
 import { readFailureNote, readFinalMessage } from "./session.ts";
 
 const POLL_INTERVAL_MS = 1_000;
@@ -48,8 +49,8 @@ export interface RunningSubagent {
 	id: string;
 	name: string;
 	agent: string | null;
-	/** Resolved profile label, for display only. */
-	profile: string | null;
+	/** Resolved profile, for display only. */
+	profile: ResolvedProfile | null;
 	paneId: string;
 	sessionFile: string;
 	exitCodeFile: string;

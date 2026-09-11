@@ -10,6 +10,8 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+
 import tinysubagent from "../index.ts";
 import { discoverAgents } from "../src/agents.ts";
 import { loadConfig } from "../src/config.ts";
@@ -23,6 +25,7 @@ interface Registered {
 	promptGuidelines?: string[];
 	parameters?: { properties?: Record<string, unknown> };
 	execute?: unknown;
+	renderResult?: (result: unknown, options: unknown, theme: unknown, context: unknown) => { render(width: number): string[] };
 }
 
 /** The smallest `ExtensionAPI` the factory touches. */
@@ -168,7 +171,9 @@ test("the batch size in the description matches the enforced cap", () => {
 test("the profile parameter exists exactly when profiles are enabled", () => {
 	// The knob must not be offered when turning it would do nothing, so the schema
 	// and the config have to agree in both directions.
-	const { config } = loadConfig();
+	// Deliberately the real global config: this test compares the advertised schema
+	// against the config on disk, so a project-only lookup would miss the point.
+	const { config } = loadConfig(process.cwd(), getAgentDir());
 	const stub = stubApi();
 	withEnv(INSIDE, () => {
 		tinysubagent(stub.api as never);
@@ -185,4 +190,86 @@ test("the profile parameter exists exactly when profiles are enabled", () => {
 
 	const description = stub.tools[0]?.description ?? "";
 	assert.equal(description.includes("Profiles:"), config.enableProfiles);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// The acknowledgment row
+// ────────────────────────────────────────────────────────────────────────────
+
+/** A theme whose colours are visible in the output, so the mapping can be asserted. */
+const MARKING_THEME = {
+	fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+	bold: (text: string) => `*${text}*`,
+};
+
+function renderAck(details: unknown, content: string): string[] {
+	const stub = stubApi();
+	withEnv(INSIDE, () => {
+		tinysubagent(stub.api as never);
+	});
+	const render = stub.tools[0]?.renderResult;
+	assert.equal(typeof render, "function");
+	const component = render?.(
+		{ content: [{ type: "text", text: content }], details },
+		{ expanded: false, isPartial: false },
+		MARKING_THEME as never,
+		{} as never,
+	);
+	// Wide enough that nothing wraps, and `render` pads to the width — the padding
+	// is the renderer's business, not the line's.
+	return (component?.render(1000) ?? []).map((line) => line.trimEnd());
+}
+
+test("the acknowledgment colours each part of the line, in the plain line's order", () => {
+	const [line] = renderAck(
+		{
+			status: "started",
+			spawned: [
+				{
+					agent: "scout",
+					name: "scout-mcp-capability-check",
+					paneId: "w1:p1B",
+					profile: { name: "current", model: "oc-openai/deepseek-flash", thinking: "medium" },
+					warnings: [],
+				},
+			],
+			failed: [],
+		},
+		"Scout (scout-mcp-capability-check) [current] oc-openai/deepseek-flash (medium)",
+	);
+
+	assert.equal(
+		line,
+		"<toolTitle>*Scout*</toolTitle> <muted>(</muted><accent>scout-mcp-capability-check</accent><muted>)</muted>" +
+			" <success>[current]</success> <dim>oc-openai/deepseek-flash</dim>" +
+			" <muted>(</muted><thinkingMedium>medium</thinkingMedium><muted>)</muted>",
+	);
+});
+
+test("a launch error is shown as the error it is, not as a spawn", () => {
+	const lines = renderAck({ status: "error", error: "herdr is not reachable" }, "herdr is not reachable");
+	assert.deepEqual(lines, ["<error>herdr is not reachable</error>"]);
+});
+
+test("failures and warnings keep their own colour under the spawns", () => {
+	const lines = renderAck(
+		{
+			status: "started",
+			spawned: [
+				{
+					agent: "worker",
+					name: "worker",
+					paneId: "w1:p2",
+					profile: { name: "light", model: "m", thinking: "low" },
+					warnings: ["agent \"worker\": unknown tool(s) bash"],
+				},
+			],
+			failed: [{ agent: "reviewer", error: "unknown agent \"reviewer\"" }],
+		},
+		"Worker (worker) [light] m (low)\nfailed reviewer: unknown agent \"reviewer\"",
+	);
+
+	assert.match(lines[0] ?? "", /<accent>worker<\/accent>/);
+	assert.equal(lines[1], '<error>failed reviewer: unknown agent "reviewer"</error>');
+	assert.equal(lines[2], '<warning>agent "worker": unknown tool(s) bash</warning>');
 });

@@ -29,7 +29,7 @@ import {
 	herdrPaneOpen,
 	herdrPaneRename,
 } from "./herdr.ts";
-import { resolveProfile, resolvedProfileLabel } from "./profiles.ts";
+import { resolveProfile } from "./profiles.ts";
 import { expandToolPatterns } from "./tool-patterns.ts";
 import { isThinkingLevel, REPORT_TOOL_NAME, type AgentDef, type ThinkingLevel } from "./types.ts";
 import type { TinysubagentConfig } from "./config.ts";
@@ -281,7 +281,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			id,
 			name: request.name,
 			agent: request.agent,
-			profile: resolvedProfileLabel(profile),
+			profile: { name: profile.name, model: profile.model, thinking: profile.thinking },
 			paneId,
 			sessionFile: paths.childSessionFile,
 			exitCodeFile: paths.exitCodeFile,

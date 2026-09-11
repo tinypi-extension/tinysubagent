@@ -16,12 +16,20 @@
  */
 
 import { dirname, join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	getAgentDir,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type Theme,
+	type ThemeColor,
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type, type TSchema } from "typebox";
+import { ackLine, ackParts, type SpawnAck } from "./src/ack.ts";
 import { discoverAgents } from "./src/agents.ts";
 import { CURRENT_PROFILE, loadConfig, type TinysubagentConfig } from "./src/config.ts";
 import { MIN_HERDR_VERSION, PLUGIN_ID, herdrPaneClose, herdrPaneOpen, herdrPluginInfo, herdrStatus, isInsideHerdr, versionAtLeast } from "./src/herdr.ts";
-import { availableProfileNames, profileParamDescription, resolveProfile } from "./src/profiles.ts";
+import { availableProfileNames, profileParamDescription, resolveProfile, type ResolvedProfile } from "./src/profiles.ts";
 import {
 	MAX_PARALLEL_TASKS,
 	TOOL_NAME,
@@ -35,7 +43,7 @@ import {
 	type ToolParams,
 } from "./src/spawn.ts";
 import { buildResultDetails, buildResultText, type SubagentResult } from "./src/steer.ts";
-import type { AgentDef } from "./src/types.ts";
+import { isThinkingLevel, type AgentDef, type ThinkingLevel } from "./src/types.ts";
 import { waitForSubagent, type RunningSubagent } from "./src/watcher.ts";
 
 const MAX_LISTED_AGENTS = 12;
@@ -187,13 +195,67 @@ function failure(message: string) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// The acknowledgment line
+// ────────────────────────────────────────────────────────────────────────────
+
+/** One child as the spawn acknowledgment reports it. */
+interface SpawnedEntry {
+	agent: string;
+	name: string;
+	paneId: string;
+	profile: ResolvedProfile | null;
+	warnings: string[];
+}
+
+interface AckDetails {
+	status?: string;
+	error?: string;
+	spawned?: SpawnedEntry[];
+	failed?: { agent: string; error: string }[];
+}
+
+const NOTE_STARTED =
+	"Results arrive as a steer message when the subagents finish. Do not poll or wait — end your turn or keep working.";
+const NOTE_NOTHING = "Nothing was launched.";
+
+/** Thinking levels carry their own theme colours, so the level is readable at a glance. */
+const THINKING_COLORS: Record<ThinkingLevel, ThemeColor> = {
+	off: "thinkingOff",
+	minimal: "thinkingMinimal",
+	low: "thinkingLow",
+	medium: "thinkingMedium",
+	high: "thinkingHigh",
+	xhigh: "thinkingXhigh",
+	max: "thinkingMax",
+};
+
+/**
+ * The coloured form of `ackLine`: same parts, same order, one colour each. The
+ * role is the row's title, the label is the accent, the profile that was asked
+ * for is green, the model it resolved to is dim, and thinking keeps its own
+ * level colour.
+ */
+function renderAck(ack: SpawnAck, theme: Theme): string {
+	const parts = ackParts(ack);
+	let line = theme.fg("toolTitle", theme.bold(parts.role));
+	line += ` ${theme.fg("muted", "(")}${theme.fg("accent", parts.name)}${theme.fg("muted", ")")}`;
+	if (parts.profile !== null) line += ` ${theme.fg("success", `[${parts.profile}]`)}`;
+	if (parts.model !== null) line += ` ${theme.fg("dim", parts.model)}`;
+	if (parts.thinking !== null) {
+		const color = isThinkingLevel(parts.thinking) ? THINKING_COLORS[parts.thinking] : "muted";
+		line += ` ${theme.fg("muted", "(")}${theme.fg(color, parts.thinking)}${theme.fg("muted", ")")}`;
+	}
+	return line;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Registration
 // ────────────────────────────────────────────────────────────────────────────
 
 export default function tinysubagent(pi: ExtensionAPI): void {
 	if (!isInsideHerdr()) return;
 
-	const { config, warnings: configWarnings } = loadConfig();
+	const { config, warnings: configWarnings } = loadConfig(process.cwd(), getAgentDir());
 	const parameters = buildParameters(config);
 	// Roles are advertised at registration time, when there is no session context
 	// yet — the process cwd is the best available answer.
@@ -325,7 +387,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 
 			// Launch sequentially: panes are created one at a time anyway, and a
 			// partly-failed batch reports exactly which children did start.
-			const spawned: { name: string; paneId: string; profile: string | null; warnings: string[] }[] = [];
+			const spawned: SpawnedEntry[] = [];
 			const failures: { agent: string; error: string }[] = [];
 			const runnings: RunningSubagent[] = [];
 
@@ -334,6 +396,9 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 				if (result.ok) {
 					runnings.push(result.running);
 					spawned.push({
+						// `running.agent` is null only for a child that was never launched,
+						// which cannot reach here — fall back to the request anyway.
+						agent: result.running.agent ?? request.agent,
 						name: result.running.name,
 						paneId: result.running.paneId,
 						profile: result.running.profile,
@@ -347,17 +412,12 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 			if (runnings.length > 0) void watchBatch(runnings);
 
 			const lines = [
-				...spawned.map(
-					(entry) => `spawned ${entry.name} (pane ${entry.paneId})${entry.profile ? ` [${entry.profile}]` : ""}`,
-				),
+				...spawned.map((entry) => ackLine(entry)),
 				...failures.map((entry) => `failed ${entry.agent}: ${entry.error}`),
 				...spawned.flatMap((entry) => entry.warnings),
 			];
 
-			const note =
-				runnings.length === 0
-					? "Nothing was launched."
-					: "Results arrive as a steer message when the subagents finish. Do not poll or wait — end your turn or keep working.";
+			const note = runnings.length === 0 ? NOTE_NOTHING : NOTE_STARTED;
 
 			return {
 				content: [{ type: "text" as const, text: `${lines.join("\n")}\n\n${note}` }],
@@ -368,6 +428,33 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 				},
 				isError: runnings.length === 0,
 			};
+		},
+
+		/**
+		 * The colored form of the same acknowledgment. The model-facing text stays
+		 * plain, so nothing here affects what the model reads — it is the same parts
+		 * with the theme applied.
+		 */
+		renderResult(result, _options, theme) {
+			const details = result.details as AckDetails | undefined;
+			const spawned = details?.spawned ?? [];
+
+			if (spawned.length === 0) {
+				const first = result.content[0];
+				const raw = first && first.type === "text" ? first.text : "(no output)";
+				return new Text(theme.fg("error", raw), 0, 0);
+			}
+
+			const lines = [
+				...spawned.map((entry) => renderAck(entry, theme)),
+				...(details?.failed ?? []).map((entry) =>
+					theme.fg("error", `failed ${entry.agent}: ${entry.error}`),
+				),
+				...spawned.flatMap((entry) => entry.warnings.map((warning) => theme.fg("warning", warning))),
+				"",
+				theme.fg("muted", NOTE_STARTED),
+			];
+			return new Text(lines.join("\n"), 0, 0);
 		},
 	});
 }

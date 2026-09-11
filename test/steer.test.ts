@@ -1,18 +1,22 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import type { SubagentOutcome } from "../src/watcher.ts";
+import type { ResolvedProfile } from "../src/profiles.ts";
 import { buildResultDetails, buildResultText, formatDuration, statusLabel } from "../src/steer.ts";
+import type { SubagentOutcome } from "../src/watcher.ts";
+
+/** The profile every result is reported under unless a test overrides it. */
+const LIGHT: ResolvedProfile = { name: "light", model: "oc-openai/deepseek-flash", thinking: "low" };
 
 function result(
 	name: string,
 	outcome: SubagentOutcome,
-	overrides: { task?: string; profile?: string | null; paneId?: string; elapsedMs?: number } = {},
+	overrides: { task?: string; profile?: ResolvedProfile | null; paneId?: string; elapsedMs?: number } = {},
 ) {
 	return {
 		name,
 		agent: "worker",
-		profile: overrides.profile === undefined ? "light (oc-openai/deepseek-flash, low)" : overrides.profile,
+		profile: overrides.profile === undefined ? LIGHT : overrides.profile,
 		paneId: overrides.paneId ?? "w1:p2",
 		task: overrides.task ?? `task for ${name}`,
 		sessionFile: "/sessions/x.jsonl",

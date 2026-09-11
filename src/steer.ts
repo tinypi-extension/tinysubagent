@@ -8,12 +8,14 @@
  * belongs to which request from the surrounding conversation.
  */
 
+import { resolvedProfileLabel } from "./profiles.ts";
+import type { ResolvedProfile } from "./profiles.ts";
 import type { SubagentOutcome } from "./watcher.ts";
 
 export interface SubagentResult {
 	name: string;
 	agent: string | null;
-	profile: string | null;
+	profile: ResolvedProfile | null;
 	paneId: string;
 	task: string;
 	outcome: SubagentOutcome;
@@ -75,7 +77,7 @@ function section(result: SubagentResult, index: number, total: number): string {
 
 	const meta = [
 		result.agent ? `agent \`${result.agent}\`` : null,
-		result.profile ? `profile \`${result.profile}\`` : null,
+		result.profile ? `profile \`${resolvedProfileLabel(result.profile)}\`` : null,
 		`pane \`${result.paneId}\``,
 	].filter((part): part is string => part !== null);
 
@@ -108,7 +110,7 @@ export function buildResultDetails(results: readonly SubagentResult[]): Record<s
 			return {
 				name: result.name,
 				agent: result.agent,
-				profile: result.profile,
+				profile: result.profile === null ? null : resolvedProfileLabel(result.profile),
 				paneId: result.paneId,
 				sessionFile: result.sessionFile,
 				task: result.task,

@@ -31,7 +31,7 @@ function scenario(options: { session?: string | null } = {}) {
 		id: "aaaa1111",
 		name: "watch",
 		agent: "worker",
-		profile: "light",
+		profile: { name: "light" },
 		paneId: "w1:p9",
 		sessionFile,
 		exitCodeFile: `${sessionFile}.exitcode`,

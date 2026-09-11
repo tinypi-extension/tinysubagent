@@ -146,7 +146,7 @@ function context(agents: readonly AgentDef[], allToolNames: string[] = ["read", 
 		env: {},
 		allToolNames,
 		agents,
-		config: { enableProfiles: false, profiles: {} },
+		config: { enableProfiles: false, profiles: {}, sources: [] },
 	};
 }
 
