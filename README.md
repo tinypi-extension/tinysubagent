@@ -24,7 +24,7 @@ no pane to split, so the tool is not offered at all rather than offered and fail
 | pi | The pi coding agent. |
 | herdr | **0.8.2 or newer** — split plugin panes. Check with `herdr --version`. |
 | herdr running | `herdr status server --json` should report `"running": true`. |
-| The `tinysubagent-panes` herdr plugin | Ships with this repo at `herdr-plugin/`. Link it once; nothing is copied or installed from elsewhere. |
+| The `tinysubagent-panes` herdr plugin | Ships with this repo at `herdr-plugin/`. pi offers to link it on the first session inside herdr — one keypress, nothing copied or installed from elsewhere. |
 | pi started inside a herdr pane | The tool is registered only when `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` are set. |
 
 ## Install
@@ -86,8 +86,18 @@ pi list                  # show what is installed
 ### 2. Link the herdr plugin
 
 The pane entrypoint **ships with the package**, in `herdr-plugin/`: plugin id
-`tinysubagent-panes`, entrypoint `subagent`. Link it once — herdr stores the absolute
-path and copies nothing, so link the directory where it really lives and leave it there:
+`tinysubagent-panes`, entrypoint `subagent`. herdr stores the absolute path and copies
+nothing, so the link points at the directory where the plugin really lives.
+
+**You do not have to run this by hand.** Start pi inside a herdr pane and, if the plugin
+is missing or disabled, the extension asks before your first prompt:
+
+```
+Link the tinysubagent herdr plugin?
+```
+
+Confirm and it runs the link for you. Nothing is touched without that confirmation —
+decline and you can run it yourself whenever you like:
 
 ```bash
 herdr plugin link /path/to/tinysubagent/herdr-plugin --enabled
@@ -101,10 +111,14 @@ herdr plugin link ./herdr-plugin --enabled
 # or: npm run link-plugin
 ```
 
-Unsure where `pi install` put the package? Trigger the `subagent` tool once: the
-"not installed" error prints the exact path to link.
+Unsure where `pi install` put the package? Trigger the `subagent` tool once, or decline
+the offer: the "not installed" error prints the exact path to link.
 
-Then confirm it is present and enabled:
+Linking is only offered where pi can prompt — interactive and RPC sessions. In print or
+JSON mode there is no dialog, so nothing is linked and the tool reports the command
+instead.
+
+To confirm it is present and enabled:
 
 ```bash
 herdr plugin list
@@ -116,15 +130,6 @@ If it shows up disabled:
 ```bash
 herdr plugin enable tinysubagent-panes
 ```
-
-> Already linked the third-party `pi-herdr-subagents` plugin? **tinysubagent no longer
-> uses it**, but do not unlink it reflexively: the `subagent` package
-> (`~/.pi/agent/extensions/subagent`) still opens its panes through it. Only remove it
-> if nothing else on the machine uses that package:
->
-> ```bash
-> herdr plugin unlink pi-herdr-subagents
-> ```
 
 ### 3. Verify
 
@@ -313,7 +318,7 @@ negation pair (git cannot re-include a file under an excluded directory):
 | No `subagent` tool at all | pi is not running inside herdr | Start pi from a herdr pane. The tool is only registered when `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` are set. |
 | "herdr is not reachable from this pane" | The herdr server stopped | `herdr status server --json`; restart herdr. |
 | "herdr >= 0.8.2 is required" | Old herdr | Update herdr, then restart the herdr session. |
-| "the herdr plugin ... is not installed" / "is disabled" | The bundled pane entrypoint was never linked | Run the exact `herdr plugin link <repo>/herdr-plugin --enabled` command from the error, then `herdr plugin list`. |
+| "the herdr plugin ... is not installed" / "is disabled" | The bundled pane entrypoint was never linked, or the offer was declined | Confirm the prompt at session start, or run the exact `herdr plugin link <repo>/herdr-plugin --enabled` command from the error, then `herdr plugin list`. |
 | "no agent definitions found" | No role files | Add a markdown file with `name`, `description` and `tools` frontmatter to `~/.pi/agent/agents/` or `<project>/.pi/agents/`. |
 | `profile "x" cannot be used: profiles are disabled` | `enableProfiles` is not `true` | Set `"enableProfiles": true` in the highest-precedence config file named in the error. |
 | `unknown profile "x"` | Typo, or the profile lives in a lower-precedence file | Check the names in the error and the profile's config file. |

@@ -10,7 +10,9 @@ import {
 	PLUGIN_ENTRYPOINT,
 	PLUGIN_ID,
 	herdrPaneOpen,
+	herdrPluginEnable,
 	herdrPluginInfo,
+	herdrPluginLink,
 	pluginDir,
 } from "../src/herdr.ts";
 
@@ -184,13 +186,17 @@ function shellQuote(value: string): string {
  * Run `fn` with HERDR_BIN_PATH pointed at a stub that records its argv and
  * prints `payload`. Restores the variable and cleans up afterwards.
  */
-async function withHerdrStub<T>(payload: string, fn: () => Promise<T>): Promise<{ result: T; args: string[] }> {
+async function withHerdrStub<T>(
+	payload: string,
+	fn: () => Promise<T>,
+	exitCode = 0,
+): Promise<{ result: T; args: string[] }> {
 	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-herdr-stub-"));
 	const argvFile = join(dir, "argv.txt");
 	const stub = join(dir, "herdr");
 	writeFileSync(
 		stub,
-		`#!/usr/bin/env bash\nprintf '%s\\n' "$@" >> ${shellQuote(argvFile)}\nprintf '%s' ${shellQuote(payload)}\n`,
+		`#!/usr/bin/env bash\nprintf '%s\\n' "$@" >> ${shellQuote(argvFile)}\nprintf '%s' ${shellQuote(payload)}\nexit ${exitCode}\n`,
 	);
 	chmodSync(stub, 0o755);
 
@@ -260,6 +266,27 @@ test("herdrPluginInfo reads enabled, disabled and absent from the plugin list", 
 		() => herdrPluginInfo(PLUGIN_ID),
 	);
 	assert.equal(absent.result, null);
+});
+
+test("herdrPluginLink links the given path with --enabled", async () => {
+	const envelope = '{"id":"cli:plugin","result":{"type":"plugin_linked"}}';
+	const { result, args } = await withHerdrStub(envelope, () => herdrPluginLink("/some/plugin-dir"));
+	assert.equal(result, undefined);
+	// `--enabled` is part of the same step so a confirm cannot leave a plugin
+	// linked-but-off, which would need a second prompt to fix.
+	assert.deepEqual(args, ["plugin", "link", "/some/plugin-dir", "--enabled"]);
+});
+
+test("herdrPluginEnable enables the bundled plugin by id", async () => {
+	const envelope = '{"id":"cli:plugin","result":{"type":"plugin_enabled"}}';
+	const { args } = await withHerdrStub(envelope, () => herdrPluginEnable());
+	assert.deepEqual(args, ["plugin", "enable", PLUGIN_ID]);
+});
+
+test("a failing plugin command surfaces herdr's exit status", async () => {
+	// The session hook promises the user nothing on failure, so the command must
+	// reject rather than return quietly and let the tool probe disagree.
+	await withHerdrStub("", () => assert.rejects(herdrPluginLink("/nope")), 1);
 });
 
 test("herdrPaneOpen refuses a pane it cannot address", async () => {

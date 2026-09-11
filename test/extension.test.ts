@@ -8,6 +8,9 @@
  */
 
 import { strict as assert } from "node:assert";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -15,6 +18,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import tinysubagent from "../index.ts";
 import { discoverAgents } from "../src/agents.ts";
 import { loadConfig } from "../src/config.ts";
+import { PLUGIN_ID } from "../src/herdr.ts";
 import { TOOL_NAME } from "../src/spawn.ts";
 
 interface Registered {
@@ -273,4 +277,149 @@ test("failures and warnings keep their own colour under the spawns", () => {
 	assert.match(lines[0] ?? "", /<accent>worker<\/accent>/);
 	assert.equal(lines[1], '<error>failed reviewer: unknown agent "reviewer"</error>');
 	assert.equal(lines[2], '<warning>agent "worker": unknown tool(s) bash</warning>');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// The session-start plugin offer
+// ────────────────────────────────────────────────────────────────────────────
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+const STATUS_OK = JSON.stringify({ id: "cli:status", result: { running: true, version: "0.8.2" } });
+
+/**
+ * A herdr stub that answers each command the probe makes with its own payload.
+ * The hook asks about the server and then the plugin list, so a single-payload
+ * stub could not drive it. Every argv is recorded so the fix can be asserted.
+ */
+async function withHerdrStub<T>(
+	plugins: unknown,
+	fn: () => Promise<T>,
+): Promise<{ result: T; calls: string[] }> {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-offer-stub-"));
+	const argvFile = join(dir, "argv.txt");
+	const statusFile = join(dir, "status.json");
+	const pluginsFile = join(dir, "plugins.json");
+	writeFileSync(statusFile, STATUS_OK);
+	writeFileSync(pluginsFile, JSON.stringify(plugins));
+
+	const stub = join(dir, "herdr");
+	writeFileSync(
+		stub,
+		[
+			"#!/usr/bin/env bash",
+			`printf '%s\\n' "$*" >> ${shellQuote(argvFile)}`,
+			'case "$1 $2" in',
+			`  "status server") cat ${shellQuote(statusFile)} ;;`,
+			`  "plugin list") cat ${shellQuote(pluginsFile)} ;;`,
+			`  "plugin link"|"plugin enable") printf '%s' '{"id":"cli:plugin","result":{"type":"plugin_linked"}}' ;;`,
+			"esac",
+			"",
+		].join("\n"),
+	);
+	chmodSync(stub, 0o755);
+
+	const saved = process.env.HERDR_BIN_PATH;
+	process.env.HERDR_BIN_PATH = stub;
+	try {
+		const result = await fn();
+		const calls = existsSync(argvFile) ? readFileSync(argvFile, "utf8").trimEnd().split("\n") : [];
+		return { result, calls };
+	} finally {
+		if (saved === undefined) delete process.env.HERDR_BIN_PATH;
+		else process.env.HERDR_BIN_PATH = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+interface FakeUi {
+	notifications: { message: string; type?: string }[];
+	confirmations: { title: string; message: string }[];
+}
+
+/**
+ * Fire `session_start` inside herdr against the stub, with a UI that records
+ * what it was asked. Returns what the hook said and every herdr call it made.
+ */
+async function runSessionStart(
+	plugins: unknown,
+	options: { hasUI?: boolean; agree?: boolean } = {},
+): Promise<{ ui: FakeUi; calls: string[] }> {
+	const stub = stubApi();
+	withEnv(INSIDE, () => {
+		tinysubagent(stub.api as never);
+	});
+
+	const ui: FakeUi = { notifications: [], confirmations: [] };
+	const ctx = {
+		hasUI: options.hasUI ?? true,
+		ui: {
+			confirm: async (title: string, message: string) => {
+				ui.confirmations.push({ title, message });
+				return options.agree ?? true;
+			},
+			notify: (message: string, type?: string) => {
+				ui.notifications.push({ message, type });
+			},
+		},
+	};
+
+	const handler = stub.listeners.get("session_start") as
+		| ((event: unknown, ctx: unknown) => unknown)
+		| undefined;
+	assert.equal(typeof handler, "function");
+
+	const { calls } = await withHerdrStub(plugins, async () => {
+		await handler?.({ reason: "startup" }, ctx);
+	});
+	return { ui, calls };
+}
+
+const MISSING = { id: "cli:plugin", result: { plugins: [] } };
+const LINKED_ON = { id: "cli:plugin", result: { plugins: [{ plugin_id: PLUGIN_ID, enabled: true }] } };
+const LINKED_OFF = { id: "cli:plugin", result: { plugins: [{ plugin_id: PLUGIN_ID, enabled: false }] } };
+
+test("session start offers to link a missing plugin, and links it on confirm", async () => {
+	const { ui, calls } = await runSessionStart(MISSING);
+
+	assert.equal(ui.confirmations.length, 1);
+	assert.match(ui.confirmations[0]?.title ?? "", /Link/);
+	// The dialog carries the exact command, so a decline still leaves the user
+	// with the fix rather than a dead end.
+	assert.match(ui.confirmations[0]?.message ?? "", /herdr plugin link/);
+	assert.ok(
+		calls.some((call) => call.startsWith("plugin link ") && call.endsWith("--enabled")),
+		`no link call in: ${calls.join(" | ")}`,
+	);
+	assert.ok(ui.notifications.some((note) => /is ready/.test(note.message)));
+});
+
+test("declining the offer leaves the herdr config untouched", async () => {
+	const { ui, calls } = await runSessionStart(MISSING, { agree: false });
+
+	assert.equal(ui.confirmations.length, 1);
+	assert.ok(!calls.some((call) => call.startsWith("plugin link")));
+	assert.ok(!calls.some((call) => call.startsWith("plugin enable")));
+});
+
+test("a linked and enabled plugin is never offered", async () => {
+	const { ui } = await runSessionStart(LINKED_ON);
+	assert.deepEqual(ui.confirmations, []);
+});
+
+test("a disabled plugin is offered an enable, not a link", async () => {
+	const { ui, calls } = await runSessionStart(LINKED_OFF);
+
+	assert.equal(ui.confirmations.length, 1);
+	assert.match(ui.confirmations[0]?.title ?? "", /Enable/);
+	assert.ok(calls.includes(`plugin enable ${PLUGIN_ID}`), `no enable call in: ${calls.join(" | ")}`);
+	assert.ok(!calls.some((call) => call.startsWith("plugin link")));
+});
+
+test("without a UI the offer is skipped entirely", async () => {
+	const { ui, calls } = await runSessionStart(MISSING, { hasUI: false });
+	assert.deepEqual(ui.confirmations, []);
+	assert.deepEqual(calls, []);
 });

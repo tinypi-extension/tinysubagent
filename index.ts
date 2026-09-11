@@ -28,7 +28,7 @@ import { Type, type TSchema } from "typebox";
 import { ackLine, ackParts, type SpawnAck } from "./src/ack.ts";
 import { discoverAgents } from "./src/agents.ts";
 import { CURRENT_PROFILE, loadConfig, type TinysubagentConfig } from "./src/config.ts";
-import { MIN_HERDR_VERSION, PLUGIN_ID, herdrPaneClose, herdrPaneOpen, herdrPluginInfo, herdrStatus, isInsideHerdr, pluginDir, versionAtLeast } from "./src/herdr.ts";
+import { MIN_HERDR_VERSION, PLUGIN_ID, herdrPaneClose, herdrPaneOpen, herdrPluginEnable, herdrPluginInfo, herdrPluginLink, herdrStatus, isInsideHerdr, pluginDir, versionAtLeast, type RunOptions } from "./src/herdr.ts";
 import { availableProfileNames, profileParamDescription, resolveProfile, type ResolvedProfile } from "./src/profiles.ts";
 import {
 	MAX_PARALLEL_TASKS,
@@ -55,24 +55,52 @@ const MAX_ADVERTISED_DESCRIPTION = 120;
 
 let capabilityCheck: Promise<string | null> | null = null;
 
-async function checkHerdr(): Promise<string | null> {
-	const status = await herdrStatus();
+/** What the probe found, and whether the session hook can offer a one-step fix. */
+interface HerdrReadiness {
+	/** The message the tool reports; null when everything is in place. */
+	problem: string | null;
+	/** The fix the user can be asked to approve, when there is one. */
+	fix: "link" | "enable" | null;
+}
+
+const READY: HerdrReadiness = { problem: null, fix: null };
+
+/**
+ * The full capability probe, kept separate from the cached verdict so the session
+ * hook can ask "what is wrong, and can I offer to fix it?" without disturbing it.
+ */
+async function probeHerdr(options: RunOptions = {}): Promise<HerdrReadiness> {
+	const status = await herdrStatus(options);
 	if (!status?.running) {
-		return "herdr is not reachable from this pane — is the herdr server still running?";
+		return {
+			problem: "herdr is not reachable from this pane — is the herdr server still running?",
+			fix: null,
+		};
 	}
 	if (!status.version || !versionAtLeast(status.version, MIN_HERDR_VERSION)) {
-		return `herdr >= ${MIN_HERDR_VERSION} is required for plugin split panes (found ${status.version ?? "unknown"}). Update herdr and restart its session.`;
+		return {
+			problem: `herdr >= ${MIN_HERDR_VERSION} is required for plugin split panes (found ${status.version ?? "unknown"}). Update herdr and restart its session.`,
+			fix: null,
+		};
 	}
-	const plugin = await herdrPluginInfo(PLUGIN_ID);
+	const plugin = await herdrPluginInfo(PLUGIN_ID, options);
 	if (!plugin) {
-		// One-time manual link, deliberately not automatic: linking mutates the
-		// user's global herdr config, which an extension must not do behind them.
-		return `the herdr plugin "${PLUGIN_ID}" is not installed. Run: herdr plugin link "${pluginDir()}" --enabled`;
+		return {
+			problem: `the herdr plugin "${PLUGIN_ID}" is not installed. Run: herdr plugin link "${pluginDir()}" --enabled`,
+			fix: "link",
+		};
 	}
 	if (!plugin.enabled) {
-		return `the herdr plugin "${PLUGIN_ID}" is disabled. Run: herdr plugin enable ${PLUGIN_ID}`;
+		return {
+			problem: `the herdr plugin "${PLUGIN_ID}" is disabled. Run: herdr plugin enable ${PLUGIN_ID}`,
+			fix: "enable",
+		};
 	}
-	return null;
+	return READY;
+}
+
+async function checkHerdr(): Promise<string | null> {
+	return (await probeHerdr()).problem;
 }
 
 /**
@@ -267,13 +295,69 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 	const watchers = new Set<AbortController>();
 	let shuttingDown = false;
 
-	pi.on("session_start", (_event, ctx: ExtensionContext) => {
-		if (!ctx.hasUI || configWarnings.length === 0) return;
+	/** Asked once per session — a second prompt would only nag. */
+	let fixOffered = false;
+
+	/**
+	 * Offer the one-step plugin fix at session start, so a first run is a keypress
+	 * instead of a path-typed command.
+	 *
+	 * Nothing is linked or enabled without the confirmation: this mutates the
+	 * user's global herdr config, so it stays a decision they make. Declining (or
+	 * having no UI to ask in) leaves the tool's own error message as the fallback,
+	 * and the question is not repeated this session.
+	 */
+	async function offerPluginFix(ctx: ExtensionContext): Promise<void> {
+		if (fixOffered || !ctx.hasUI) return;
+
+		// Bounded, and never fatal: a wedged herdr must not hold up the session, and
+		// the tool probe stays the authority on whether a spawn can actually run.
+		const readiness = await probeHerdr({ timeoutMs: 5_000 }).catch(() => null);
+		const fix = readiness?.fix;
+		const problem = readiness?.problem;
+		if (!fix || !problem) return;
+		fixOffered = true;
+
+		const pluginDirPath = pluginDir();
+		const title = fix === "link" ? "Link the tinysubagent herdr plugin?" : "Enable the tinysubagent herdr plugin?";
+		const detail =
+			fix === "link"
+				? `The pane entrypoint "${PLUGIN_ID}" ships with this package but is not linked yet.\n\n` +
+					`herdr plugin link "${pluginDirPath}" --enabled`
+				: `The pane entrypoint "${PLUGIN_ID}" is linked but disabled.\n\n` + `herdr plugin enable ${PLUGIN_ID}`;
+
+		let agreed = false;
 		try {
-			ctx.ui.notify(configWarnings.join("\n"), "warning");
+			agreed = await ctx.ui.confirm(title, detail);
 		} catch {
-			// A notification is not worth failing a session for.
+			return; // No UI after all; the tool reports the problem when it is called.
 		}
+		if (!agreed) return;
+
+		try {
+			if (fix === "link") await herdrPluginLink(pluginDirPath);
+			else await herdrPluginEnable(PLUGIN_ID);
+			// Drop the cached verdict so the next tool call re-probes instead of
+			// reusing the "not installed" answer it may already have.
+			capabilityCheck = null;
+			ctx.ui.notify(`tinysubagent: ${PLUGIN_ID} is ready.`, "info");
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			const verb = fix === "link" ? "link" : "enable";
+			ctx.ui.notify(`tinysubagent: could not ${verb} ${PLUGIN_ID}: ${reason}`, "error");
+		}
+	}
+
+	pi.on("session_start", (_event, ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
+		if (configWarnings.length > 0) {
+			try {
+				ctx.ui.notify(configWarnings.join("\n"), "warning");
+			} catch {
+				// A notification is not worth failing a session for.
+			}
+		}
+		return offerPluginFix(ctx);
 	});
 
 	pi.on("session_shutdown", () => {

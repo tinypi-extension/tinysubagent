@@ -200,6 +200,23 @@ export async function herdrPluginInfo(
 	}
 }
 
+/**
+ * Register a local plugin directory and enable it in the same step.
+ *
+ * Idempotent: herdr accepts a re-link of the path it already has and keeps it
+ * enabled, so a repeat is a no-op rather than an error. That is what lets the
+ * session hook offer the fix without first proving the plugin is absent — and
+ * what makes a stale link repairable by offering the same one-keypress fix.
+ */
+export async function herdrPluginLink(path: string, options: RunOptions = {}): Promise<void> {
+	await runHerdr(["plugin", "link", path, "--enabled"], options);
+}
+
+/** Enable a plugin that is linked but switched off. */
+export async function herdrPluginEnable(id: string = PLUGIN_ID, options: RunOptions = {}): Promise<void> {
+	await runHerdr(["plugin", "enable", id], options);
+}
+
 export interface PaneOpenOptions {
 	/** Working directory herdr gives the new pane (the wrapper also `cd`s). */
 	cwd: string;

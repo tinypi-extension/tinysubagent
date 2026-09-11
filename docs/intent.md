@@ -50,8 +50,10 @@ reaching into a child's turn; nothing here does that.)
 - Clean-room pi-side code. The third-party reference is used only as the spec for herdr
   CLI mechanics and the herdr-plugin event flow.
 - The **herdr plugin is owned here** — `herdr-plugin/` ships with this repo (id
-  `tinysubagent-panes`) and is linked once with `herdr plugin link`; it is no longer an
-  external dependency.
+  `tinysubagent-panes`) and is no longer an external dependency. Linking is still
+  `herdr plugin link`, but the extension offers it as a one-keypress confirmation when a
+  session starts inside herdr instead of leaving the user to type the command. Nothing is
+  linked or enabled without that confirmation.
 - Config lives in a standalone `tinysubagent.json` (or `.jsonc` for a file that can carry
   comments), untouched by `settings.json`. The per-user file stays at `~/.pi/agent/`; a project
   may carry its own at `<project>/.pi/`.
