@@ -30,7 +30,7 @@ import { isThinkingLevel, REPORT_TOOL_NAME, type AgentDef, type ThinkingLevel } 
 import type { TinysubagentConfig } from "./config.ts";
 import type { RunningSubagent } from "./watcher.ts";
 
-export const MAX_PARALLEL_TASKS = 8;
+export const MAX_PARALLEL_TASKS = 4;
 
 /** Name of the spawn tool, shared with `index.ts` and used for the nesting guard below. */
 // Renamed from "tinysubagent": the package/config keep the old name, only the

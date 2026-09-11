@@ -19,7 +19,7 @@ import tinysubagent from "../index.ts";
 import { discoverAgents } from "../src/agents.ts";
 import { loadConfig } from "../src/config.ts";
 import { PLUGIN_ID } from "../src/herdr.ts";
-import { TOOL_NAME } from "../src/spawn.ts";
+import { MAX_PARALLEL_TASKS, TOOL_NAME } from "../src/spawn.ts";
 
 interface Registered {
 	name: string;
@@ -170,7 +170,7 @@ test("the batch size in the description matches the enforced cap", () => {
 	withEnv(INSIDE, () => {
 		tinysubagent(stub.api as never);
 	});
-	assert.match(stub.tools[0]?.description ?? "", /up to 8/);
+	assert.match(stub.tools[0]?.description ?? "", new RegExp(`up to ${MAX_PARALLEL_TASKS}`));
 });
 
 test("the profile parameter exists exactly when profiles are enabled", () => {

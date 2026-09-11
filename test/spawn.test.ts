@@ -100,7 +100,10 @@ test("a batch larger than the cap is refused, and the cap is the only reason", (
 	const tooMany = [...tasks, { agent: "worker", task: "one too many" }];
 	const refused = collectRequests({ tasks: tooMany });
 	assert.equal(refused.ok, false);
-	assert.match(refused.ok === false ? refused.error : "", /too many tasks: 9 \(limit 8\)/);
+	assert.match(
+		refused.ok === false ? refused.error : "",
+		new RegExp(`too many tasks: ${MAX_PARALLEL_TASKS + 1} \\(limit ${MAX_PARALLEL_TASKS}\\)`),
+	);
 });
 
 test("a malformed entry names its own index", () => {

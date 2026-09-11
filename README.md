@@ -8,7 +8,7 @@ pane with an isolated context window and reports back to your session.
   `name`, `description` and `tools` frontmatter.
 - **Fire-and-forget.** A spawn opens the panes and returns immediately. Each child's
   result arrives later as a **steer message** that wakes your session.
-- **Single or parallel.** One task, or up to 8 at once. A batch reports back together
+- **Single or parallel.** One task, or up to 4 at once. A batch reports back together
   in one labelled message.
 - **Model profiles.** Optional `light` / `core` / `pro`-style profiles pin a model and
   thinking level per subagent.
@@ -58,9 +58,6 @@ pi -e git:github.com/tinypi-extension/tinysubagent
 ```
 
 #### Pinning a release
-
-`v0.1.0` was the first release. Pinning is reproducible, but it also freezes you on that
-tag — fixes shipped afterwards will not reach you until you pin a newer tag:
 
 ```bash
 pi install git:github.com/tinypi-extension/tinysubagent@v0.1.0
@@ -192,9 +189,6 @@ Notes on `tools`:
   spawn with an explanation, because the child's pane closes when its own turn settles and
   would strand its children's results.
 
-The tool description advertises at most **12 roles**, and each advertised description is
-clipped at 120 characters. Every role is still selectable even if it is not listed — the
-truncation only affects what the model sees.
 
 ## Use it
 
@@ -206,7 +200,7 @@ Single subagent:
 subagent({ agent: "scout", task: "Map how config resolution works in src/config.ts and report the precedence order.", name: "config-recon" })
 ```
 
-Parallel subagents (up to 8, each in its own pane):
+Parallel subagents (up to 4, each in its own pane):
 
 ```
 subagent({
@@ -223,7 +217,7 @@ Parameters:
 | --- | --- | --- |
 | `agent` | single | Role name, from the roles listed in the tool description. |
 | `task` | single | Complete, self-contained brief. The child cannot see this conversation. |
-| `tasks` | parallel | Array of `{ agent, task, name?, profile? }`. Maximum 8. |
+| `tasks` | parallel | Array of `{ agent, task, name?, profile? }`. Maximum 4. |
 | `name` | both | Label for the pane and for the result. Defaults to the agent name. |
 | `profile` | both | Only present when profiles are enabled. Defaults to inheriting your session's model and thinking. |
 | `cwd` | both | Working directory for the subagents. Defaults to this session's cwd. |
