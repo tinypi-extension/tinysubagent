@@ -28,8 +28,8 @@ import { join } from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-import { discoverAgents } from "../src/agents.ts";
-import { loadConfig } from "../src/config.ts";
+import { discoverAgents } from "../src/config/agents.ts";
+import { loadConfig } from "../src/config/config.ts";
 import {
 	currentPaneId,
 	herdrPaneClose,
@@ -40,9 +40,10 @@ import {
 	MIN_HERDR_VERSION,
 	PLUGIN_ID,
 	versionAtLeast,
-} from "../src/herdr.ts";
-import { LiveSubPanes } from "../src/layout.ts";
-import { errorMessage, spawnOne, type SpawnContext } from "../src/spawn.ts";
+} from "../src/herdr/cli.ts";
+import { LiveSubPanes } from "../src/herdr/layout.ts";
+import { errorMessage, type SpawnContext } from "../src/children/contract.ts";
+import { spawnOne } from "../src/children/spawn.ts";
 
 const agentName = process.argv[2] ?? "worker";
 const profileName = process.argv[3] ?? "light";

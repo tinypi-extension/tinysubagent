@@ -112,7 +112,7 @@ Notes on `tools`:
 The tool name is `subagent`.
 
 ```
-subagent({ agent: "scout", task: "Map how config resolution works in src/config.ts and report the precedence order.", name: "config-recon" })
+subagent({ agent: "scout", task: "Map how config resolution works in src/config/config.ts and report the precedence order.", name: "config-recon" })
 ```
 
 ```

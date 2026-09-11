@@ -98,14 +98,14 @@ child knows about pi's verdict.
 
 1. **Esc is still silent.** No sidecar, no steer, pane open, wait continues — *until pi
    refuses that child's next run*, which is a failure and is reported (see #6).
-   Pinned by `npm run smoke:interrupt`, `test/child.test.ts` (three interrupt cases).
+   Pinned by `npm run smoke:interrupt`, `test/children/child.test.ts` (three interrupt cases).
 2. **In-run failures still reach the orchestrator with their reason.** Pinned by
-   `test/child.test.ts`, `test/watcher.test.ts`, and `npm run smoke:provider-error`
+   `test/children/child.test.ts`, `test/children/watcher.test.ts`, and `npm run smoke:provider-error`
    (503, with and without pi's retries).
 3. **A refusal is reported, not waited on.** An idle child whose provider has no usable
    credentials writes `{"type":"failed","reason":"error","message":...}` on the prompt,
    and the orchestrator's steer shows `failed (error)` with `**Error:**` naming the
-   provider and the `/login` command. Pinned by `test/child.test.ts` and
+   provider and the `/login` command. Pinned by `test/children/child.test.ts` and
    `npm run smoke:provider-error -- --no-auth`.
 4. **No false failure for a child that can run.** A configured child, and a child whose
    credentials only resolve through the provider lookup, write nothing on input.

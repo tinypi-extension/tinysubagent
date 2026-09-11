@@ -31,9 +31,9 @@ result as an argument, and that text is what the parent delivers — mid-turn, w
 waiting for a settle.
 
 Secondary defect this fixes: the child-side tool that exists today, `tinysubagent_done`
-(`src/child.ts:112`), is **unreachable**. `spawnOne` passes only the role's expanded
-frontmatter list as `tools` (`src/spawn.ts:227`), which becomes the child's `--tools`
-allowlist (`src/launch.ts:257`) — documented as covering "built-in, extension, and custom
+(`src/children/child.ts`), is **unreachable**. `spawnOne` passes only the role's expanded
+frontmatter list as `tools` (`src/children/spawn.ts:97`), which becomes the child's `--tools`
+allowlist (`src/children/launch-script.ts:125`) — documented as covering "built-in, extension, and custom
 tools" (README.md:583) — so no role can call it unless its frontmatter happens to name it.
 It is also content-free, so even when callable it would only move the settle signal
 earlier.
@@ -106,7 +106,7 @@ requirement introduced by this change: the sidecar goes from ~20 bytes to a full
 document, and a torn read of a large payload would either lose the result or, worse, be
 classified by the existing "malformed ⇒ settled" rule as a completion with the wrong text.
 
-The "malformed ⇒ settled" rule itself (`src/watcher.ts:90`) **stays**. It is the
+The "malformed ⇒ settled" rule itself (`src/children/watcher.ts:90`) **stays**. It is the
 anti-hang backstop and it is tested. Atomic rename is what makes it not matter.
 
 ## The tool
@@ -151,7 +151,7 @@ The `tools !== null` guard matters: a role with no `tools` frontmatter passes no
 flag at all, so every tool including the report tool is already active — injecting would
 create an allowlist where none existed and silently narrow the child.
 
-`REPORT_TOOL_NAME` lives in `src/types.ts`, not `src/child.ts`. `src/spawn.ts` documents
+`REPORT_TOOL_NAME` lives in `src/types.ts`, not `src/children/child.ts`. `src/children/spawn.ts` documents
 itself as "deliberately free of any pi extension API" and `child.ts` imports that API;
 `types.ts` is the dependency-free home both can share.
 
@@ -159,7 +159,7 @@ itself as "deliberately free of any pi extension API" and `child.ts` imports tha
 
 Two placements, because a single reminder is what the forgetfulness proves insufficient:
 
-**1. `buildTaskMarkdown` (`src/launch.ts:139`)** — the output contract, read last:
+**1. `buildTaskMarkdown` (`src/children/task-markdown.ts:15`)** — the output contract, read last:
 
 > When your task is complete, call `subagent_report` with your full result in the
 > `result` argument. That call is what the caller receives and what closes this pane —
@@ -183,13 +183,13 @@ doing nothing else, and the result still arrives as one steer message. The chang
 | File | Change |
 |---|---|
 | `src/types.ts` | `REPORT_TOOL_NAME` constant |
-| `src/child.ts` | the tool path uses a new `writeResultReport(result)` emitting `{type:"done",result}`; the legacy `writeReportFile(settle, detail?)` still emits content-free reports for the settle and failure paths; both share one atomic temp-file+rename writer |
-| `src/launch.ts` | reminder in `buildTaskMarkdown` only — it serializes whatever `tools` it is handed; the injection belongs to `spawn.ts` |
-| `src/spawn.ts` | inject `REPORT_TOOL_NAME` into the expanded tool list |
-| `src/watcher.ts` | `readReport` reads `result`; `via: "report"` outcome |
-| `src/steer.ts` | `statusLabel` gains the `report` case |
+| `src/children/child.ts` | the tool path uses a new `writeResultReport(result)` emitting `{type:"done",result}`; the legacy `writeReportFile(settle, detail?)` still emits content-free reports for the settle and failure paths; both share one atomic temp-file+rename writer |
+| `src/children/launch.ts` | reminder in `buildTaskMarkdown` only — it serializes whatever `tools` it is handed; the injection belongs to `spawn.ts` |
+| `src/children/spawn.ts` | inject `REPORT_TOOL_NAME` into the expanded tool list |
+| `src/children/watcher.ts` | `readReport` reads `result`; `via: "report"` outcome |
+| `src/present/steer.ts` | `statusLabel` gains the `report` case |
 | `docs/intent.md` | carve-out on line 24 for the injected report tool |
-| `test/{child,watcher,steer,launch,spawn}.test.ts` | see below |
+| `test/{children/child,children/watcher,present/steer,children/launch,children/spawn}.test.ts` | see below |
 
 ## Commands
 

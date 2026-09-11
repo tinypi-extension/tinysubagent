@@ -32,9 +32,9 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import tinysubagent from "../index.ts";
-import { discoverAgents } from "../src/agents.ts";
-import { herdrPaneClose, herdrPaneExists, herdrPluginInfo, PLUGIN_ID } from "../src/herdr.ts";
-import { TOOL_NAME } from "../src/spawn.ts";
+import { discoverAgents } from "../src/config/agents.ts";
+import { herdrPaneClose, herdrPaneExists, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
+import { TOOL_NAME } from "../src/children/spawn.ts";
 
 function fail(message: string): never {
 	console.error(`\nFAIL ${message}`);

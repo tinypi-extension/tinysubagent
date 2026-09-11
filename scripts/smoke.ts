@@ -23,8 +23,8 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { discoverAgents } from "../src/agents.ts";
-import { loadConfig } from "../src/config.ts";
+import { discoverAgents } from "../src/config/agents.ts";
+import { loadConfig } from "../src/config/config.ts";
 import {
 	herdrPaneClose,
 	herdrPaneExists,
@@ -34,10 +34,10 @@ import {
 	MIN_HERDR_VERSION,
 	PLUGIN_ID,
 	versionAtLeast,
-} from "../src/herdr.ts";
-import { spawnOne } from "../src/spawn.ts";
-import { buildResultText } from "../src/steer.ts";
-import { waitForSubagent } from "../src/watcher.ts";
+} from "../src/herdr/cli.ts";
+import { spawnOne } from "../src/children/spawn.ts";
+import { buildResultText } from "../src/present/steer.ts";
+import { waitForSubagent } from "../src/children/watcher.ts";
 
 const agentName = process.argv[2] ?? "worker";
 const profileName = process.argv[3] ?? "light";

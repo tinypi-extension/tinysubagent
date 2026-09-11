@@ -17,7 +17,7 @@ and answered:
 ## Assumptions I'm making
 
 1. The layout is **cosmetic**. Every herdr call it adds is best-effort, like `herdrPaneRename`
-   (`src/spawn.ts:267`): a layout failure never fails a spawn, never warns, and never changes an
+   (`src/children/spawn.ts:170`): a layout failure never fails a spawn, never warns, and never changes an
    acknowledgement line. Panes are open and usable even when the geometry is wrong.
 2. Live sub panes are tracked **in memory, per extension instance**, not inferred from pane
    labels or herdr geometry. A `Set` of pane ids we opened, pruned against the tab's live pane
@@ -34,7 +34,7 @@ and answered:
 
 ## Objective
 
-Today every spawn splits the **orchestrator** pane (`src/spawn.ts:255-263`,
+Today every spawn splits the **orchestrator** pane (`src/children/spawn.ts:143-149`,
 `--direction right`), so N children produce N+1 side-by-side columns and each one is narrower
 than the last. Past two children the layout is unusable: the orchestrator — the pane the human
 actually types into — is the thing that keeps shrinking.
@@ -62,7 +62,7 @@ finishing leaves the rest exactly where they are.
 
 ## Scope check
 
-One capability, one module (`src/layout.ts`) plus two thin wrappers in `src/herdr.ts`. No
+One capability, one module (`src/herdr/layout.ts`) plus two thin wrappers in `src/herdr/cli.ts`. No
 capability map.
 
 ## What herdr actually does (probed, 0.8.2)
@@ -122,8 +122,8 @@ last panes stop being equal. Nothing breaks; the layout just stops being uniform
 
 ## The interface
 
-New module `src/layout.ts`, and it is deliberately almost all pure functions — the plumbing is
-two wrappers in `src/herdr.ts`.
+New module `src/herdr/layout.ts`, and it is deliberately almost all pure functions — the plumbing is
+two wrappers in `src/herdr/cli.ts`.
 
 ```ts
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -156,11 +156,11 @@ real bottom-most live pane. `planResizes` runs after, on a second read (`newPane
 only to find the column in the birth case). Both are total: an unrecognisable layout yields
 `[]` resizes and a `"right"` placement, never a throw.
 
-`src/herdr.ts` gains two wrappers in the existing house style — `herdrPaneLayout(paneId)` with
+`src/herdr/cli.ts` gains two wrappers in the existing house style — `herdrPaneLayout(paneId)` with
 `parseHerdrJson` + `unwrap`, returning `null` on any failure, and `herdrPaneResize(...)` as a
 `runHerdrQuiet` best-effort call. `PaneOpenOptions`/`herdrPaneOpen` are untouched.
 
-`src/spawn.ts` owns the sequencing, because it already owns the open:
+`src/children/spawn.ts` owns the sequencing, because it already owns the open:
 
 ```
 place   = planPlacement(read(), orchestrator, live)      // best-effort: [] on a failed read
@@ -215,12 +215,12 @@ subscription — layout is read per spawn, never watched.
 ## Verification
 
 - `npm run typecheck`, `npm test`.
-- `test/layout.test.ts` — pure planner: birth at 3/5, appends to a 1/2/3-pane column, the
+- `test/herdr/layout.test.ts` — pure planner: birth at 3/5, appends to a 1/2/3-pane column, the
   middle-pane divider targeting, already-equal ⇒ no ops, dead-pane prune, other-tab panes
   ignored, degraded `N > 9`, garbage layout ⇒ no throw.
-- `test/herdr.test.ts` — `herdrPaneLayout` parsing (envelope, missing fields, non-JSON ⇒ null)
+- `test/herdr/cli.test.ts` — `herdrPaneLayout` parsing (envelope, missing fields, non-JSON ⇒ null)
   and `herdrPaneResize` argv, against the scripted stub.
-- `test/spawn.test.ts` — spawn succeeds with every layout call failing.
+- `test/children/spawn.test.ts` — spawn succeeds with every layout call failing.
 - `scripts/smoke-layout.ts` — the honest one, because only real herdr can prove the geometry:
   spawn two children, assert the orchestrator lands within ±1 col of 60% of the split and the two
   sub rects within ±1 row of each other, then close everything. Needs a live herdr session with

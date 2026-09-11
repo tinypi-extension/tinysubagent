@@ -27,9 +27,10 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 /**
  * The child-side tool that hands a result back to the orchestrator.
  *
- * It lives here rather than in `src/child.ts` because `src/spawn.ts` must
- * inject the name into the child's `--tools` allowlist, and `spawn.ts` is
- * deliberately free of any pi extension API import — `child.ts` pulls that API
+ * It lives here rather than in `src/children/child.ts` because
+ * `src/children/spawn.ts` must inject the name into the child's `--tools`
+ * allowlist, and `spawn.ts` is deliberately free of any pi extension API
+ * import — `child.ts` pulls that API
  * in, this file pulls in nothing.
  */
 export const REPORT_TOOL_NAME = "subagent_report";

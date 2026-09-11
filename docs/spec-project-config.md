@@ -6,15 +6,15 @@
 
 1. **Location is `<cwd>/.pi/tinysubagent.jsonc`** (and `.json`), i.e. the project root's `.pi/`
    directory — not `<cwd>/.pi/agent/`. You named this path explicitly, and it matches the
-   existing `projectAgentsDir()` convention (`src/agents.ts:32` → `<cwd>/.pi/agents`) plus the
-   `.jsonc`-over-`.json` rule already stated in `docs/intent.md:82`.
+   existing `projectAgentsDir()` convention (`src/config/agents.ts:32` → `<cwd>/.pi/agents`) plus the
+   `.jsonc`-over-`.json` rule already stated in `docs/intent.md:110`.
 2. **Scope means the pi process's `cwd`**, the project the extension is loaded for. `cwd` is
    passed in explicitly rather than read from `process.cwd()` inside the resolver (see
    "Deliberate non-behaviour" below).
 3. **The global file keeps its meaning** — `~/.pi/agent/tinysubagent.jsonc` stays exactly where
    it is, and stays valid on its own. Nothing about the global path changes.
 4. **This is about profile config only.** Agents/markdown roles already have their own
-   project-local mechanism (`<cwd>/.pi/agents`, `src/agents.ts:127`) and are untouched.
+   project-local mechanism (`<cwd>/.pi/agents`, `src/config/agents.ts:127`) and are untouched.
 5. **The project file is trustworthy-ish but not authoritative-over-safety** — a malformed
    project file must not be able to disable delegation that was working (see "Failure
    behaviour").
@@ -22,29 +22,29 @@
    That matches how agents are advertised (`index.ts:200`, `process.cwd()`).
 7. **The precedent for two-scope discovery already exists in this repo** — `discoverAgents`
    merges `~/.pi/agent/agents/*.md` with `<project>/.pi/agents/*.md`, project winning by name
-   (`src/agents.ts:127-145`, documented at `docs/intent.md:21`). Profiles get the same shape.
+   (`src/config/agents.ts:127-145`, documented at `docs/intent.md:21`). Profiles get the same shape.
 
 → Correct any of these now, or I'll build on them.
 
 ## Current behaviour (verified, not assumed)
 
-- The only derivation point is `src/config.ts:50-60`; `getAgentDir()` (SDK `dist/config.js:421`)
+- The only derivation point is `src/config/config.ts:50-60`; `getAgentDir()` (SDK `dist/config.js:421`)
   is `PI_CODING_AGENT_DIR` or `~/.pi/agent`. No cwd input exists anywhere in the resolver.
 - Sole production caller: `index.ts:196 const { config, warnings: configWarnings } = loadConfig();`
   — no-argument. Consumed at `:197` (tool schema), `:276` (tool description), `:303`/`:321`
-  (profile validation, `SpawnContext.config`), then only `src/spawn.ts:181 resolveProfile`.
-- `test/extension.test.ts:171` and `scripts/smoke.ts:68` also call `loadConfig()` no-argument,
+  (profile validation, `SpawnContext.config`), then only `src/children/spawn.ts:40 resolveProfile`.
+- `test/pi/extension.test.ts:171` and `scripts/smoke.ts:68` also call `loadConfig()` no-argument,
   against the real agent dir. `scripts/smoke-tool.ts:86` relies on the `PI_TINYSUBAGENT_CONFIG`
   override.
 - The config does **not** reach children: `PI_TINYSUBAGENT_CONFIG` is never written into the
-  launch script, and `src/launch.ts:208-219` exports only `PI_CODING_AGENT_DIR` (when
+  launch script, and `src/children/launch-script.ts:68-79` exports only `PI_CODING_AGENT_DIR` (when
   `<cwd>/.pi/agent` exists) plus the `PI_TINYSUBAGENT_*` identity vars.
-- Prose to update: `src/config.ts:1-8` (header docstring) and `docs/intent.md:53-54`, `:66-86`.
+- Prose to update: `src/config/config.ts:1-8` (header docstring) and `docs/intent.md:53-54`, `:66-74`, `:103-114`.
 
 ## Objective
 
 Today `tinysubagent` reads exactly one settings file, from the agent dir
-(`~/.pi/agent/…`, `src/config.ts:50`). That makes profiles a per-user, per-machine concern: a
+(`~/.pi/agent/…`, `src/config/config.ts:50`). That makes profiles a per-user, per-machine concern: a
 repository cannot ship the model/thinking profiles its own work depends on, and every clone on
 every machine has to be hand-configured.
 
@@ -104,9 +104,9 @@ duplicate any global profile it wanted to keep.
 
 ## `source` field change
 
-`TinysubagentConfig.source?: string` (`src/config.ts:20`) is a single basename, set at
-`src/config.ts:116`, consumed by the "enableProfiles is true but no usable profiles" warning
-(`src/config.ts:176-178`), and asserted in `test/config.test.ts:175`.
+`TinysubagentConfig.source?: string` (`src/config/config.ts:20`) is a single basename, set at
+`src/config/config.ts:116`, consumed by the "enableProfiles is true but no usable profiles" warning
+(`src/config/config.ts:176-178`), and asserted in `test/config/config.test.ts:175`.
 
 With two scopes one basename is no longer truthful — `tinysubagent.jsonc` is ambiguous between
 project and global. Replace it:
@@ -118,8 +118,8 @@ sources: ConfigSource[];
 
 `source` is removed rather than kept alongside; `sources` carries `{ file, scope }` so the
 ambiguity cannot come back. Note the existing split, which is deliberate and preserved:
-**file-level warnings already use the full path** (`src/config.ts:131,140,150,176`), while
-`source` was basename-only so a notify stays short (`src/config.ts:113-115`). Rendering
+**file-level warnings already use the full path** (`src/config/config.ts:131,140,150,176`), while
+`source` was basename-only so a notify stays short (`src/config/config.ts:113-115`). Rendering
 `sources` reuses `path.basename`, and the "no usable profiles" warning now names the
 highest-precedence contributing file.
 
@@ -134,12 +134,12 @@ back to the global config; the warning names the offending file.
 - Malformed project + no global ⇒ profiles disabled, one warning. Same as today.
 - Malformed global ⇒ profiles disabled, one warning. Same as today.
 
-This extends the existing principle stated at `src/config.ts:44` ("a typo in this file never
+This extends the existing principle stated at `src/config/config.ts:44` ("a typo in this file never
 silently disables delegation"). A repo file is authored by a third party from the user's point
 of view, so it should be *less* able to break a working session, not equally able.
 
-Profile-level warnings (`normalizeProfile`, `src/config.ts:76`) gain the originating file so a
-bad profile in a repo file is attributable. Note `dialect()` (`src/config.ts:67`) already keys
+Profile-level warnings (`normalizeProfile`, `src/config/config.ts:76`) gain the originating file so a
+bad profile in a repo file is attributable. Note `dialect()` (`src/config/config.ts:67`) already keys
 off the extension only, so it stays correct for both scopes.
 
 **Decided: skip-and-fall-back**, not fail-closed.
@@ -147,7 +147,7 @@ off the extension only, so it stays correct for both scopes.
 ## Deliberate non-behaviour
 
 `configPath()` currently defaults its argument to `getAgentDir()` and is called with no
-arguments in production (`index.ts:196`) and in tests (`test/config.test.ts:191,204`). Adding
+arguments in production (`index.ts:196`) and in tests (`test/config/config.test.ts:191,204`). Adding
 project scope means a no-argument call becomes environment-dependent: the moment this repo
 gains its own `.pi/tinysubagent.jsonc` — the exact thing this feature invites — tests calling
 `configPath(dir)` would start reading the repo's file and fail.
@@ -171,32 +171,32 @@ export function loadConfig(cwd: string, agentDir?: string): LoadedConfig;
 
 `process.cwd()` / `getAgentDir()` appear only at the call site (`index.ts:196`), which is what
 keeps the tests hermetic. `PI_TINYSUBAGENT_CONFIG` still short-circuits everything, so the
-env-override test (`test/config.test.ts:184`) keeps working and stays the documented escape
+env-override test (`test/config/config.test.ts:184`) keeps working and stays the documented escape
 hatch.
 
 This changes `configPath`/`loadConfig`'s signatures. Both are internal (`0.1.0`, `peerDependencies`
-only, no public API promise) and the ~30 call sites are all in `test/config.test.ts`,
-`test/extension.test.ts:171`, and `scripts/smoke.ts:68` — mechanical updates.
+only, no public API promise) and the ~30 call sites are all in `test/config/config.test.ts`,
+`test/pi/extension.test.ts:171`, and `scripts/smoke.ts:68` — mechanical updates.
 
 ## Files
 
 | File | Change |
 |---|---|
-| `src/config.ts` | header docstring (`:1-8`); `configSources`/`configPath`/`loadConfig` resolution; layering merge; scoped warnings; `sources` field |
+| `src/config/config.ts` | header docstring (`:1-8`); `configSources`/`configPath`/`loadConfig` resolution; layering merge; scoped warnings; `sources` field |
 | `index.ts` | pass `process.cwd()` + `getAgentDir()` at the one production call site (`:196`) |
-| `test/config.test.ts` | update the signature/`sources` assertions (`:154,157,165,175,191,200,204`); add project-scope cases |
-| `test/extension.test.ts` | `loadConfig()` call site (`:171`) |
+| `test/config/config.test.ts` | update the signature/`sources` assertions (`:154,157,165,175,191,200,204`); add project-scope cases |
+| `test/pi/extension.test.ts` | `loadConfig()` call site (`:171`) |
 | `scripts/smoke.ts` | `loadConfig()` call site (`:68`) |
-| `src/profiles.ts` | removal of `source` reaches here: the disabled-profile refusal message (`:84`) reads `config.sources[0]` and renders `path.basename` |
-| `test/profiles.test.ts` | `TinysubagentConfig` literals need `sources`; attribution test sets it |
-| `test/spawn.test.ts` | `TinysubagentConfig` literal needs `sources` |
+| `src/config/profiles.ts` | removal of `source` reaches here: the disabled-profile refusal message (`:84`) reads `config.sources[0]` and renders `path.basename` |
+| `test/config/profiles.test.ts` | `TinysubagentConfig` literals need `sources`; attribution test sets it |
+| `test/children/spawn.test.ts` | `TinysubagentConfig` literal needs `sources` |
 | `docs/intent.md` | both locations + precedence chain in `:53-54` and the config section (`:66-86`); the `.pi/*` + `!.pi/tinysubagent.jsonc` negation recipe |
 
 The last three rows were missing from this table when the spec was approved — the `source` field turned
-out to have a second consumer (`src/profiles.ts:84`) and two test files construct the interface
+out to have a second consumer (`src/config/profiles.ts:84`) and two test files construct the interface
 literally. Harmless, but the Files list was incomplete; see "Implementation notes".
 
-No new dependencies. `CONFIG_DIR_NAME` comes from the pi SDK (`src/agents.ts` already imports
+No new dependencies. `CONFIG_DIR_NAME` comes from the pi SDK (`src/config/agents.ts` already imports
 it) rather than hardcoding `.pi`. `scripts/smoke-tool.ts:86` needs no change — it exercises the
 override, which keeps winning.
 
@@ -232,13 +232,13 @@ prefixed `tinysubagent: `, and name the file involved.
 ## Testing strategy
 
 `node:test` + `node:assert/strict`, temp dirs via `mkdtempSync` — extending the existing harness
-in `test/config.test.ts` (`writeNamed` `:11-16`, `configDir` `:27-28`). Both `cwd` and `agentDir`
+in `test/config/config.test.ts` (`writeNamed` `:11-16`, `configDir` `:27-28`). Both `cwd` and `agentDir`
 become real temp dirs, so no test touches the developer's `~/.pi`; today `:204` calls the real
 `getAgentDir()`, and that indirection is what the explicit-argument signature removes.
 
-`test/config.test.ts` isolates `PI_TINYSUBAGENT_CONFIG` only inside the one test at `:184-208`
+`test/config/config.test.ts` isolates `PI_TINYSUBAGENT_CONFIG` only inside the one test at `:184-208`
 with a manual save/restore; the new project-scope tests need the same guard, so extract a
-`withEnv` helper along the lines of the one already in `test/extension.test.ts:55-71`. Never set
+`withEnv` helper along the lines of the one already in `test/pi/extension.test.ts:55-71`. Never set
 `PI_CODING_AGENT_DIR` globally — pass `agentDir` as an argument instead.
 
 New cases, one per rule:
@@ -264,7 +264,7 @@ Existing tests 1–17 in that file must pass unchanged except for the signature/
 - **Ask first:** changing the project file's location or name; adding a dependency; making the
   project file fail-closed; re-resolving config per tool call or adding hot reload.
 - **Never:** change or move the global `~/.pi/agent` path; touch the agent-discovery mechanism
-  (`src/agents.ts`); let a repo-committed file disable delegation; write to any file the user
+  (`src/config/agents.ts`); let a repo-committed file disable delegation; write to any file the user
   owns as a side effect of loading.
 
 ## Out of scope
@@ -274,7 +274,7 @@ Existing tests 1–17 in that file must pass unchanged except for the signature/
   its own cwd, which is the same project — but see "Resolved decisions" §3 for why that is
   *nearly*, not exactly, the parent's answer.
 - Project-local settings for anything other than profiles.
-- Any `.pi/settings.json` integration — `src/config.ts:1` is explicit that this config
+- Any `.pi/settings.json` integration — `src/config/config.ts:1` is explicit that this config
   deliberately does not entangle with pi's settings file.
 
 ## Success criteria
@@ -300,9 +300,9 @@ Specific and testable. Criteria 1–6 correspond to the new tests above by numbe
 
 Shipped as designed. Deviations from this spec, all recorded rather than silent:
 
-1. **`sources` had more consumers than this spec listed.** `src/profiles.ts:84` also read
-   `config.source` (the disabled-profile refusal message), and `test/profiles.test.ts` /
-   `test/spawn.test.ts` construct `TinysubagentConfig` literals. Fixed mechanically —
+1. **`sources` had more consumers than this spec listed.** `src/config/profiles.ts:84` also read
+   `config.source` (the disabled-profile refusal message), and `test/config/profiles.test.ts` /
+   `test/children/spawn.test.ts` construct `TinysubagentConfig` literals. Fixed mechanically —
    `sources[0]` basename, and `sources: []` in the literals. No rule changed.
 2. **No `disabled()` constructor.** The pre-existing helper was dropped rather than reshaped: the
    merge loop's `sources: []` + `enableProfiles: false` already produces the disabled state.

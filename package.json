@@ -9,7 +9,7 @@
   "author": "Ironman",
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.ts",
     "smoke:tool": "node scripts/smoke-tool.ts",

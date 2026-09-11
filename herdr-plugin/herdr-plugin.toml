@@ -2,7 +2,7 @@ id = "tinysubagent-panes"
 name = "Tiny Subagent Panes"
 version = "0.1.0"
 # v0.8.2 is the first herdr release with split plugin panes. Kept in step with
-# MIN_HERDR_VERSION in src/herdr.ts, which test/herdr.test.ts enforces.
+# MIN_HERDR_VERSION in src/herdr/cli.ts, which test/herdr/cli.test.ts enforces.
 min_herdr_version = "0.8.2"
 description = "Run tinysubagent children in herdr panes"
 platforms = ["linux", "macos"]

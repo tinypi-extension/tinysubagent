@@ -66,11 +66,39 @@ reaching into a child's turn; nothing here does that.)
 - Config lives in a standalone `tinysubagent.json` (or `.jsonc` for a file that can carry
   comments), untouched by `settings.json`. The per-user file stays at `~/.pi/agent/`; a project
   may carry its own at `<project>/.pi/`.
-- Aim for one readable `index.ts` plus small helpers, not a module tree.
+- Aim for one wiring-only `index.ts` plus small role-foldered modules, each file small and
+  single-purpose — see "Repository layout" below.
 - Children inherit the user's installed pi extensions, so MCP tools resolve in the
   child; the frontmatter `tools` allowlist still gates what the child may call.
 - If a pane dies without signalling completion, v1 does nothing clever: pane stays
   open, no steer. No timeout, no auto-rescue.
+
+## Repository layout
+
+`index.ts` is wiring only: the `isInsideHerdr()` guard, the registration-time config and
+agent reads, the per-session state, and the two registrations. Everything else lives under
+`src/` in role folders; the `src/` root keeps only the cross-cutting leaves — `paths.ts`,
+`types.ts` and `tool-patterns.ts`.
+
+- `config/` — settings plus agent/role and profile discovery.
+- `herdr/` — herdr transport: `cli.ts` for process invocation and plugin linking,
+  `layout.ts` for pane geometry.
+- `children/` — the child lifecycle: spawn → launch script and sidecar paths → watcher →
+  session → the `child.ts` entrypoint → report → settle → preflight → contract/requests.
+- `present/` — output shaping for the model and the TUI: `ack`, `ack-render`, `describe`,
+  `steer`.
+- `pi/` — pi lifecycle glue: `capability`, `plugin-fix`, `lifecycle`, `watch-batch`, `tool`.
+
+Two invariants must not be broken:
+
+1. `childExtensionPath` (`src/paths.ts`) is contractual — it is the `-e` target handed to
+   the child. A wrong value loads no child extension, so pi gets no `subagent_report` and
+   no `agent_settled` and every real child hangs while the unit suite stays green.
+2. `buildLaunchPaths` (`src/children/launch-paths.ts`) is the single source of every sidecar
+   path; no other module may compute one.
+
+`src/paths.ts` is the only module that reads `import.meta.url` and the only place a repo
+path literal (`"src"`, `"herdr-plugin"`, `"child.ts"`) may appear.
 
 ## Out of scope
 
