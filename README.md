@@ -1,13 +1,13 @@
 # tinysubagent
 
 Minimal, herdr-native subagent spawning for [pi](https://pi.dev). Define roles as
-markdown files and delegate to them — each subagent runs in its own herdr pane with an
+markdown files and delegate to them — each subagent runs in its own [herdr](https://herdr.dev/) pane with an
 isolated context window and reports back as a steer message.
 
 - **Markdown roles** in `~/.pi/agent/agents/*.md` and `<project>/.pi/agents/*.md`.
 - **Fire-and-forget** — the spawn returns immediately; results wake your session later.
 - **Single or parallel** — one task, or up to 4 reporting back in one message.
-- **Model profiles** — optional `light` / `core` / `pro`-style `{ model, thinking }` pairs.
+- **Model profiles** — optional `light` / `core` / `pro`-style (or whatever you use) with `{ model, thinking }` pairs.
 - **Small enough to read** — one `index.ts` plus focused modules.
 
 The tool is registered **only when pi runs inside herdr**. Outside herdr there is no pane
@@ -35,8 +35,6 @@ pi update --extensions     # update (reconciles git refs); pi list to inspect
 
 Install **without a ref** so updates keep working. Pinned refs are checkout targets — to
 upgrade, install the newer tag explicitly.
-
-> **Security:** pi packages run with full system access. Review the source first.
 
 ### Link the herdr plugin
 
@@ -159,8 +157,6 @@ A profile is a `{ model, thinking }` pair a child is launched with, configured i
 }
 ```
 
-Use the model ids pi accepts (`pi --list-models`).
-
 - `current` is built in, means "inherit this session", and **cannot be redefined** (a
   config that tries is ignored with a warning).
 - A named profile is refused unless `enableProfiles` is literally `true`. When profiles are
@@ -237,9 +233,6 @@ impossible model, expecting `failed` with the pane left open).
 
 Install a local checkout with `pi install /absolute/path/to/tinysubagent` (directories are
 added to settings without copying).
-
-Releases are git tags (`v0.1.0` first): bump `package.json`, tag, push. Unpinned installs
-pick it up with `pi update --extensions`; pinned installs need the new tag installed.
 
 ## License
 
