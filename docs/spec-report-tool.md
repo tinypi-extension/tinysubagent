@@ -164,8 +164,8 @@ call it, and the reason the old tool was invisible:
 
 ## Delegation is unchanged
 
-A one-line note in `PROMPT_GUIDELINES` — the parent still does not wait or poll, and the
-result still arrives as one steer message. The change is *what* that message contains and
+A one-line note in `PROMPT_GUIDELINES` — the parent is told to end its turn and wait,
+doing nothing else, and the result still arrives as one steer message. The change is *what* that message contains and
 *when* the child can produce it.
 
 ## Files

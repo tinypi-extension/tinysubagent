@@ -23,12 +23,7 @@ import {
 	writeLaunchFiles,
 } from "./launch.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	PLUGIN_ID,
-	currentPaneId,
-	herdrPaneOpen,
-	herdrPaneRename,
-} from "./herdr.ts";
+import { currentPaneId, herdrPaneOpen, herdrPaneRename } from "./herdr.ts";
 import { resolveProfile } from "./profiles.ts";
 import { expandToolPatterns } from "./tool-patterns.ts";
 import { isThinkingLevel, REPORT_TOOL_NAME, type AgentDef, type ThinkingLevel } from "./types.ts";
@@ -45,9 +40,6 @@ export const TOOL_NAME = "subagent";
 /** The child hook lives beside this module and is loaded into every child. */
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 export const childExtensionPath = join(packageRoot, "src", "child.ts");
-
-/** Plugin the pane is opened through; exported for the smoke harness. */
-export const panePluginId = PLUGIN_ID;
 
 export interface TaskInput {
 	agent: string;

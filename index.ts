@@ -28,7 +28,7 @@ import { Type, type TSchema } from "typebox";
 import { ackLine, ackParts, type SpawnAck } from "./src/ack.ts";
 import { discoverAgents } from "./src/agents.ts";
 import { CURRENT_PROFILE, loadConfig, type TinysubagentConfig } from "./src/config.ts";
-import { MIN_HERDR_VERSION, PLUGIN_ID, herdrPaneClose, herdrPaneOpen, herdrPluginInfo, herdrStatus, isInsideHerdr, versionAtLeast } from "./src/herdr.ts";
+import { MIN_HERDR_VERSION, PLUGIN_ID, herdrPaneClose, herdrPaneOpen, herdrPluginInfo, herdrStatus, isInsideHerdr, pluginDir, versionAtLeast } from "./src/herdr.ts";
 import { availableProfileNames, profileParamDescription, resolveProfile, type ResolvedProfile } from "./src/profiles.ts";
 import {
 	MAX_PARALLEL_TASKS,
@@ -65,7 +65,9 @@ async function checkHerdr(): Promise<string | null> {
 	}
 	const plugin = await herdrPluginInfo(PLUGIN_ID);
 	if (!plugin) {
-		return `the herdr plugin "${PLUGIN_ID}" is not installed. Run \`herdr plugin list\` and link it with \`herdr plugin link <dir> --enabled\`.`;
+		// One-time manual link, deliberately not automatic: linking mutates the
+		// user's global herdr config, which an extension must not do behind them.
+		return `the herdr plugin "${PLUGIN_ID}" is not installed. Run: herdr plugin link "${pluginDir()}" --enabled`;
 	}
 	if (!plugin.enabled) {
 		return `the herdr plugin "${PLUGIN_ID}" is disabled. Run: herdr plugin enable ${PLUGIN_ID}`;
@@ -108,7 +110,7 @@ function buildToolDescription(agents: readonly AgentDef[], config: TinysubagentC
 	const lines = [
 		"Delegate tasks to subagents, each running in its own herdr pane with an isolated context window.",
 		"",
-		"This returns as soon as the panes are open. Each subagent's result is delivered back to this session automatically as a steer message when it finishes — never wait, poll, sleep, or tail logs for it. Continue with other work, or end your turn.",
+		"This returns as soon as the panes are open. Do nothing else after spawning: end your turn and wait for the results. Each subagent's result is delivered back to this session automatically as a steer message when it finishes — do not poll, sleep, tail logs, or start unrelated work while you wait.",
 		"",
 		`Modes: single (\`agent\` + \`task\`) or parallel (\`tasks\` array, up to ${MAX_PARALLEL_TASKS}). Parallel subagents run concurrently and report back together in a single message.`,
 		"",
@@ -136,7 +138,7 @@ function buildToolDescription(agents: readonly AgentDef[], config: TinysubagentC
 const PROMPT_GUIDELINES = [
 	"Use subagent to delegate self-contained work that would otherwise flood this context window.",
 	"Do not delegate something you can finish in one or two tool calls yourself.",
-	"After spawning, do not wait or poll: the result arrives as a steer message. Keep working, or end your turn.",
+	"After spawning, do nothing else: end your turn and wait for the result, which arrives automatically as a steer message. Do not poll, sleep, or start unrelated work.",
 	"Write each task as a complete brief — a subagent cannot see this conversation.",
 	"The subagent reports its result itself, so state the exact output you want — that text is what comes back.",
 ];
@@ -215,7 +217,7 @@ interface AckDetails {
 }
 
 const NOTE_STARTED =
-	"Results arrive as a steer message when the subagents finish. Do not poll or wait — end your turn or keep working.";
+	"Results arrive as a steer message when the subagents finish. Wait for that message — do nothing else: end your turn, and do not poll or start unrelated work.";
 const NOTE_NOTHING = "Nothing was launched.";
 
 /** Thinking levels carry their own theme colours, so the level is readable at a glance. */

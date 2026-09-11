@@ -11,7 +11,7 @@ into, and steers the result back to the orchestrator when the pane finishes.
 
 ## Why
 
-`pi-herdr-subagents` works but is ~45KB across 10 modules. This is a spawn-only
+The reference implementation works but is ~45KB across 10 modules. This is a spawn-only
 replacement that is small enough to read top-to-bottom and own.
 
 ## Success criteria
@@ -47,9 +47,11 @@ reaching into a child's turn; nothing here does that.)
 
 ## Constraints
 
-- Clean-room pi-side code. The reference (`~/Project/pi-herdr-subagents-main`) is used
-  only as the spec for herdr CLI mechanics and the herdr-plugin event flow.
-- The **herdr plugin is reused as-is** — it stays a dependency.
+- Clean-room pi-side code. The third-party reference is used only as the spec for herdr
+  CLI mechanics and the herdr-plugin event flow.
+- The **herdr plugin is owned here** — `herdr-plugin/` ships with this repo (id
+  `tinysubagent-panes`) and is linked once with `herdr plugin link`; it is no longer an
+  external dependency.
 - Config lives in a standalone `tinysubagent.json` (or `.jsonc` for a file that can carry
   comments), untouched by `settings.json`. The per-user file stays at `~/.pi/agent/`; a project
   may carry its own at `<project>/.pi/`.
@@ -121,5 +123,6 @@ profile set than its parent. Nothing is forwarded.
 
 ## Migration
 
-`~/.pi/agent/extensions/subagent/` (pi-herdr-subagents) stays installed until
-tinysubagent has proven itself in daily use. Both tools coexist during that window.
+`~/.pi/agent/extensions/subagent/` (the third-party predecessor) stays installed until
+tinysubagent has proven itself in daily use. Both tools coexist during that window, and
+the bundled plugin is independent of it.

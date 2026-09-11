@@ -1,0 +1,18 @@
+id = "tinysubagent-panes"
+name = "Tiny Subagent Panes"
+version = "0.1.0"
+# v0.8.2 is the first herdr release with split plugin panes. Kept in step with
+# MIN_HERDR_VERSION in src/herdr.ts, which test/herdr.test.ts enforces.
+min_herdr_version = "0.8.2"
+description = "Run tinysubagent children in herdr panes"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "subagent"
+title = "Tiny subagent"
+placement = "split"
+# The spawn call passes --cwd, which overrides the pane's working directory, so
+# the dispatcher has to be resolved from herdr's protected plugin-root env
+# rather than a path relative to the pane. herdr runs the argv as-is (no shell
+# expansion of `command`), hence the explicit `bash -c`.
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/dispatch.sh\""]

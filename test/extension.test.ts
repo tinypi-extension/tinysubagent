@@ -117,17 +117,18 @@ test("both session hooks are registered, so watchers can be ended on shutdown", 
 	assert.equal(typeof stub.listeners.get("session_shutdown"), "function");
 });
 
-test("the guidelines say the result arrives by itself and must not be waited for", () => {
+test("the guidelines tell the parent to wait for the result and do nothing else", () => {
 	const stub = stubApi();
 	withEnv(INSIDE, () => {
 		tinysubagent(stub.api as never);
 	});
 	const guidelines = stub.tools[0]?.promptGuidelines ?? [];
 	assert.ok(guidelines.length > 0);
-	// The fire-and-forget contract is what keeps a parent turn from stalling.
+	// The parent turn is handed off to the steer message, so the parent must be told
+	// to end its turn rather than fill the wait with unrelated work.
 	assert.ok(
-		guidelines.some((line) => /do not wait or poll/i.test(line) && /steer message/i.test(line)),
-		`no anti-polling guideline in: ${guidelines.join(" | ")}`,
+		guidelines.some((line) => /wait for the result/i.test(line) && /steer message/i.test(line)),
+		`no wait-for-the-result guideline in: ${guidelines.join(" | ")}`,
 	);
 	// The result is an explicit hand-back now, so the parent must be told the
 	// child reports it rather than told to read the child's last message.

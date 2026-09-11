@@ -5,10 +5,11 @@
  *
  *   - panes are created, named and reaped through `herdr plugin pane open`,
  *     `herdr pane rename` and `herdr pane close`;
- *   - the `pi-herdr-subagents` plugin supplies the *entrypoint* — a fixed
- *     dispatcher that reads the launch-script path out of an environment
- *     variable and `exec bash`es it. We never type into a pane's shell, so
- *     there is no race with the pane's own startup (direnv, rc files, prompt).
+ *   - the `tinysubagent-panes` plugin — shipped in `herdr-plugin/` beside this
+ *     module — supplies the *entrypoint*: a dispatcher that reads the
+ *     launch-script path out of an environment variable and `exec bash`es it.
+ *     We never type into a pane's shell, so there is no race with the pane's
+ *     own startup (direnv, rc files, prompt).
  *
  * Every call is a subprocess. herdr prints an envelope —
  * `{"id":"cli:...","result":{...}}` — for most commands but a bare object for
@@ -16,13 +17,24 @@
  */
 
 import { execFile } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** Plugin id of the linked herdr plugin whose dispatcher starts our wrapper. */
-export const PLUGIN_ID = "pi-herdr-subagents";
+export const PLUGIN_ID = "tinysubagent-panes";
 /** Pane entrypoint inside that plugin (see its `herdr-plugin.toml`). */
 export const PLUGIN_ENTRYPOINT = "subagent";
-/** Split plugin panes exist from 0.8.2; the installed manifest declares the same. */
+/** Split plugin panes exist from 0.8.2; the shipped manifest declares the same. */
 export const MIN_HERDR_VERSION = "0.8.2";
+
+/**
+ * The plugin directory this package ships. Resolved from this module's own
+ * location so the link instruction names a real path whatever the install
+ * method (local checkout, directory install, git clone).
+ */
+export function pluginDir(): string {
+	return join(dirname(dirname(fileURLToPath(import.meta.url))), "herdr-plugin");
+}
 
 export interface HerdrStatus {
 	running: boolean;

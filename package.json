@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.ts",
     "smoke:tool": "node scripts/smoke-tool.ts",
-    "smoke:interrupt": "node scripts/smoke-interrupt.ts"
+    "smoke:interrupt": "node scripts/smoke-interrupt.ts",
+    "link-plugin": "herdr plugin link ./herdr-plugin --enabled"
   },
   "pi": {
     "extensions": [
