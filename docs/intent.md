@@ -6,8 +6,11 @@ contradicts a line here, that line must be edited first, deliberately.
 ## What it is
 
 A clean-room pi extension that spawns **herdr-pane subagents** from markdown role
-definitions, in single or parallel mode, each in a right-hand pane the user can type
-into, and steers the result back to the orchestrator when the pane finishes.
+definitions, in single or parallel mode, into one right-hand column the user can type
+into: the orchestrator keeps 3/5 of its own rect and every live subagent shares the
+column, divided equally in height. The ratio is asserted once when the column is born, so
+a divider the user dragged by hand is never snapped back. The extension steers the result
+back to the orchestrator when the pane finishes.
 
 ## Why
 
@@ -28,6 +31,8 @@ replacement that is small enough to read top-to-bottom and own.
 - `profile` is compulsory when `enableProfiles` is true; absent from the schema when
   false. `"current"` is always a valid implicit profile.
 - Single and parallel spawn.
+- Spawning leaves the orchestrator at 60% of the split rect, with all live subs stacked
+  equally in one right-hand column.
 - One steer message per child; the pane closes on its own completion.
 
 ## Parallel semantics

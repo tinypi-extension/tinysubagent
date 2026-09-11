@@ -29,6 +29,7 @@ import { ackLine, ackParts, type SpawnAck } from "./src/ack.ts";
 import { discoverAgents } from "./src/agents.ts";
 import { CURRENT_PROFILE, loadConfig, type TinysubagentConfig } from "./src/config.ts";
 import { MIN_HERDR_VERSION, PLUGIN_ID, herdrPaneClose, herdrPaneOpen, herdrPluginEnable, herdrPluginInfo, herdrPluginLink, herdrStatus, isInsideHerdr, pluginDir, versionAtLeast, type RunOptions } from "./src/herdr.ts";
+import { LiveSubPanes } from "./src/layout.ts";
 import { availableProfileNames, profileParamDescription, resolveProfile, type ResolvedProfile } from "./src/profiles.ts";
 import {
 	MAX_PARALLEL_TASKS,
@@ -299,6 +300,13 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 	let fixOffered = false;
 
 	/**
+	 * The sub panes this registration opened, tracked for the layout planner. One
+	 * instance per registration: the spawn recipe reads it to decide birth-vs-
+	 * append and prunes it against the tab, and the completion close drops from it.
+	 */
+	const columns = new LiveSubPanes();
+
+	/**
 	 * Offer the one-step plugin fix at session start, so a first run is a keypress
 	 * instead of a path-typed command.
 	 *
@@ -399,8 +407,12 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 
 				// The child's pi is gone by the time a completion lands, so this only
 				// reaps a pane that outlived it. A failure is left on screen instead,
-				// so the reason stays readable.
-				if (outcome.kind === "completed") void herdrPaneClose(running.paneId);
+				// so the reason stays readable. No rebalance runs here: the layout is
+				// set at spawn time and a close never revisits it.
+				if (outcome.kind === "completed") {
+					columns.drop(running.paneId);
+					void herdrPaneClose(running.paneId);
+				}
 
 				return {
 					name: running.name,
@@ -469,6 +481,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 				config,
 				parentModel: parentModelSpec(ctx),
 				parentThinking: parentThinking(ctx),
+				columns,
 			};
 
 			// Launch sequentially: panes are created one at a time anyway, and a

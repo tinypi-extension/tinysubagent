@@ -1,12 +1,15 @@
 # tinysubagent
 
 Minimal, herdr-native subagent spawning for [pi](https://pi.dev). Define roles as
-markdown files and delegate to them — each subagent runs in its own [herdr](https://herdr.dev/) pane with an
-isolated context window and reports back as a steer message.
+markdown files and delegate to them — every subagent runs in a shared right-hand
+[herdr](https://herdr.dev/) column beside the orchestrator, each with an isolated context
+window, and reports back as a steer message.
 
 - **Markdown roles** in `~/.pi/agent/agents/*.md` and `<project>/.pi/agents/*.md`.
 - **Fire-and-forget** — the spawn returns immediately; results wake your session later.
-- **Single or parallel** — one task, or up to 4 reporting back in one message.
+- **Single or parallel** — one task, or up to 4 reporting back in one message. The
+  orchestrator keeps 3/5 of the split; every live sub shares one right-hand column, stacked
+  and equal in height.
 - **Model profiles** — optional `light` / `core` / `pro`-style (or whatever you use) with `{ model, thinking }` pairs.
 - **Small enough to read** — one `index.ts` plus focused modules.
 
@@ -132,10 +135,15 @@ subagent({
 
 Lifecycle:
 
-1. Returns immediately with an acknowledgment line per child, plus the panes opened.
+1. Returns immediately with an acknowledgment line per child, plus the panes opened. The
+   first child splits a right-hand column off the orchestrator, which is resized to 3/5 of
+   the split rect; a later child joins that live column and re-divides it equally.
 2. End your turn and wait — no polling, no unrelated work.
 3. One steer message arrives for the batch, labelled per child.
-4. Completed panes close; a failed child is marked `failed` and its pane left open.
+4. Completed panes close; a failed child is marked `failed` and its pane left open. A close
+   does **not** rebalance the survivors — the layout is set at spawn time — and because the
+   3/5 pass fires only when the column is born, a divider you dragged by hand is never
+   snapped back.
 
 You can type into a child's pane at any time. Esc **is not a completion**: the child stays
 in the batch, its pane stays open, and the batch is held until it reports or the pane goes

@@ -9,12 +9,16 @@ import {
 	MIN_HERDR_VERSION,
 	PLUGIN_ENTRYPOINT,
 	PLUGIN_ID,
+	herdrPaneLayout,
 	herdrPaneOpen,
+	herdrPaneResize,
 	herdrPluginEnable,
 	herdrPluginInfo,
 	herdrPluginLink,
+	herdrStatus,
 	pluginDir,
 } from "../src/herdr.ts";
+import type { TabLayout } from "../src/herdr.ts";
 
 const manifestPath = join(pluginDir(), "herdr-plugin.toml");
 
@@ -213,6 +217,104 @@ async function withHerdrStub<T>(
 	}
 }
 
+/**
+ * Run `fn` with HERDR_BIN_PATH pointed at a stub that answers one queued
+ * response per invocation — payload and exit code for call N are queue entry N.
+ * The argv of each invocation is captured on its own.
+ *
+ * A call past the end of the queue repeats the last response instead of
+ * failing: an unexpected extra call then shows up in `calls` rather than as a
+ * mystifying missing-payload error.
+ */
+async function withHerdrStubScript<T>(
+	responses: { payload: string; exitCode?: number }[],
+	fn: () => Promise<T>,
+): Promise<{ result: T; calls: string[][] }> {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-herdr-script-"));
+	const counterFile = join(dir, "count");
+	const stub = join(dir, "herdr");
+	const payloads = responses.map((entry) => shellQuote(entry.payload)).join(" ");
+	const codes = responses.map((entry) => String(entry.exitCode ?? 0)).join(" ");
+	writeFileSync(
+		stub,
+		[
+			"#!/usr/bin/env bash",
+			`dir=${shellQuote(dir)}`,
+			`payloads=(${payloads})`,
+			`codes=(${codes})`,
+			`count=$(cat "$dir/count" 2>/dev/null || echo 0)`,
+			`printf '%s\\n' "$@" > "$dir/argv-$count.txt"`,
+			`printf '%s' "$((count + 1))" > "$dir/count"`,
+			`n=\${#payloads[@]}`,
+			'if [ "$n" -eq 0 ]; then exit 0; fi',
+			"idx=$count",
+			'if [ "$idx" -ge "$n" ]; then idx=$((n - 1)); fi',
+			`printf '%s' "\${payloads[$idx]}"`,
+			`exit "\${codes[$idx]}"`,
+		].join("\n") + "\n",
+	);
+	chmodSync(stub, 0o755);
+
+	const saved = process.env.HERDR_BIN_PATH;
+	process.env.HERDR_BIN_PATH = stub;
+	try {
+		const result = await fn();
+		const count = existsSync(counterFile) ? Number(readFileSync(counterFile, "utf8").trim()) || 0 : 0;
+		const calls: string[][] = [];
+		for (let i = 0; i < count; i += 1) {
+			const file = join(dir, `argv-${i}.txt`);
+			if (!existsSync(file)) continue;
+			const text = readFileSync(file, "utf8");
+			calls.push(text === "" ? [] : text.replace(/\n$/, "").split("\n"));
+		}
+		return { result, calls };
+	} finally {
+		if (saved === undefined) delete process.env.HERDR_BIN_PATH;
+		else process.env.HERDR_BIN_PATH = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+test("withHerdrStubScript answers one queued response per call and records argv per call", async () => {
+	const statusPayload = JSON.stringify({ id: "cli:status", result: { running: true, version: "1.1.1" } });
+	const pluginPayload = JSON.stringify({
+		id: "cli:plugin",
+		result: { plugins: [{ plugin_id: PLUGIN_ID, enabled: true }] },
+	});
+	const { result, calls } = await withHerdrStubScript(
+		[{ payload: statusPayload }, { payload: pluginPayload }],
+		async () => ({
+			status: await herdrStatus(),
+			plugin: await herdrPluginInfo(),
+		}),
+	);
+
+	// Two invocations, two argv sets, each captured on its own.
+	assert.deepEqual(calls, [
+		["status", "server", "--json"],
+		["plugin", "list", "--json"],
+	]);
+	// The second call saw the second payload, so the queue is consumed in order.
+	assert.deepEqual(result.status, { running: true, version: "1.1.1" });
+	assert.deepEqual(result.plugin, { id: PLUGIN_ID, enabled: true });
+});
+
+test("withHerdrStubScript honours per-call exit codes and repeats the last response", async () => {
+	const { result, calls } = await withHerdrStubScript(
+		[
+			{ payload: JSON.stringify({ id: "cli:status", result: { running: true, version: "1.0.0" } }) },
+			{ payload: "", exitCode: 7 },
+		],
+		async () => [await herdrStatus(), await herdrStatus(), await herdrStatus()],
+	);
+
+	assert.equal(result[0]?.version, "1.0.0");
+	assert.equal(result[1], null);
+	// Call three is past the queue, so it repeats call two's non-zero response.
+	assert.equal(result[2], null);
+	assert.equal(calls.length, 3);
+});
+
 test("herdrPaneOpen passes plugin, target, cwd, env and focus in that order", async () => {
 	const envelope = '{"id":"cli:plugin","result":{"plugin_pane":{"pane":{"pane_id":"pane-123"}}}}';
 	const { result, args } = await withHerdrStub(envelope, () =>
@@ -294,4 +396,89 @@ test("herdrPaneOpen refuses a pane it cannot address", async () => {
 	await withHerdrStub(envelope, async () => {
 		await assert.rejects(herdrPaneOpen({ cwd: "/some/cwd" }), /reported no id/);
 	});
+});
+
+test("herdrPaneLayout runs pane layout for the pane and unwraps the tab", async () => {
+	const envelope = JSON.stringify({
+		id: "cli:pane",
+		result: {
+			layout: {
+				tab_id: "tab-1",
+				panes: [
+					{ pane_id: "pane-a", rect: { x: 0, y: 0, width: 127, height: 58 } },
+					{ pane_id: "pane-b", rect: { x: 127, y: 0, width: 84, height: 58 } },
+				],
+			},
+		},
+	});
+	const { result, args } = await withHerdrStub(envelope, () => herdrPaneLayout("pane-root"));
+
+	assert.deepEqual(args, ["pane", "layout", "--pane", "pane-root"]);
+	assert.deepEqual(result, {
+		tabId: "tab-1",
+		panes: [
+			{ paneId: "pane-a", rect: { x: 0, y: 0, width: 127, height: 58 } },
+			{ paneId: "pane-b", rect: { x: 127, y: 0, width: 84, height: 58 } },
+		],
+	} satisfies TabLayout);
+});
+
+test("herdrPaneLayout returns null when the call, the JSON or the layout is unusable", async () => {
+	const missingLayout = await withHerdrStub(
+		JSON.stringify({ id: "cli:pane", result: { type: "something_else" } }),
+		() => herdrPaneLayout("pane-1"),
+	);
+	assert.equal(missingLayout.result, null);
+
+	const nonJson = await withHerdrStub("not json", () => herdrPaneLayout("pane-1"));
+	assert.equal(nonJson.result, null);
+
+	const failed = await withHerdrStub("", () => herdrPaneLayout("pane-1"), 1);
+	assert.equal(failed.result, null);
+
+	const panesNotAnArray = await withHerdrStub(
+		JSON.stringify({ id: "cli:pane", result: { layout: { tab_id: "tab-1", panes: "nope" } } }),
+		() => herdrPaneLayout("pane-1"),
+	);
+	assert.equal(panesNotAnArray.result, null);
+});
+
+test("herdrPaneLayout drops pane entries it cannot address or measure", async () => {
+	const envelope = JSON.stringify({
+		id: "cli:pane",
+		result: {
+			layout: {
+				tab_id: 42,
+				panes: [
+					{ pane_id: "keep", rect: { x: 1, y: 2, width: 3, height: 4 } },
+					{ rect: { x: 0, y: 0, width: 1, height: 1 } },
+					{ pane_id: 7, rect: { x: 0, y: 0, width: 1, height: 1 } },
+					{ pane_id: "no-rect" },
+					{ pane_id: "bad-rect", rect: { x: 0, y: 0, width: "3", height: 4 } },
+				],
+			},
+		},
+	});
+	const { result } = await withHerdrStub(envelope, () => herdrPaneLayout("pane-1"));
+
+	// A non-string tab id is not addressable; the bad pane entries are dropped
+	// rather than poisoning the whole layout.
+	assert.deepEqual(result, {
+		tabId: null,
+		panes: [{ paneId: "keep", rect: { x: 1, y: 2, width: 3, height: 4 } }],
+	});
+});
+
+test("herdrPaneResize moves the divider with the pinned argv", async () => {
+	const { result, args } = await withHerdrStub('{"id":"cli:pane","result":{"ok":true}}', () =>
+		herdrPaneResize("pane-b", "up", 0.5),
+	);
+
+	assert.equal(result, true);
+	assert.deepEqual(args, ["pane", "resize", "--direction", "up", "--amount", "0.5", "--pane", "pane-b"]);
+});
+
+test("herdrPaneResize reports failure instead of throwing", async () => {
+	const { result } = await withHerdrStub("", () => herdrPaneResize("pane-b", "left", 0.25), 1);
+	assert.equal(result, false);
 });

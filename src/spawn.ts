@@ -23,7 +23,8 @@ import {
 	writeLaunchFiles,
 } from "./launch.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { currentPaneId, herdrPaneOpen, herdrPaneRename } from "./herdr.ts";
+import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "./herdr.ts";
+import { planPlacement, planResizes, type LiveSubPanes } from "./layout.ts";
 import { resolveProfile } from "./profiles.ts";
 import { expandToolPatterns } from "./tool-patterns.ts";
 import { isThinkingLevel, REPORT_TOOL_NAME, type AgentDef, type ThinkingLevel } from "./types.ts";
@@ -79,6 +80,11 @@ export interface SpawnContext {
 	config: TinysubagentConfig;
 	parentModel?: string;
 	parentThinking?: ThinkingLevel;
+	/**
+	 * Live sub panes this extension instance opened. When absent, spawning keeps
+	 * the original behaviour: every child splits right off the orchestrator pane.
+	 */
+	columns?: LiveSubPanes;
 }
 
 export interface Spawned {
@@ -250,17 +256,53 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		{ path: paths.scriptFile, content: script },
 	]);
 
+	// One source for both layout reads below: the pane this pi is running in is
+	// the orchestrator, so it is both the birth split target and the reference
+	// rect the 3/5 pass measures against.
+	const orchestratorPaneId = currentPaneId(context.env);
+	const columns = context.columns;
+
+	// Without a tracker this stays the original call: split right off the
+	// orchestrator. With one, the placement decides target and direction.
+	let targetPaneId = orchestratorPaneId;
+	let direction: "right" | "down" = "right";
+	if (columns && orchestratorPaneId) {
+		const layout = await herdrPaneLayout(orchestratorPaneId);
+		// A failed read must not prune the tracker, so the empty case skips
+		// `liveIn` (which forgets every id the tab does not report) and plans a
+		// birth instead.
+		const live = layout ? columns.liveIn(layout) : [];
+		const placement = planPlacement(layout ?? { tabId: null, panes: [] }, orchestratorPaneId, live);
+		targetPaneId = placement.targetPaneId;
+		direction = placement.direction;
+	}
+
 	let paneId: string;
 	try {
 		paneId = await herdrPaneOpen({
 			cwd: context.cwd,
-			targetPaneId: currentPaneId(context.env),
-			direction: "right",
+			targetPaneId,
+			direction,
 			env: { PI_HERDR_LAUNCH_SCRIPT: paths.scriptFile },
 			focus: false,
 		});
 	} catch (error) {
 		return { ok: false, error: `could not open a pane: ${errorMessage(error)}` };
+	}
+
+	// The resize pass only runs when the pane is tracked. It reads the layout a
+	// second time, because the rects that matter are the ones the split just
+	// produced — the first read's geometry is stale the moment the pane opens.
+	// Both the read and every resize are best-effort: a failed read means no
+	// pass, and a failed resize leaves the pane open and usable.
+	if (columns && orchestratorPaneId) {
+		columns.place(paneId);
+		const layout = await herdrPaneLayout(orchestratorPaneId);
+		if (layout) {
+			for (const op of planResizes(layout, orchestratorPaneId, columns.liveIn(layout), paneId)) {
+				await herdrPaneResize(op.paneId, op.direction, op.amount);
+			}
+		}
 	}
 
 	// Cosmetic: a rename failure must not fail the spawn.

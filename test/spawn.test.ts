@@ -1,9 +1,11 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { PLUGIN_ENTRYPOINT, PLUGIN_ID, type Rect, type TabLayout } from "../src/herdr.ts";
+import { LiveSubPanes, planResizes } from "../src/layout.ts";
 import {
 	MAX_PARALLEL_TASKS,
 	TOOL_NAME,
@@ -255,4 +257,338 @@ test("a wildcard that matches nothing does not produce a one-tool allowlist", as
 	const unmatched: AgentDef = { ...worker, name: "unmatched", tools: ["codegraph_*"] };
 	const script = await spawnInScratch(unmatched);
 	assert.equal(script.includes("--tools"), false);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Placement and resize sequencing, observed through the herdr argv
+// ────────────────────────────────────────────────────────────────────────────
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Run `fn` with HERDR_BIN_PATH pointed at a stub that answers one queued
+ * response per invocation — payload and exit code for call N are queue entry N.
+ * Each invocation's argv is captured on its own.
+ *
+ * This mirrors the helper in `test/herdr.test.ts`, duplicated because that one
+ * is not exported. A call past the end of the queue repeats the last response:
+ * `spawnOne` fires the cosmetic rename without awaiting it, so the extra
+ * invocation must not become a mystifying missing-payload error.
+ */
+async function withHerdrStubScript<T>(
+	responses: { payload: string; exitCode?: number }[],
+	fn: () => Promise<T>,
+): Promise<{ result: T; calls: string[][] }> {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-spawn-herdr-"));
+	const counterFile = join(dir, "count");
+	const stub = join(dir, "herdr");
+	const payloads = responses.map((entry) => shellQuote(entry.payload)).join(" ");
+	const codes = responses.map((entry) => String(entry.exitCode ?? 0)).join(" ");
+	writeFileSync(
+		stub,
+		[
+			"#!/usr/bin/env bash",
+			`dir=${shellQuote(dir)}`,
+			`payloads=(${payloads})`,
+			`codes=(${codes})`,
+			`count=$(cat "$dir/count" 2>/dev/null || echo 0)`,
+			`printf '%s\\n' "$@" > "$dir/argv-$count.txt"`,
+			`printf '%s' "$((count + 1))" > "$dir/count"`,
+			`n=\${#payloads[@]}`,
+			'if [ "$n" -eq 0 ]; then exit 0; fi',
+			"idx=$count",
+			'if [ "$idx" -ge "$n" ]; then idx=$((n - 1)); fi',
+			`printf '%s' "\${payloads[$idx]}"`,
+			`exit "\${codes[$idx]}"`,
+		].join("\n") + "\n",
+	);
+	chmodSync(stub, 0o755);
+
+	const saved = process.env.HERDR_BIN_PATH;
+	process.env.HERDR_BIN_PATH = stub;
+	try {
+		const result = await fn();
+		const count = existsSync(counterFile) ? Number(readFileSync(counterFile, "utf8").trim()) || 0 : 0;
+		const calls: string[][] = [];
+		for (let i = 0; i < count; i += 1) {
+			const file = join(dir, `argv-${i}.txt`);
+			if (!existsSync(file)) continue;
+			const text = readFileSync(file, "utf8");
+			calls.push(text === "" ? [] : text.replace(/\n$/, "").split("\n"));
+		}
+		return { result, calls };
+	} finally {
+		if (saved === undefined) delete process.env.HERDR_BIN_PATH;
+		else process.env.HERDR_BIN_PATH = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+const ORCH = "pane-orch";
+const NEW = "pane-new";
+const LIVE_A = "pane-live-a";
+const LIVE_B = "pane-live-b";
+
+const resizePayload = '{"id":"cli:pane","result":{"ok":true}}';
+const openPayload = JSON.stringify({
+	id: "cli:plugin",
+	result: { plugin_pane: { pane: { pane_id: NEW } } },
+});
+
+interface PaneSpec {
+	paneId: string;
+	rect: Rect;
+}
+
+/** A `pane layout` payload for the stub. */
+function layoutPayload(panes: PaneSpec[]): string {
+	return JSON.stringify({
+		id: "cli:pane",
+		result: {
+			layout: {
+				tab_id: "tab-1",
+				panes: panes.map((pane) => ({ pane_id: pane.paneId, rect: pane.rect })),
+			},
+		},
+	});
+}
+
+/** The same fixture as the `TabLayout` the planner receives. */
+function plannerLayout(panes: PaneSpec[]): TabLayout {
+	return { tabId: "tab-1", panes: panes.map((pane) => ({ paneId: pane.paneId, rect: { ...pane.rect } })) };
+}
+
+/**
+ * Spawn one worker against a scripted herdr stub and hand back every recorded
+ * argv. `spawnOne`'s scratch directory is removed before returning, but the
+ * cwd/script paths embedded in those argv strings stay valid for assertions.
+ */
+async function spawnWithStub(
+	responses: { payload: string; exitCode?: number }[],
+	columns?: LiveSubPanes,
+): Promise<{ result: Awaited<ReturnType<typeof spawnOne>>; calls: string[][]; cwd: string; scriptFile: string }> {
+	const cwd = mkdtempSync(join(tmpdir(), "tinysubagent-spawn-layout-"));
+	try {
+		const { result, calls } = await withHerdrStubScript(responses, async () => {
+			const spawned = await spawnOne(
+				{ agent: "worker", task: "x", name: "worker" },
+				{
+					...context([worker]),
+					cwd,
+					agentDir: cwd,
+					sessionDir: cwd,
+					env: { HERDR_PANE_ID: ORCH },
+					columns,
+				},
+			);
+			// The rename is fire-and-forget in `spawnOne`; let it land so the recorded
+			// call sequence is the whole sequence rather than a race.
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			return spawned;
+		});
+		const scriptsDir = join(cwd, "artifacts", "sid", "subagent-scripts");
+		const scriptFile = existsSync(scriptsDir) ? join(scriptsDir, readdirSync(scriptsDir)[0] ?? "") : "";
+		return { result, calls, cwd, scriptFile };
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+}
+
+function flagValue(argv: string[], flag: string): string | undefined {
+	const index = argv.indexOf(flag);
+	return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function openCall(calls: string[][]): string[] {
+	const found = calls.find((argv) => argv[0] === "plugin" && argv[1] === "pane" && argv[2] === "open");
+	assert.ok(found, "spawnOne issued no pane open call");
+	return found;
+}
+
+function layoutCallIndices(calls: string[][]): number[] {
+	return calls.flatMap((argv, index) => (argv[0] === "pane" && argv[1] === "layout" ? [index] : []));
+}
+
+test("spawnOne: an empty column opens right off the orchestrator and resizes once", async () => {
+	const before: PaneSpec[] = [{ paneId: ORCH, rect: { x: 0, y: 0, width: 211, height: 58 } }];
+	const after: PaneSpec[] = [
+		{ paneId: ORCH, rect: { x: 0, y: 0, width: 84, height: 58 } },
+		{ paneId: NEW, rect: { x: 84, y: 0, width: 127, height: 58 } },
+	];
+	const { result, calls } = await spawnWithStub(
+		[
+			{ payload: layoutPayload(before) },
+			{ payload: openPayload },
+			{ payload: layoutPayload(after) },
+			{ payload: resizePayload },
+		],
+		new LiveSubPanes(),
+	);
+
+	assert.equal(result.ok, true);
+	if (result.ok) assert.equal(result.running.paneId, NEW);
+
+	const open = openCall(calls);
+	assert.equal(flagValue(open, "--direction"), "right");
+	assert.equal(flagValue(open, "--target-pane"), ORCH);
+
+	// Exactly one op, on the new pane. The amount comes from `planResizes` so the
+	// assertion pins the applied op, not the planner's arithmetic (that lives in
+	// `test/layout.test.ts`).
+	const expected = planResizes(plannerLayout(after), ORCH, [NEW], NEW);
+	assert.equal(expected.length, 1);
+	assert.deepEqual(calls[3], [
+		"pane",
+		"resize",
+		"--direction",
+		"right",
+		"--amount",
+		String(expected[0]?.amount),
+		"--pane",
+		NEW,
+	]);
+
+	// The placement read precedes the open; the resize read follows it.
+	const layouts = layoutCallIndices(calls);
+	const openIndex = calls.indexOf(open);
+	assert.equal(layouts.length, 2);
+	assert.ok(layouts[0]! < openIndex, "the placement read must happen before the open");
+	assert.ok(layouts[1]! > openIndex, "the resize read must happen after the open");
+	// The full sequence ends with the cosmetic rename, proving nothing new runs
+	// after it.
+	assert.deepEqual(calls[4], ["pane", "rename", NEW, "worker"]);
+});
+
+test("spawnOne: a live pane in the tab is appended to, not the orchestrator", async () => {
+	const before: PaneSpec[] = [
+		{ paneId: ORCH, rect: { x: 0, y: 0, width: 84, height: 58 } },
+		{ paneId: LIVE_A, rect: { x: 84, y: 0, width: 127, height: 29 } },
+	];
+	const after: PaneSpec[] = [
+		{ paneId: ORCH, rect: { x: 0, y: 0, width: 84, height: 58 } },
+		{ paneId: LIVE_A, rect: { x: 84, y: 0, width: 127, height: 29 } },
+		{ paneId: NEW, rect: { x: 84, y: 29, width: 127, height: 29 } },
+	];
+	const tracker = new LiveSubPanes();
+	tracker.place(LIVE_A);
+	const { result, calls } = await spawnWithStub(
+		[{ payload: layoutPayload(before) }, { payload: openPayload }, { payload: layoutPayload(after) }],
+		tracker,
+	);
+
+	assert.equal(result.ok, true);
+	const open = openCall(calls);
+	assert.equal(flagValue(open, "--direction"), "down");
+	assert.equal(flagValue(open, "--target-pane"), LIVE_A);
+	// The two column panes are already equal, so the pass emits nothing.
+	assert.equal(calls.some((argv) => argv[1] === "resize"), false);
+});
+
+test("spawnOne: the resize pass matches planResizes and runs after the second read", async () => {
+	const before: PaneSpec[] = [
+		{ paneId: ORCH, rect: { x: 0, y: 0, width: 84, height: 58 } },
+		{ paneId: LIVE_A, rect: { x: 84, y: 0, width: 127, height: 29 } },
+		{ paneId: LIVE_B, rect: { x: 84, y: 29, width: 127, height: 15 } },
+	];
+	const after: PaneSpec[] = [
+		{ paneId: ORCH, rect: { x: 0, y: 0, width: 84, height: 58 } },
+		{ paneId: LIVE_A, rect: { x: 84, y: 0, width: 127, height: 29 } },
+		{ paneId: LIVE_B, rect: { x: 84, y: 29, width: 127, height: 15 } },
+		{ paneId: NEW, rect: { x: 84, y: 44, width: 127, height: 14 } },
+	];
+	const tracker = new LiveSubPanes();
+	tracker.place(LIVE_A);
+	tracker.place(LIVE_B);
+	const { result, calls } = await spawnWithStub(
+		[
+			{ payload: layoutPayload(before) },
+			{ payload: openPayload },
+			{ payload: layoutPayload(after) },
+			{ payload: resizePayload },
+			{ payload: resizePayload },
+		],
+		tracker,
+	);
+
+	assert.equal(result.ok, true);
+
+	// Two uneven panes make two ops (the 29 is too tall, then the 15 is too short,
+	// measured against the shrunken node height rather than the full column).
+	const expected = planResizes(plannerLayout(after), ORCH, [LIVE_A, LIVE_B, NEW], NEW);
+	assert.deepEqual(
+		expected.map((op) => op.paneId),
+		[LIVE_B, NEW],
+	);
+	const expectedCalls = expected.map((op) => [
+		"pane",
+		"resize",
+		"--direction",
+		op.direction,
+		"--amount",
+		String(op.amount),
+		"--pane",
+		op.paneId,
+	]);
+
+	const open = openCall(calls);
+	const openIndex = calls.indexOf(open);
+	const layouts = layoutCallIndices(calls);
+	assert.equal(layouts.length, 2);
+	assert.ok(layouts[0]! < openIndex, "the placement read must happen before the open");
+	assert.ok(layouts[1]! > openIndex, "the resize read must happen after the open");
+	// Full sequence: placement read, open, resize read, each ops in order, rename.
+	assert.equal(calls.length, openIndex + 2 + expectedCalls.length + 1);
+	assert.deepEqual(calls[0], ["pane", "layout", "--pane", ORCH]);
+	assert.deepEqual(calls[openIndex + 1], ["pane", "layout", "--pane", ORCH]);
+	assert.deepEqual(calls.slice(openIndex + 2, openIndex + 2 + expectedCalls.length), expectedCalls);
+	assert.deepEqual(calls[openIndex + 2 + expectedCalls.length], ["pane", "rename", NEW, "worker"]);
+});
+
+test("spawnOne: a spawn still succeeds when every layout read fails", async () => {
+	const tracker = new LiveSubPanes();
+	tracker.place(LIVE_A);
+	const { result, calls } = await spawnWithStub(
+		[{ payload: "", exitCode: 1 }, { payload: openPayload }, { payload: "", exitCode: 1 }],
+		tracker,
+	);
+
+	// The real pane id comes back and the child is running; only the geometry is
+	// missing. A failed read also means no resize pass.
+	assert.equal(result.ok, true);
+	if (result.ok) assert.equal(result.running.paneId, NEW);
+	assert.deepEqual(calls[0], ["pane", "layout", "--pane", ORCH]);
+	assert.deepEqual(calls[2], ["pane", "layout", "--pane", ORCH]);
+	assert.equal(calls.some((argv) => argv[1] === "resize"), false);
+});
+
+test("spawnOne: without a tracker the open argv is unchanged", async () => {
+	const { result, calls, cwd, scriptFile } = await spawnWithStub([{ payload: openPayload }]);
+
+	assert.equal(result.ok, true);
+	// Byte-for-byte the pre-layout call: split right off the orchestrator, no
+	// placement read, no resize.
+	assert.deepEqual(calls[0], [
+		"plugin",
+		"pane",
+		"open",
+		"--plugin",
+		PLUGIN_ID,
+		"--entrypoint",
+		PLUGIN_ENTRYPOINT,
+		"--placement",
+		"split",
+		"--target-pane",
+		ORCH,
+		"--direction",
+		"right",
+		"--cwd",
+		cwd,
+		"--env",
+		`PI_HERDR_LAUNCH_SCRIPT=${scriptFile}`,
+		"--no-focus",
+	]);
+	assert.equal(layoutCallIndices(calls).length, 0);
+	assert.deepEqual(calls[1], ["pane", "rename", NEW, "worker"]);
 });

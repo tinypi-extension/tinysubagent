@@ -228,6 +228,20 @@ export interface PaneOpenOptions {
 	focus?: boolean;
 }
 
+/** Pane geometry, in the same units `pane layout` reports. */
+export interface Rect {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+/** Tab geometry as `pane layout` reports it. */
+export interface TabLayout {
+	tabId: string | null;
+	panes: { paneId: string; rect: Rect }[];
+}
+
 /**
  * Open a plugin pane and return its id. Throws when herdr does not report an
  * id: a pane we cannot address is a pane we cannot rename, reap or reason about.
@@ -307,4 +321,64 @@ export async function herdrPaneExists(paneId: string, options: RunOptions = {}):
 	const pane = body.pane as Record<string, unknown> | undefined;
 	if (pane && typeof pane.pane_id === "string") return true;
 	return null;
+}
+
+/**
+ * Read a tab's geometry through one pane. `null` for every failure mode — a
+ * failed call, absent JSON, a missing layout, or a non-array pane list — because
+ * layout is cosmetic: a caller must be able to fall back without a throw, the
+ * same way a failed rename does not fail a spawn.
+ */
+export async function herdrPaneLayout(paneId: string): Promise<TabLayout | null> {
+	let result: Record<string, unknown>;
+	try {
+		result = await runHerdrJson(["pane", "layout", "--pane", paneId]);
+	} catch {
+		return null;
+	}
+
+	const layout = result.layout;
+	if (!layout || typeof layout !== "object" || Array.isArray(layout)) return null;
+	const record = layout as Record<string, unknown>;
+	const rawPanes = record.panes;
+	if (!Array.isArray(rawPanes)) return null;
+
+	const panes: { paneId: string; rect: Rect }[] = [];
+	for (const entry of rawPanes) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const pane = entry as Record<string, unknown>;
+		const rawId = pane.pane_id ?? pane.paneId;
+		if (typeof rawId !== "string" || rawId === "") continue;
+		const box = pane.rect;
+		if (!box || typeof box !== "object" || Array.isArray(box)) continue;
+		const rect = box as Record<string, unknown>;
+		const { x, y, width, height } = rect;
+		// A bad coordinate cannot be measured against, so the entry is dropped
+		// rather than yielding a rect the planner would treat as real.
+		if (![x, y, width, height].every((value) => typeof value === "number" && Number.isFinite(value))) continue;
+		panes.push({ paneId: rawId, rect: { x, y, width, height } as Rect });
+	}
+
+	return { tabId: typeof record.tab_id === "string" ? record.tab_id : null, panes };
+}
+
+/**
+ * Move the divider adjacent to a pane. Best-effort like the other cosmetic
+ * calls: a geometry failure must never fail a spawn.
+ */
+export async function herdrPaneResize(
+	paneId: string,
+	direction: "left" | "right" | "up" | "down",
+	amount: number,
+): Promise<boolean> {
+	return runHerdrQuiet([
+		"pane",
+		"resize",
+		"--direction",
+		direction,
+		"--amount",
+		String(amount),
+		"--pane",
+		paneId,
+	]);
 }
