@@ -141,6 +141,19 @@ You can type into a child's pane at any time. Esc **is not a completion**: the c
 in the batch, its pane stays open, and the batch is held until it reports or the pane goes
 away. An interrupted child is not `failed`.
 
+The silence is only for a child that is still alive and steerable. One that pi refuses to
+start at all — no model selected, or no usable credentials for the provider it was spawned
+with — is reported as `failed (error)`, with the reason in the message:
+
+```
+**Error:** pi could not start this subagent: no API key configured for "oc-openai" — run /login oc-openai.
+```
+
+So an interrupt is not `failed`, but the redirect the user types into that pane is, if pi
+refuses to run it. The pane stays open either way, and that is where the credential gets
+fixed; without the report the batch would wait on the child forever, because a run that
+never started settles nothing.
+
 ## Profiles
 
 A profile is a `{ model, thinking }` pair a child is launched with, configured in

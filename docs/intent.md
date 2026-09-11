@@ -41,7 +41,11 @@ finishes, with the dead child marked `failed`. Never hang forever on N/N.
 
 Interrupting a child is not completing it. A user who presses Esc in a child's pane is
 there to redirect it, and that child stays in the batch with its pane open: no steer, no
-`failed`. The batch is held until that child reports for real or its pane goes away.
+`failed`. The batch is held until that child reports for real or its pane goes away —
+unless pi refuses the run the user then types, which is a failure and says why. Silence
+means "alive and steerable" and nothing else: a child that cannot start (no model, no
+usable credentials) is `failed`, because a run that never started settles nothing and the
+batch would otherwise wait on it forever.
 (Distinct from the `interrupt` feature in *Out of scope*, which would be the orchestrator
 reaching into a child's turn; nothing here does that.)
 

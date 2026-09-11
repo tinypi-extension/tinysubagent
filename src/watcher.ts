@@ -6,7 +6,9 @@
  *   <sessionFile>.done      the child's report: `{"type":"done","result":...}`
  *                           when it handed its result back explicitly, or a
  *                           content-free `{"type":"done"}` / 
- *                           `{"type":"failed","reason":...}` from the settle hook
+ *                           `{"type":"failed","reason":...}` from the settle hook,
+ *                           or a `{"type":"failed","reason":...,"message":...}` when
+ *                           pi refused the run and there is no turn to read it from
  *   <sessionFile>.exitcode  written by the wrapper: `"<code> <runId>"`
  *
  * The exit-code sidecar carries the run id because it is the one signal
@@ -86,6 +88,21 @@ interface Report {
 	/** `aborted` is parsed but is never terminal — see `classify`. */
 	reason: FailureReason | "aborted";
 	result: string | null;
+	/**
+	 * Why it failed, when the child could not leave the reason in its session —
+	 * a run pi refused to start writes no turn at all. See `failure` in `classify`.
+	 */
+	message: string | null;
+}
+
+/** Longer than any error worth reading; a verbose one is clipped, not dropped. */
+const MAX_MESSAGE = 1_000;
+
+function readMessage(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (trimmed === "") return null;
+	return trimmed.length <= MAX_MESSAGE ? trimmed : `${trimmed.slice(0, MAX_MESSAGE - 1)}…`;
 }
 
 function readReport(file: string): Report | null {
@@ -96,20 +113,21 @@ function readReport(file: string): Report | null {
 		return null;
 	}
 	try {
-		const parsed = JSON.parse(raw) as { type?: unknown; reason?: unknown; result?: unknown };
+		const parsed = JSON.parse(raw) as { type?: unknown; reason?: unknown; result?: unknown; message?: unknown };
 		if (parsed.type === "failed") {
 			const reason = parsed.reason;
 			return {
 				settle: "failed",
 				reason: reason === "aborted" || reason === "exit" || reason === "no-output" ? reason : "error",
 				result: null,
+				message: readMessage(parsed.message),
 			};
 		}
 		const result =
 			typeof parsed.result === "string" && parsed.result.trim() !== "" ? parsed.result : null;
-		return { settle: "done", reason: "error", result };
+		return { settle: "done", reason: "error", result, message: null };
 	} catch {
-		return { settle: "done", reason: "error", result: null };
+		return { settle: "done", reason: "error", result: null, message: null };
 	}
 }
 
@@ -130,8 +148,13 @@ interface Classification {
 
 function classify(running: RunningSubagent): Classification | null {
 	const summary = () => readFinalMessage(running.sessionFile);
-	// A failed turn carries its reason in the session, not in its text.
-	const failure = () => summary() ?? readFailureNote(running.sessionFile);
+	// A failed turn carries its reason in the session, not in its text. A failure
+	// with no turn behind it — a run pi refused to start — carries it in the report
+	// instead, and that report leads: a message is written only for the run that is
+	// ending *now*, while the session's last text may be a turn from earlier (the
+	// one the user interrupted before this run was refused).
+	const failure = (reported: string | null) =>
+		reported ?? summary() ?? readFailureNote(running.sessionFile);
 
 	const report = readReport(running.reportFile);
 	if (report !== null) {
@@ -158,7 +181,7 @@ function classify(running: RunningSubagent): Classification | null {
 			outcome:
 				report.settle === "done"
 					? { kind: "completed", via: "turn-end", summary: summary() }
-					: { kind: "failed", reason: report.reason, exitCode: null, summary: failure() },
+					: { kind: "failed", reason: report.reason, exitCode: null, summary: failure(report.message) },
 			consume: [running.reportFile, running.exitCodeFile],
 		};
 	}
@@ -180,7 +203,7 @@ function classify(running: RunningSubagent): Classification | null {
 			};
 		}
 		return {
-			outcome: { kind: "failed", reason: "exit", exitCode: exit.code, summary: failure() },
+			outcome: { kind: "failed", reason: "exit", exitCode: exit.code, summary: failure(null) },
 			consume: [running.exitCodeFile, running.reportFile],
 		};
 	}

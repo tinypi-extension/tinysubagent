@@ -56,11 +56,21 @@ One sidecar, extended additively. `<sessionFile>.done`:
 {"type":"done","result":"<the child's result text>"}   // new: explicit report
 {"type":"done"}                                        // legacy: settled, no payload
 {"type":"failed","reason":"error"|"aborted"|"exit"|"no-output"}
+{"type":"failed","reason":"error","message":"<why>"}  // new: refused before any run
 ```
 
 `result` is optional. Absent ⇒ the parent falls back to today's session scrape. No
 version field: an old reader ignores `result` and still works, and a new reader tolerates
 its absence.
+
+`message` is optional too, and is written only on a failure that left **no turn** in the
+session to explain itself: pi refuses to start a run when no model is selected or the
+provider has no usable credentials, and it throws out of `prompt()` before the agent phase.
+No run means no settle hook, so the refusal is reported from the child's `input` hook
+instead (`docs/spec-child-preflight-failure.md`), and the message is the orchestrator's only
+account of it. Where a turn does exist, the session still speaks for the failure, and the
+order is `report message ?: last assistant text ?: session failure note`: a message is
+written only for the run that produced no turn, so it is always fresher than the scrape.
 
 `aborted` is a reason the reader tolerates, but one the child no longer writes. The
 interrupt rule lives in the child: a run whose own abort signal was set — or whose stop
@@ -82,7 +92,7 @@ orchestrator a job closed while the user is still steering it.
 | `done`, no `result` | any | `{kind:"completed", via:"turn-end"}` | session scrape |
 | absent | `0` | `{kind:"completed", via:"session-exit"}` | session scrape |
 | absent | non-zero | `{kind:"failed", reason:"exit"}` | scrape ?: failure note |
-| `failed`, reason ≠ `aborted` | any | `{kind:"failed", reason}` | scrape ?: failure note |
+| `failed`, reason ≠ `aborted` | any | `{kind:"failed", reason}` | report `message` ?: scrape ?: failure note |
 | `failed`, reason = `aborted` | any | *not terminal* — report dropped, wait continues | — |
 | *no report*, no exit code, pane alive | — | *not terminal* — the wait continues | — |
 | absent, no exit code, pane gone | — | `{kind:"cancelled"}` | scrape |

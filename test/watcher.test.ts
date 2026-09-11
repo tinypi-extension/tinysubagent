@@ -102,6 +102,109 @@ test("a failed report is a failure and keeps its error reason", async () => {
 	}
 });
 
+test("a failed report with no turn behind it carries its own reason", async () => {
+	const s = scenario({ session: null });
+	try {
+		// pi refused to start the run — no API key — so it never wrote a turn and
+		// the session has nothing to explain the failure with. The report's own
+		// message is the only thing standing between the orchestrator and a bare
+		// "failed", which is why it is plumbed through as the summary.
+		s.write(
+			s.running.reportFile,
+			JSON.stringify({
+				type: "failed",
+				reason: "error",
+				message: 'no API key configured for "oc-openai" — run /login oc-openai.',
+			}),
+		);
+		const outcome = await waitForSubagent(s.running, undefined, s.deps);
+		assert.equal(outcome.kind, "failed");
+		assert.equal(outcome.kind === "failed" && outcome.reason, "error");
+		assert.equal(outcome.summary, 'no API key configured for "oc-openai" — run /login oc-openai.');
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a report's own message outranks the session's older failure note", async () => {
+	const s = scenario({ session: null });
+	try {
+		// The turn that failed is stale: the user retried, and the refusal that
+		// followed is what the orchestrator needs to know about.
+		s.write(
+			s.running.sessionFile,
+			`${JSON.stringify({
+				type: "message",
+				message: { role: "assistant", content: [], stopReason: "error", errorMessage: "old failure" },
+			})}\n`,
+		);
+		s.write(
+			s.running.reportFile,
+			'{"type":"failed","reason":"error","message":"new failure"}',
+		);
+		const outcome = await waitForSubagent(s.running, undefined, s.deps);
+		assert.equal(outcome.summary, "new failure");
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a report's own message outranks stale text from an earlier turn", async () => {
+	const s = scenario({ session: "I got as far as the migration" });
+	try {
+		// The user Esc'd that turn and then retyped it into a run pi refused. The
+		// session text is real, but it is not *this* run's ending — reporting it would
+		// hide the reason the batch stopped, which is the entire point of the report.
+		s.write(
+			s.running.reportFile,
+			JSON.stringify({
+				type: "failed",
+				reason: "error",
+				message: 'no API key configured for "oc-openai"',
+			}),
+		);
+		const outcome = await waitForSubagent(s.running, undefined, s.deps);
+		assert.equal(outcome.kind, "failed");
+		assert.equal(outcome.summary, 'no API key configured for "oc-openai"');
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a failed report that is not a usable message is read as one without", async () => {
+	// `message` comes from a file another process wrote, so a reader that trusted its
+	// shape would be trusting whatever is on disk.
+	for (const message of ["   ", 42, { why: "no" }, null]) {
+		const s = scenario({ session: null });
+		try {
+			s.write(
+				s.running.reportFile,
+				JSON.stringify({ type: "failed", reason: "error", message }),
+			);
+			const outcome = await waitForSubagent(s.running, undefined, s.deps);
+			assert.equal(outcome.kind, "failed");
+			assert.equal(outcome.summary, null, `expected no summary for ${JSON.stringify(message)}`);
+		} finally {
+			s.cleanup();
+		}
+	}
+});
+
+test("an over-long report message is clipped, not dropped", async () => {
+	const s = scenario({ session: null });
+	try {
+		s.write(
+			s.running.reportFile,
+			JSON.stringify({ type: "failed", reason: "error", message: "x".repeat(1_200) }),
+		);
+		const outcome = await waitForSubagent(s.running, undefined, s.deps);
+		assert.equal(outcome.summary?.length, 1_000);
+		assert.ok(outcome.summary?.endsWith("…"));
+	} finally {
+		s.cleanup();
+	}
+});
+
 test("an aborted report does not settle the batch while the child is alive", async () => {
 	const s = scenario();
 	try {
