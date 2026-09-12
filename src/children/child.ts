@@ -6,18 +6,22 @@
  * sidecar file — `$PI_TINYSUBAGENT_REPORT` — and then shutting its own pi down,
  * which ends the wrapper script, which lets the pane close itself.
  *
- * Two paths write that sidecar and they are both load-bearing:
+ * The only path that writes the success sidecar is `subagent_report`, the
+ * explicit hand-back: the child decides it is done and passes its complete
+ * result as an argument, so the orchestrator receives exactly that text instead
+ * of inferring it from a session it has to scrape. The call shuts the child's
+ * pi down, which is what closes the pane.
  *
- *  - `subagent_report`, the explicit hand-back. The child decides it is done
- *    and passes its complete result as an argument, so the orchestrator receives
- *    exactly that text instead of inferring it from a session it has to scrape.
- *  - the settle hook, the fallback. A child that never calls the tool, or whose
- *    call could not be written, still stamps a content-free `{"type":"done"}`
- *    when its turn settles, and the orchestrator reads the result from the
- *    session as it always has.
+ * ## An unreported turn end is not an ending
  *
- * The tool is the better path because it needs no scrape and no drained turn;
- * the settle report is the one that guarantees the orchestrator can never hang.
+ * A child whose turn settles as `done` without a prior `subagent_report` writes
+ * nothing and keeps running: it sits at its interactive prompt with its whole
+ * context intact. The watcher already treats "no sidecar, no exit code, pane
+ * alive" as "keep waiting", so the orchestrator's batch holds until a human
+ * asks the child for the report in its pane, quits it, or closes it. Writing a
+ * content-free `done` and shutting down instead — the old fallback — is what
+ * used to close a pane the human was told to inspect, destroying the only copy
+ * of the child's context with it.
  *
  * ## Why `agent_settled` and not `agent_end`
  *
@@ -26,23 +30,24 @@
  * a retry as a result. `agent_settled` fires exactly once, from a `finally`,
  * after all of that has drained: it means nothing else will run.
  *
- * That has three consequences worth stating, because they are the reason this
+ * That has consequences worth stating, because they are the reason this
  * file is short:
  *
  *  - a transient error that pi retries is never mistaken for a failure;
  *  - a message the user steers into the pane is allowed to finish first;
- *  - every *finished* settle produces a report, so an orchestrator waiting on a
- *    batch can never be left hanging by a child that stopped but stayed open.
+ *  - an interrupted settle is not an ending (see below), and neither is an
+ *    unreported `done` — silence in both cases leaves the watcher watching the
+ *    pane for the child's next real settle.
  *
  * ## What an interrupt is
  *
- * The third point has one deliberate exception. Pressing Esc in the child's pane
- * unwinds the agent loop, so `agent_settled` fires — but the child has not
- * finished: it is alive at its prompt, one keystroke away from being redirected,
- * which is exactly why the user pressed Esc. Reporting that as an ending is what
- * used to tell the orchestrator that a job the user was still steering had
- * closed. An interrupted settle therefore writes nothing at all, and the watcher
- * keeps watching the pane for the child's next real settle.
+ * Pressing Esc in the child's pane unwinds the agent loop, so `agent_settled`
+ * fires — but the child has not finished: it is alive at its prompt, one
+ * keystroke away from being redirected, which is exactly why the user pressed
+ * Esc. Reporting that as an ending is what used to tell the orchestrator that a
+ * job the user was still steering had closed. An interrupted settle therefore
+ * writes nothing at all, and the watcher keeps watching the pane for the
+ * child's next real settle.
  *
  * Esc is not reliably *labelled* as an interrupt, which is the trap here. One that
  * lands while a tool call is running is filed by pi as a plain `error` — "This
@@ -58,6 +63,13 @@
  * worth preserving: the user can read the error, retry, or steer the child. The
  * orchestrator is told the child failed; the pane stays up until the user is
  * done with it.
+ *
+ * A settle whose messages contain no assistant message at all is a special
+ * case of the silence: the turn produced nothing reportable and the child is
+ * still alive at its prompt, so writing the `no-output` failure and holding the
+ * batch on a `failed` verdict would describe a child the user can simply steer
+ * into working. Silence here means the same thing it means for an interrupt —
+ * the watcher keeps waiting, and the human resolves the pane.
  *
  * ## The run that never started
  *
@@ -97,8 +109,9 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 	let runSignal: AbortSignal | undefined;
 
 	// The explicit hand-back: the model passes its result, this writes it, and
-	// the orchestrator delivers that exact text. Automatic completion at settle
-	// does not depend on it — that is the fallback for a child that never calls.
+	// the orchestrator delivers that exact text. This is the only path that
+	// closes the pane on success — a turn that ends without it keeps the pane
+	// open, so a failed write here means the model must retry the call.
 	pi.registerTool({
 		name: REPORT_TOOL_NAME,
 		label: "Subagent Report",
@@ -118,15 +131,16 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 			}
 			if (!writeResultReport(params.result)) {
 				// Stay alive rather than exiting with the result unreported: the model
-				// can retry, or simply finish and let the settle path carry it.
+				// must retry the call, because there is no settle fallback to carry
+				// the result anymore — an unreported turn end just keeps the pane open.
 				return {
 					content: [
 						{
 							type: "text" as const,
 							text:
 								"Could not report the result — the sidecar write failed. It has NOT been " +
-								"delivered. Finish your turn normally and the caller will read your final " +
-								"message instead.",
+								"delivered. Call `subagent_report` again with the same result; the pane " +
+								"stays open and the caller keeps waiting until the report succeeds.",
 						},
 					],
 					details: {},
@@ -176,18 +190,16 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		writeReportFile("failed", "error", refusal);
 	});
 
-	pi.on("agent_settled", (_event, ctx) => {
+	pi.on("agent_settled", (_event, _ctx) => {
 		if (finished) return;
 
+		// An unreported turn end is not an ending: the child stays alive at its
+		// prompt with its context intact, and the watcher keeps waiting. Writing a
+		// content-free `done` and shutting down here is what used to close a pane
+		// the human was told to inspect. The batch holds until a human asks for
+		// the report, quits the child, or closes the pane.
 		const settle = settleReason(lastMessages);
-		if (settle === "done") {
-			// Best-effort write: the pane must close either way, or the orchestrator
-			// waits forever on a child that stopped but stayed open.
-			writeReportFile("done");
-			finished = true;
-			ctx.shutdown();
-			return;
-		}
+		if (settle === "done") return;
 
 		// The user Esc'd this child to redirect it. The loop unwound, but the child did
 		// not finish — it is alive at its prompt, so there is no ending to report, and
@@ -199,6 +211,13 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		// checks mean the same thing — the signal covers the tool call, the verdict
 		// covers an abort pi did label.
 		if (runSignal?.aborted === true || settle === "interrupted") return;
+
+		// A settle with no assistant message at all is also silence, not a failure:
+		// nothing reportable was produced and the child is still alive at its
+		// prompt. Reporting `no-output` would mark the batch failed for a child the
+		// user can simply steer into working, so it waits like an interrupt does.
+		// A real `error` stop reason still reports below — that one is a failure.
+		if (failureDetail(lastMessages) === "no-output") return;
 
 		// Report the failure but stay alive: an errored interactive pi is sitting
 		// at its prompt, and the user may want to read it, retry, or steer.

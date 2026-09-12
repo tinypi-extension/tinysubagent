@@ -380,7 +380,7 @@ test("a real error is still reported as a failure", async () => {
 	});
 });
 
-test("a redirected child still reports when its next turn settles", async () => {
+test("an unreported turn end after a redirect still keeps the pane open", async () => {
 	await withReportFile((report) => {
 		const stub = stubChildApi();
 		tinysubagentChild(stub.api as never);
@@ -394,12 +394,15 @@ test("a redirected child still reports when its next turn settles", async () => 
 		settled({}, stub.ctx);
 		assert.equal(existsSync(report), false);
 
-		// The redirect was typed, the child worked, and this time it finished. The
-		// interrupt must not have wedged it into permanent silence.
+		// The redirect was typed and the child finished — but without calling the
+		// report tool. An unreported turn end is not an ending: the pane stays
+		// open at its prompt and the batch holds until a human asks for the
+		// report. A sidecar here is what used to close a pane the human was told
+		// to inspect, destroying the only copy of the child's context with it.
 		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
 		settled({}, stub.ctx);
-		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "done" });
-		assert.equal(stub.shutdowns(), 1);
+		assert.equal(existsSync(report), false);
+		assert.equal(stub.shutdowns(), 0);
 	});
 });
 
@@ -426,12 +429,8 @@ test("a failed report write keeps the child alive and says so", async () => {
 	}
 });
 
-test("a settle whose report write fails still closes the pane", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-child-"));
-	const saved = process.env.PI_TINYSUBAGENT_REPORT;
-	// A directory that does not exist, so the settle write cannot succeed.
-	process.env.PI_TINYSUBAGENT_REPORT = join(dir, "missing", "s.jsonl.done");
-	try {
+test("a done settle writes nothing and keeps the pane open", async () => {
+	await withReportFile((report) => {
 		const stub = stubChildApi();
 		tinysubagentChild(stub.api as never);
 		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
@@ -443,14 +442,35 @@ test("a settle whose report write fails still closes the pane", async () => {
 		) => void;
 		settled({}, stub.ctx);
 
-		// The write is best-effort; the pane must still close. Leaving it open on a
-		// settled turn hangs the watcher forever — no report, no exit code, pane alive.
-		assert.equal(stub.shutdowns(), 1);
-	} finally {
-		if (saved === undefined) delete process.env.PI_TINYSUBAGENT_REPORT;
-		else process.env.PI_TINYSUBAGENT_REPORT = saved;
-		rmSync(dir, { recursive: true, force: true });
-	}
+		// An unreported turn end is not an ending: no sidecar, no shutdown. The
+		// child sits at its prompt with its context intact and the watcher keeps
+		// waiting; closing the pane here is what used to destroy the only copy of
+		// the child's context before a human could ask for the report.
+		assert.equal(existsSync(report), false);
+		assert.equal(stub.shutdowns(), 0);
+	});
+});
+
+test("a settle with no assistant message is silence too, not a failure", async () => {
+	await withReportFile((report) => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never);
+		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+		end({ messages: [{ role: "user" }] }, stub.ctx);
+
+		const settled = stub.listeners.get("agent_settled") as (
+			event: unknown,
+			ctx: { shutdown: () => void },
+		) => void;
+		settled({}, stub.ctx);
+
+		// Nothing reportable was produced and the child is alive at its prompt:
+		// reporting `no-output` would mark the batch failed for a child the user
+		// can simply steer into working. It waits like an interrupt does; a real
+		// `error` stop reason is the one failure that still reports.
+		assert.equal(existsSync(report), false);
+		assert.equal(stub.shutdowns(), 0);
+	});
 });
 
 test("the refusal message names the provider and the fix", () => {

@@ -102,7 +102,7 @@ const context = {
 
 const request = {
 	agent: agentName,
-	task: "Reply with exactly the single word PONG. Do not use any tools. Do not explain.",
+	task: "Call subagent_report with the result PONG. Use no other tools. Do not explain.",
 	name: "smoke",
 	profile: config.enableProfiles ? profileName : undefined,
 };
@@ -112,13 +112,13 @@ const plan = parallel
 			{
 				agent: agentName,
 				name: "alpha",
-				task: "Reply with exactly the single word ALPHA. Do not use any tools.",
+				task: "Call subagent_report with the result ALPHA. Use no other tools.",
 				profile: config.enableProfiles ? profileName : undefined,
 			},
 			{
 				agent: agentName,
 				name: "beta",
-				task: "Reply with exactly the single word BETA. Do not use any tools.",
+				task: "Call subagent_report with the result BETA. Use no other tools.",
 				profile: config.enableProfiles ? profileName : undefined,
 			},
 			{ agent: agentName, name: "broken", task: "Reply with exactly the single word GAMMA.", profile: "bogus" },

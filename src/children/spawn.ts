@@ -55,17 +55,20 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		}
 	}
 
-	// Nested delegation is refused rather than half-supported. A child that can
-	// spawn has its own pane closed the moment its turn settles, which would
-	// strand any grandchild's result — the result arrives in a session that no
-	// longer exists. Failing here says so, instead of losing work quietly later.
+	// Nested delegation is refused rather than half-supported. A grandchild's
+	// result lands in the subagent's own session, and the batch contract has no
+	// way to carry it up: the orchestrator's steer delivers what its direct
+	// children report, and the subagent has no report that carries a
+	// grandchild's payload. Failing the spawn says so, instead of losing work
+	// quietly later.
 	if (tools?.includes(TOOL_NAME)) {
 		return {
 			ok: false,
 			error:
 				`agent "${agent.name}" lists \`${TOOL_NAME}\` in its tools, so it could spawn subagents of its own. ` +
-				"Nested delegation is not supported yet: the child's pane closes when its own turn settles, " +
-				`which would strand its children's results. Remove \`${TOOL_NAME}\` from that role.`,
+				"Nested delegation is not supported yet: a grandchild's result lands in the " +
+				"subagent's own session, and nothing carries it up to the orchestrator. " +
+				`Remove \`${TOOL_NAME}\` from that role.`,
 		};
 	}
 

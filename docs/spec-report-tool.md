@@ -1,7 +1,9 @@
 # Spec: subagent result report tool
 
-Status: awaiting review. Extends `docs/intent.md`; that document is the contract and
-this one must not contradict it without editing the conflicting line first.
+Status: **superseded in part** by `docs/spec-report-required.md`, which removes the
+settle fallback and makes a reported turn the only automatic close. Extends
+`docs/intent.md`; that document is the contract and this one must not contradict it
+without editing the conflicting line first.
 
 ## Assumptions I'm making
 
@@ -90,6 +92,10 @@ orchestrator a job closed while the user is still steering it.
 |---|---|---|---|
 | `result` present, non-empty | any | `{kind:"completed", via:"report"}` | `result` |
 | `done`, no `result` | any | `{kind:"completed", via:"turn-end"}` | session scrape |
+
+> Legacy row. Children no longer write a content-free `done` (`spec-report-required.md`):
+> a settled turn without a report is not an ending. The watcher still tolerates the
+> payload, and `via:"turn-end"` remains reachable through a manual quit.
 | absent | `0` | `{kind:"completed", via:"session-exit"}` | session scrape |
 | absent | non-zero | `{kind:"failed", reason:"exit"}` | scrape ?: failure note |
 | `failed`, reason ≠ `aborted` | any | `{kind:"failed", reason}` | report `message` ?: scrape ?: failure note |
@@ -234,8 +240,10 @@ New coverage:
 - **Ask first:** changing `via` semantics for the existing variants; adding a second
   sidecar file; touching `deliver()` in `index.ts`; the parent-pull design.
 - **Never:** make the report the only path (a forgetful child must still produce a
-  result); let the child import from `spawn.ts` or vice versa; weaken an existing test to
-  make this pass; remove the malformed-report anti-hang rule.
+  result) — **amended by `spec-report-required.md`: the report now *is* the only automatic
+  close, and an unreported turn end holds the batch until a human acts**; let the child
+  import from `spawn.ts` or vice versa; weaken an existing test to make this pass; remove
+  the malformed-report anti-hang rule.
 
 ## Out of scope
 

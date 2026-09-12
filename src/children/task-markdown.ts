@@ -5,9 +5,10 @@
  * replacement — and none of the installed roles do.
  *
  * The output contract names the report tool explicitly. It is the last thing the
- * child reads, and a model that never learns the tool name never calls it — its
- * result is then only ever a scrape of the session. The fallback is still stated
- * so a child that skips the call is not left without a way to finish.
+ * child reads, and a model that never learns the tool name never calls it — and
+ * an unreported turn end keeps the pane open and the batch waiting (there is no
+ * settle fallback), so the reminder is the difference between a finished batch
+ * and a held one.
  */
 
 import { REPORT_TOOL_NAME } from "../types.ts";
@@ -22,7 +23,8 @@ export function buildTaskMarkdown(opts: {
 		`${opts.task.trim()}\n\n` +
 		`When your task is complete, call \`${REPORT_TOOL_NAME}\` with your full result in the ` +
 		"`result` argument. That call is what the caller receives and what closes this pane — " +
-		"do not skip it. Write your final assistant message as that same self-contained summary; " +
-		"if the report does not arrive, the caller reads it instead."
+		"do not skip it. Write your final assistant message as that same self-contained summary. " +
+		"Ending your turn without the call sends nothing: this pane stays open and the caller " +
+		"keeps waiting until you report."
 	);
 }

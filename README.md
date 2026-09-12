@@ -104,8 +104,8 @@ Notes on `tools`:
   silently narrowing the allowlist; unmatched wildcards also warn on the spawn
   acknowledgment.
 - **Nested delegation is unsupported.** Listing `subagent` fails the spawn with an
-  explanation: the child's pane closes when its turn settles and would strand its
-  children's results.
+  explanation: a grandchild's result lands in the subagent's own session, and nothing
+  carries it up to the orchestrator.
 
 ## Use it
 
@@ -140,10 +140,13 @@ Lifecycle:
    the split rect; a later child joins that live column and re-divides it equally.
 2. End your turn and wait — no polling, no unrelated work.
 3. One steer message arrives for the batch, labelled per child.
-4. Completed panes close; a failed child is marked `failed` and its pane left open. A close
-   does **not** rebalance the survivors — the layout is set at spawn time — and because the
-   3/5 pass fires only when the column is born, a divider you dragged by hand is never
-   snapped back.
+4. A pane closes only when its child calls `subagent_report` (then it is `completed`),
+   when the user quits it (exit 0 → `completed`), or when it is closed by hand
+   (`cancelled`). A child that ends its turn without reporting keeps its pane open and
+   **holds the batch** — ask it for the report in the pane. A failed child is marked
+   `failed` and its pane left open. A close does **not** rebalance the survivors — the
+   layout is set at spawn time — and because the 3/5 pass fires only when the column is
+   born, a divider you dragged by hand is never snapped back.
 
 You can type into a child's pane at any time. Esc **is not a completion**: the child stays
 in the batch, its pane stays open, and the batch is held until it reports or the pane goes

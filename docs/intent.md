@@ -42,7 +42,12 @@ results labelled per task so the orchestrator can attribute output to the child 
 produced it. Order is task order.
 
 If a child dies without completing, emit the partial result once the last *survivor*
-finishes, with the dead child marked `failed`. Never hang forever on N/N.
+finishes, with the dead child marked `failed`. The batch waits until every child has
+reported, exited, failed, or had its pane closed. A child that ends its turn without
+calling `subagent_report` holds the batch: its pane stays open at its prompt and the
+orchestrator hears nothing until a human asks it for the report, quits it, or closes the
+pane. This amends the old "never hang forever on N/N" promise — see
+`docs/spec-report-required.md`.
 
 Interrupting a child is not completing it. A user who presses Esc in a child's pane is
 there to redirect it, and that child stays in the batch with its pane open: no steer, no
@@ -50,7 +55,10 @@ there to redirect it, and that child stays in the batch with its pane open: no s
 unless pi refuses the run the user then types, which is a failure and says why. Silence
 means "alive and steerable" and nothing else: a child that cannot start (no model, no
 usable credentials) is `failed`, because a run that never started settles nothing and the
-batch would otherwise wait on it forever.
+batch would otherwise wait on it forever. The same silence covers a child that ends its
+turn without reporting — the settle writes nothing and the pane stays open, for the same
+reason: the child is alive, its context intact, and a human can still ask it for the
+report (`docs/spec-report-required.md`).
 (Distinct from the `interrupt` feature in *Out of scope*, which would be the orchestrator
 reaching into a child's turn; nothing here does that.)
 
