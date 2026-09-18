@@ -29,8 +29,25 @@ import { createCapabilityCheck } from "./src/pi/capability.ts";
 import { registerLifecycle } from "./src/pi/lifecycle.ts";
 import { offerPluginFix, type PluginFixGuard } from "./src/pi/plugin-fix.ts";
 import { createTool } from "./src/pi/tool.ts";
+import { createSettingsScreen } from "./src/pi/settings-tui.ts";
 
 export default function tinysubagent(pi: ExtensionAPI): void {
+	// Registered above the herdr guard: editing a config file needs no pane, so the
+	// command has to exist in every pi session, not only in herdr ones. The call is
+	// optional so a host that offers no commands still gets the tool below it.
+	pi.registerCommand?.("subagent-settings", {
+		description: "Edit tinysubagent profiles (enableProfiles + profiles.<name>)",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI || ctx.mode !== "tui") {
+				ctx.ui.notify("tinysubagent: settings need interactive mode.", "warning");
+				return;
+			}
+			await ctx.ui.custom<void>((_tui, theme, _keybindings, done) =>
+				createSettingsScreen({ ctx, theme, done: () => done(undefined) }),
+			);
+		},
+	});
+
 	if (!isInsideHerdr()) return;
 
 	const { config, warnings: configWarnings } = loadConfig(process.cwd(), getAgentDir());

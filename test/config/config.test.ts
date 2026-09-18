@@ -12,8 +12,10 @@ import {
 	JSONC_CONFIG_FILENAME,
 	configPath,
 	configSources,
+	defaultTarget,
 	loadConfig,
 	type LoadedConfig,
+	settingsTargets,
 } from "../../src/config/config.ts";
 
 function writeNamed(name: string, value: unknown): string {
@@ -503,6 +505,83 @@ test("PI_TINYSUBAGENT_CONFIG beats a valid project file", () => {
 		assert.deepEqual(config.sources, [{ file: override, scope: "override" }]);
 		assert.equal(configPath(cwd, agentDir), override);
 		assert.deepEqual(warnings, []);
+	});
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Settings screen: target selection mirrors resolution, in the screen's words
+// ────────────────────────────────────────────────────────────────────────────
+
+test("settingsTargets lists project before root, with exists from the filesystem", () => {
+	const { cwd, agentDir } = twoDirs();
+	const project = writeProject(cwd, JSONC_CONFIG_FILENAME, {});
+	const root = writeGlobal(agentDir, CONFIG_FILENAME, {});
+
+	assert.deepEqual(settingsTargets(cwd, agentDir), [
+		{ scope: "project", file: project, exists: true },
+		{ scope: "root", file: root, exists: true },
+	]);
+});
+
+test("settingsTargets keeps the .jsonc-beats-.json rule within a scope", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeProject(cwd, CONFIG_FILENAME, {});
+	const projectJsonc = writeProject(cwd, JSONC_CONFIG_FILENAME, {});
+	const rootJson = writeGlobal(agentDir, CONFIG_FILENAME, {});
+
+	// The shadowed project .json and the root file are dropped: only the .jsonc
+	// in each scope survives, and project still precedes root.
+	assert.deepEqual(
+		settingsTargets(cwd, agentDir).map((target) => target.file),
+		[projectJsonc, rootJson],
+	);
+});
+
+test("defaultTarget picks an existing project file over an existing root file", () => {
+	const { cwd, agentDir } = twoDirs();
+	const project = writeProject(cwd, JSONC_CONFIG_FILENAME, {});
+	writeGlobal(agentDir, JSONC_CONFIG_FILENAME, {});
+
+	assert.deepEqual(defaultTarget(cwd, agentDir), {
+		scope: "project",
+		file: project,
+		exists: true,
+	});
+});
+
+test("defaultTarget falls back to the root .jsonc with exists false when nothing exists", () => {
+	const { cwd, agentDir } = twoDirs();
+
+	assert.deepEqual(defaultTarget(cwd, agentDir), {
+		scope: "root",
+		file: path.join(agentDir, JSONC_CONFIG_FILENAME),
+		exists: false,
+	});
+});
+
+test("PI_TINYSUBAGENT_CONFIG yields a single override target, existing or not", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeProject(cwd, JSONC_CONFIG_FILENAME, {});
+	const existing = writeConfig({});
+
+	withEnv(existing, () => {
+		assert.deepEqual(settingsTargets(cwd, agentDir), [
+			{ scope: "override", file: existing, exists: true },
+		]);
+		assert.deepEqual(defaultTarget(cwd, agentDir), {
+			scope: "override",
+			file: existing,
+			exists: true,
+		});
+	});
+
+	// The override is the user's explicit choice, so it is listed even when it
+	// names nothing — and the scopes it would otherwise shadow are not listed.
+	const missing = path.join(mkdtempSync(path.join(tmpdir(), "tinysubagent-config-")), "custom.json");
+	withEnv(missing, () => {
+		assert.deepEqual(settingsTargets(cwd, agentDir), [
+			{ scope: "override", file: missing, exists: false },
+		]);
 	});
 });
 

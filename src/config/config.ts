@@ -65,10 +65,13 @@ export interface LoadedConfig {
 
 /**
  * The `PI_TINYSUBAGENT_CONFIG` override, if set, as the single candidate it is.
- * Blank means "not set", so an empty variable cannot point at nothing.
+ * Blank means "not set", so an empty variable cannot point at nothing. The env
+ * argument defaults to `process.env` but can be handed in explicitly, so the
+ * settings screen can resolve targets for an env it controls rather than the
+ * one the process happened to start with.
  */
-function overrideSource(): ConfigSource | null {
-	const override = process.env.PI_TINYSUBAGENT_CONFIG?.trim();
+function overrideSource(env: NodeJS.ProcessEnv = process.env): ConfigSource | null {
+	const override = env.PI_TINYSUBAGENT_CONFIG?.trim();
 	return override ? { file: override, scope: "override" } : null;
 }
 
@@ -155,6 +158,65 @@ function normalizeProfile(
 		}
 	}
 	return profile;
+}
+
+/** Which scope a settings file belongs to on the settings screen. */
+export type SettingsScope = "override" | "project" | "root";
+
+/** One file the settings screen can open, as the screen names it. */
+export interface SettingsTarget {
+	scope: SettingsScope;
+	/** Absolute path. */
+	file: string;
+	exists: boolean;
+}
+
+/**
+ * The scope name the settings screen uses for resolution's `global` scope. The
+ * rename is deliberate: on the screen the file is presented as the machine-wide
+ * root of the layering, a framing `global` does not convey.
+ */
+const ROOT_SCOPE: SettingsScope = "root";
+
+/**
+ * Candidate targets for the settings screen, highest precedence first. Unlike
+ * {@link configSources} this lists the `PI_TINYSUBAGENT_CONFIG` override as the
+ * only target when it is set — the screen must offer exactly what resolution
+ * would read, and an override that does not exist yet is still the file the
+ * first edit would create. Everything else on the list exists by construction:
+ * the scopes only ever contribute files that are there.
+ */
+export function settingsTargets(cwd: string, agentDir: string, env: NodeJS.ProcessEnv = process.env): SettingsTarget[] {
+	const override = overrideSource(env);
+	if (override) {
+		return [{ scope: settingsScope(override.scope), file: override.file, exists: existsSync(override.file) }];
+	}
+	return configSources(cwd, agentDir).map((source) => ({
+		// Resolution calls the machine-wide scope `global`; the screen calls it
+		// `root` (see ROOT_SCOPE). Same file, name chosen for the framing.
+		scope: settingsScope(source.scope),
+		file: source.file,
+		exists: true,
+	}));
+}
+
+/** Resolution's `global` scope, as the settings screen names it. */
+function settingsScope(scope: ConfigScope): SettingsScope {
+	return scope === "global" ? ROOT_SCOPE : scope;
+}
+
+/**
+ * The target the settings screen opens on: the first candidate, since the list
+ * is ordered by precedence — the file the user's edits would land in is the one
+ * that wins. When nothing exists anywhere the root file is offered anyway, so
+ * the screen has somewhere to put a first edit; creating the file stays the
+ * editor's job, never this function's.
+ */
+export function defaultTarget(cwd: string, agentDir: string, env: NodeJS.ProcessEnv = process.env): SettingsTarget {
+	const targets = settingsTargets(cwd, agentDir, env);
+	return (
+		targets[0] ?? { scope: ROOT_SCOPE, file: path.join(agentDir, JSONC_CONFIG_FILENAME), exists: false }
+	);
 }
 
 /**

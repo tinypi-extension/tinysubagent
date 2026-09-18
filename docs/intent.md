@@ -163,6 +163,18 @@ is excluded, so `.pi/*` is required rather than `.pi/`:
 !.pi/tinysubagent.jsonc
 ```
 
+The config is also editable from inside pi: `/subagent-settings` opens a screen over the file
+resolution actually reads — the project file when one exists (a scope row switches to the root
+file), otherwise `<agentDir>/tinysubagent.jsonc`, created on the first edit and only after a
+`y/n` confirm. It edits `enableProfiles` and `profiles.<name>.{model, thinking}` and nothing
+else, through comment-preserving `jsonc-parser` edits, so a hand-maintained file is never
+rewritten as JSON; each change is written immediately. `current` is reserved and cannot be
+added or renamed to.
+
+There is no hot reload. Config is resolved once at registration, so a settings edit takes
+effect on the next pi start, not in the running session (the screen's hint line says so), for
+the same reason profiles do not reach spawned children.
+
 Accepted limitation: when `<project>/.pi/agent` exists, spawned children are launched with
 `PI_CODING_AGENT_DIR` pointing at it, so a child's global scope is that directory rather than
 `~/.pi/agent`. A subagent that itself delegates may therefore resolve a different merged
