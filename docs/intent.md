@@ -168,8 +168,11 @@ resolution actually reads — the project file when one exists (a scope row swit
 file), otherwise `<agentDir>/tinysubagent.jsonc`, created on the first edit and only after a
 `y/n` confirm. It edits `enableProfiles` and `profiles.<name>.{model, thinking}` and nothing
 else, through comment-preserving `jsonc-parser` edits, so a hand-maintained file is never
-rewritten as JSON; each change is written immediately. `current` is reserved and cannot be
-added or renamed to.
+rewritten as JSON; each change is written immediately. A profile's `model` is picked from the
+models `ctx.modelRegistry` can actually run and written as `provider/id`; free text is still
+accepted for anything the registry does not know (written as typed, unless a bare id or unique
+fragment names exactly one model), and text naming several models is refused rather than guessed.
+`current` is reserved and cannot be added or renamed to.
 
 There is no hot reload. Config is resolved once at registration, so a settings edit takes
 effect on the next pi start, not in the running session (the screen's hint line says so), for

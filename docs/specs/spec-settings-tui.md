@@ -2,6 +2,8 @@
 
 **Status: approved.** Intent confirmed via `interview-me` (2026-08): root scope = `~/.pi/agent/`,
 project wins when it exists, schema-aware editor (not a raw JSONC text box), comments preserved.
+**Amended 2026-08 (after the screen shipped):** the profile submenu's model field is a
+registry-backed picker — see "Model picker" and `Resolved decisions` 4.
 Three follow-up questions were answered by the user on approval: command name
 `/subagent-settings`; adding a profile inserts `{}` and opens its submenu; creating a file that
 does not exist requires an explicit confirm. See "Resolved decisions".
@@ -16,6 +18,7 @@ does not exist requires an explicit confirm. See "Resolved decisions".
    and only after the user confirms the creation).
 3. **Editable surface is the two things `config.ts` knows about**: `enableProfiles` and
    `profiles.<name>.{model,thinking}`. No free-form key editing, no agents/roles, no `.pi/settings.json`.
+   The `model` *value* may come from `ctx.modelRegistry`, but the surface is still only these keys.
 4. **Comment preservation is a hard requirement.** The user's root file carries a commented-out
    line today; a rewrite that drops it is a regression, not a cosmetic difference.
 5. **No hot reload.** Config is resolved once at registration (`index.ts:196`) and baked into the
@@ -226,15 +229,46 @@ Layout (`Container`), top to bottom:
    - `Enable profiles` — values `["false", "true"]`.
    - one row per profile, `id: "profile:<name>"`, `currentValue` showing `model` and `thinking`
      (`—` when absent), `description` naming the file it lives in:
-     - `submenu` → a second small `Container` hosting an `Input` (pi-tui) for the model and a
-       nested `SettingsList` for `Thinking` (values `["(inherit)", ...THINKING_LEVELS]`),
-       `Rename`, `Delete`.
+     - `submenu` → a second small `Container`: the model `Input` (a filter — see "Model picker"),
+       a `SelectList` of the models the registry can run under it, and a nested `SettingsList` for
+       `Thinking` (values `["(inherit)", ...THINKING_LEVELS]`), `Rename`, `Delete`.
    - `+ Add profile…` — an inline `Input` for the name, validated by `addProfile`. On success the
      profile is inserted as `{}` — both fields absent, exactly like `current`'s inherit-both
      semantics — the list rebuilds, the cursor lands on the new profile's row (`selectItem`), and
-     its submenu opens so the model can be typed immediately.
+     its submenu opens so a model can be picked immediately.
 3. **Status line** — the last validation error or write error, dim; empty otherwise.
 4. **Hint line** — `Enter cycle · Esc close · changes write immediately · reload pi to apply`.
+
+### Model picker
+
+The model field is a picker over the models `ctx.modelRegistry.getAvailable()` can actually run,
+built by `src/config/models.ts` — pure, so *what* it shows and *what* an Enter writes are tested
+without a terminal.
+
+- Rows are `(inherit)` first, then every available model: `label` = the bare id, `description` =
+  the model's name and provider label. `value` is `provider/id` — the canonical string the config
+  holds and the one handed to `pi --model` (`src/children/launch-script.ts:123`) — and it is what
+  the list filters on, so what the user types is what the file gets.
+- The `Input` is the filter, not the value. It is deliberately **not** seeded with the current
+  model: a seeded field would filter the list down to that one row before the user typed anything.
+  The line above it names the current model (`(inherit)` when the key is absent).
+- ↑/↓ walk the list, Enter saves the highlighted row and moves the cursor to the rows (where the
+  old field left it), Tab switches between field and rows, Esc closes the submenu.
+- **Free text survives.** When the typed text matches no row, Enter resolves it against the
+  registry: an exact `provider/id`, a bare id, or a unique fragment becomes the canonical
+  `provider/id`; a string naming nothing is written as typed — the field was free text before the
+  picker existed, and the registry is not the whole world (providers not logged in, models pi has
+  not fetched). The line under the field says what will be written, so the fallback is never silent.
+- **Ambiguity is refused, not guessed.** Text naming several models (e.g. `flash` with two
+  providers logged in) writes nothing and says so on the status line — the same refusal pi's own
+  resolver makes for ambiguous bare ids (`dist/core/model-resolver.d.ts`).
+- Empty stays empty: `(inherit)` and an empty field both remove the `model` key, which downstream
+  reads as "inherit this session's model".
+- **No registry, no picker.** A session that never configured a provider — or any caller passing a
+  bare context — yields no rows: the list is not rendered and the field behaves exactly as it did
+  before the picker existed.
+- **The screen still never touches the session's model.** Picking a row writes a profile's `model`
+  key; `ctx.setModel` is not called anywhere.
 
 ### Confirm before creating a file
 
@@ -295,14 +329,17 @@ the rebuild.
 | File | Change |
 |---|---|
 | `src/config/draft.ts` | **new** — document layer: `readDraft`/`draft*`/`set*`/`addProfile`/`renameProfile`/`deleteProfile`/`writeDraft`, `DraftError` |
+| `src/config/models.ts` | **new** — the picker's rows and the typed-text rule: `modelChoices(registry)`, `resolveTypedModel(choices, typed)`, structural `ModelRegistryLike` |
 | `src/config/config.ts` | **new exports** — `settingsTargets(cwd, agentDir, env)` + `defaultTarget(...)`, reusing the existing candidate table and `CONFIG_DIR_NAME` so the screen cannot drift from resolution |
 | `src/pi/settings-tui.ts` | **new** — `createSettingsScreen({ ctx, theme, done })`, `SettingsListTheme` implementation, submenu container, status/hint lines |
 | `index.ts` | `pi.registerCommand("subagent-settings", …)` — the file's header already declares it wiring-only |
 | `test/config/draft.test.ts` | **new** — unit tests for the document layer |
 | `test/config/config.test.ts` | cases for `settingsTargets` / `defaultTarget` |
+| `test/config/models.test.ts` | **new** — unit tests for the picker's rows and the typed-text rule |
 | `docs/intent.md` | config section: mention `/subagent-settings` and the no-hot-reload consequence |
 
-No new dependencies: `jsonc-parser` is already a runtime dependency and `pi-tui` a peer.
+No new dependencies: `jsonc-parser` is already a runtime dependency and `pi-tui` a peer — the
+picker is that package's own `SelectList`, the same component pi's `/model` selector is built from.
 
 ## Commands
 
@@ -312,8 +349,9 @@ Typecheck: npm run typecheck   # tsc --noEmit
 Smoke:     npm run smoke
 ```
 
-`npm test` and `npm run typecheck` must both be clean. The screen itself has no automated test —
-it is verified by hand in a real herdr session (recorded under "Implementation notes" once run).
+`npm test` and `npm run typecheck` must both be clean. The screen's wiring and key handling are
+driven through `test/pi/settings-command.test.ts` — a fake `ctx.ui.custom` and a fake registry, no
+terminal; what it *looks* like in a real terminal is still verified by hand in a herdr session.
 
 ## Code style
 
@@ -359,6 +397,15 @@ New cases, one per rule:
 12. An unparseable file is reported by `readDraft`'s consumer path and no write is attempted
     (`DraftError.unparseable` surfaced, text unchanged).
 13. A profile whose object carries an unknown extra field keeps that field through an unrelated edit.
+14. `modelChoices` maps a registry snapshot to rows: `value` is `provider/id`, the provider display
+    name is used, a nameless model falls back to the provider id, duplicates and malformed entries
+    are dropped, and no registry (or an empty one) yields no rows.
+15. `resolveTypedModel`: `""` → inherit; a canonical value and a bare id → the canonical value; a
+    unique fragment → that model; several matches → `ambiguous`; an unknown string → itself.
+16. `test/pi/settings-command.test.ts` drives the submenu with a fake registry: the list offers the
+    registry's models, Enter writes the highlighted one, a bare fragment resolves through the
+    registry, unknown text is written as typed, ambiguous text writes nothing, an untouched
+    submenu writes nothing, and without a registry the field is the plain one.
 
 Verification of the screen is manual and recorded, not faked: open `/subagent-settings` in a herdr
 session, flip `enableProfiles`, add a profile, rename it, delete it, Esc, reload — then `git diff`
@@ -370,7 +417,9 @@ session, flip `enableProfiles`, add a profile, rename it, delete it, Esc, reload
   resolution and draft helpers pure and argument-driven; write atomically; name the file in any
   error; call `done()` on every exit path including Esc.
 - **Ask first:** renaming the command; adding a dependency; adding a merged/effective view; editing
-  keys outside `enableProfiles`/`profiles`; re-resolving config after write (hot reload).
+  keys outside `enableProfiles`/`profiles`; re-resolving config after write (hot reload); changing
+  the picker's agreed shape (`Resolved decisions` 4) — a session-model row, registry validation of
+  hand-typed ids, or refreshing the registry while the screen is open.
 - **Never:** `JSON.stringify` the config; write a file the user did not select; create `~/.pi` or
   `<cwd>/.pi` as a side effect of opening; overwrite an unparseable file; register the command as
   `settings`; let a validation error leave the file half-written.
@@ -380,7 +429,10 @@ session, flip `enableProfiles`, add a profile, rename it, delete it, Esc, reload
 - Editing agents/roles (markdown) or anything outside profiles.
 - Hot reload / re-resolving config after a write.
 - Migrating an existing `.json` file to `.jsonc`.
-- Model autocomplete from the model registry (free-text `model` only, for now).
+- Switching the *session's* model — the picker writes a profile's `model` key; `ctx.setModel` is
+  not called.
+- Validating a hand-typed model beyond the ambiguity refusal: a string the registry does not know
+  is written as typed, exactly as it was before the picker existed.
 - Multiple-scope editing in one screen (one file per session).
 - Mouse support beyond what `SettingsList` already implements.
 
@@ -401,6 +453,13 @@ session, flip `enableProfiles`, add a profile, rename it, delete it, Esc, reload
 10. Manual session check: after the edit and a reload, `resolveProfile` sees the new value, and
     `git diff` on the target file shows only the intended lines.
 11. In non-TUI mode the command notifies once and exits without a screen or an error.
+12. The model field offers the registry's available models with `(inherit)` first and the profile's
+    own model highlighted; ↑/↓ walk it and Enter writes the highlighted `provider/id`.
+13. Typed text naming one model writes its canonical `provider/id`; text naming none is written as
+    typed; text naming several writes nothing and says so.
+14. A session with no available models gets the free-text field, not an empty picker.
+15. Nothing above is weakened by the picker: the write path, the create confirm, rollback, comment
+    preservation, and the rows are untouched.
 
 ## Resolved decisions
 
@@ -412,3 +471,10 @@ Answered by the user on approval (2026-08) — not open questions:
    absent fields already mean "inherit", so the two-step version is pure extra friction.
 3. **Creating a file requires a confirm** — see "Confirm before creating a file". Editing an
    existing file never asks.
+4. **Model editing is a registry picker** (2026-08, after the screen shipped) — the user asked for
+   option (a): replace the free-text `model` field with a list of the models the registry can run,
+   not a second screen and not a session-model switch. Consequences accepted with it: `(inherit)`
+   as the first row, free text kept as the fallback when nothing matches, free text written
+   verbatim unless the registry resolves it (bare id or unique fragment → `provider/id`), and
+   ambiguous text refused rather than guessed. The picker lives in `src/config/models.ts` so the
+   rules are tested without a terminal.

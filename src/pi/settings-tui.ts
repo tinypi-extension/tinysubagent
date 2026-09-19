@@ -32,11 +32,14 @@ import {
 	Container,
 	Input,
 	Key,
+	SelectList,
 	SettingsList,
 	Spacer,
 	Text,
 	matchesKey,
 	type Component,
+	type SelectItem,
+	type SelectListTheme,
 	type SettingItem,
 	type SettingsListTheme,
 } from "@earendil-works/pi-tui";
@@ -62,10 +65,19 @@ import {
 	type ConfigDraft,
 	type DraftError,
 } from "../config/draft.ts";
+import {
+	modelChoices,
+	resolveTypedModel,
+	type ModelChoice,
+	type TypedModel,
+} from "../config/models.ts";
 import { THINKING_LEVELS, isThinkingLevel, type ThinkingLevel } from "../types.ts";
 
 /** Rows the list shows at once. The screen lives in the editor's place, so short. */
 const MAX_VISIBLE = 12;
+
+/** Rows the model picker shows at once; it shares the screen with the profile's rows. */
+const PICKER_MAX_VISIBLE = 8;
 
 const SCOPE_ROW = "scope";
 const ENABLE_ROW = "enable-profiles";
@@ -99,6 +111,23 @@ function settingsListTheme(theme: Theme): SettingsListTheme {
 		description: (text) => theme.fg("dim", text),
 		cursor: theme.fg("accent", "→ "),
 		hint: (text) => theme.fg("dim", text),
+	};
+}
+
+/**
+ * `SelectList`'s theme, rebuilt against the live `Theme` for the same reason as
+ * the settings list's. Its no-match line is written for pi's slash-command list
+ * ("No matching commands"), so the text is replaced rather than passed through —
+ * and it is the one place the free-text fallback can be explained, right where
+ * the user sees that nothing matched.
+ */
+function selectListTheme(theme: Theme): SelectListTheme {
+	return {
+		selectedPrefix: (text) => theme.fg("accent", text),
+		selectedText: (text) => theme.fg("accent", text),
+		description: (text) => theme.fg("muted", text),
+		scrollInfo: (text) => theme.fg("dim", text),
+		noMatch: () => theme.fg("dim", "  no model matches — Enter writes what you typed"),
 	};
 }
 
@@ -171,6 +200,8 @@ interface ScreenHost {
 	rebuild(selectId?: string, reopen?: boolean): void;
 	/** Refresh one row's value in place — for an edit made from inside its submenu. */
 	refresh(id: string, value: string): void;
+	/** The models the picker may offer; empty when the registry offers nothing. */
+	modelChoices(): readonly ModelChoice[];
 }
 
 /**
@@ -211,17 +242,27 @@ class NameSubmenu extends Container {
 }
 
 /**
- * One profile's fields: a model `Input` above a small row list (thinking, rename,
- * delete). The field and the list cannot both own the keyboard, so the submenu
- * keeps a focus flag — the field takes keys first, because the row's submenu
- * opens precisely so a model can be typed, and Tab (or ↓) moves down to the rows.
+ * One profile's fields: a model field (and, when the registry offers models, the
+ * picker under it) above a small row list (thinking, rename, delete). The field and
+ * the list cannot both own the keyboard, so the submenu keeps a focus flag — the
+ * field takes keys first, because the submenu opens precisely so a model can be
+ * chosen, and Tab moves down to the rows. The arrows belong to the picker when there
+ * is one; without one (no registry: see `buildPicker`) ↓ still descends to the rows.
  */
 class ProfileSubmenu extends Container {
 	private readonly host: ScreenHost;
+	private readonly theme: Theme;
 	private readonly name: string;
 	private readonly done: SubmenuDone;
 	private readonly input: Input;
 	private readonly list: SettingsList;
+	/** The registry's models, and the picker built from them; no models, no picker. */
+	private readonly choices: readonly ModelChoice[];
+	private readonly picker: SelectList | undefined;
+	/** Say what text that matched no row would write; empty while a row matches. */
+	private readonly resolution: Text;
+	/** The last text handed to the picker, so a cursor key cannot reset its selection. */
+	private filterText = "";
 	/** Which child owns the keyboard. */
 	private focus: "model" | "rows" = "model";
 	/** The thinking value as the file has it; the baseline a refused change goes back to. */
@@ -231,27 +272,27 @@ class ProfileSubmenu extends Container {
 		super();
 		const { theme, host, name, done } = options;
 		this.host = host;
+		this.theme = theme;
 		this.name = name;
 		this.done = done;
 
 		const profile = draftProfile(host.currentDraft(), name);
 		this.thinking = profile.thinking ?? INHERIT;
+		const model = profile.model ?? "";
+		this.choices = host.modelChoices();
 
-		this.input = new Input({ prompt: "model: ", placeholder: "inherit" });
-		this.input.setValue(profile.model ?? "");
+		this.input = new Input({
+			prompt: "model: ",
+			placeholder: this.choices.length > 0 ? "filter models" : "inherit",
+		});
 		this.input.focused = true;
-		// Empty means "inherit this session's model", which is a key removal, not a
-		// null — see `setModel`.
-		this.input.onSubmit = (value) => {
-			const model = value.trim() === "" ? undefined : value.trim();
-			this.host.commit(setModel(this.host.currentDraft(), this.name, model), (written) => {
-				if (written) this.host.refresh(profileRow(this.name), this.rowValue());
-				// Saving the model moves on to the rows rather than trapping the
-				// keyboard in a field the user is most likely done with.
-				this.focusRows();
-			});
-		};
+		// The field is deliberately not seeded with the current model: the picker already
+		// marks that row, and a seeded field would filter the list down to it before one
+		// character was typed. Empty still means "no key at all" — see `saveModel`.
+		this.input.onSubmit = (value) => this.saveModel(value);
 		this.input.onEscape = () => this.done();
+		this.picker = this.buildPicker(theme, model);
+		this.resolution = new Text("", 1, 0);
 
 		this.list = new SettingsList(
 			[
@@ -293,12 +334,14 @@ class ProfileSubmenu extends Container {
 		);
 
 		this.addChild(new Text(theme.bold(`Profile "${name}"`), 1, 0));
-		this.addChild(new Text(theme.fg("muted", "model — empty inherits this session's"), 1, 0));
-		this.addChild(this.input);
-		this.addChild(this.list);
 		this.addChild(
-			new Text(theme.fg("dim", "Tab switches between the model field and the rows · Esc closes"), 1, 0),
+			new Text(theme.fg("muted", `model — currently ${model === "" ? "(inherit)" : model}`), 1, 0),
 		);
+		this.addChild(this.input);
+		if (this.picker) this.addChild(this.picker);
+		this.addChild(this.resolution);
+		this.addChild(this.list);
+		this.addChild(new Text(theme.fg("dim", this.hint()), 1, 0));
 	}
 
 	handleInput(data: string): void {
@@ -309,11 +352,24 @@ class ProfileSubmenu extends Container {
 				this.done();
 				return;
 			}
-			if (matchesKey(data, Key.tab) || matchesKey(data, Key.down)) {
+			if (matchesKey(data, Key.tab)) {
 				this.focusRows();
 				return;
 			}
+			// The arrows belong to the picker when there is one: walking the models is the
+			// point of it. Without a picker ↓ keeps its old meaning, the way down to the rows.
+			if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+				if (this.picker) {
+					this.picker.handleInput(data);
+					return;
+				}
+				if (matchesKey(data, Key.down)) {
+					this.focusRows();
+					return;
+				}
+			}
 			this.input.handleInput(data);
+			this.filterPicker();
 			return;
 		}
 		if (matchesKey(data, Key.tab)) {
@@ -323,6 +379,111 @@ class ProfileSubmenu extends Container {
 		// In the rows, the list decides what Esc means: it cancels an open submenu
 		// first and only reaches this submenu's own cancel when there is none.
 		this.list.handleInput(data);
+	}
+
+	/** The one line that says which keys do what, which depends on there being a picker. */
+	private hint(): string {
+		return this.picker
+			? "↑↓ pick a model · Enter saves · typing filters · Tab to the rows · Esc closes"
+			: "Tab switches between the model field and the rows · Esc closes";
+	}
+
+	/**
+	 * The picker: `(inherit)` first, then every model the registry offers, sorted by
+	 * id. `value` is the `provider/id` string the file holds — and the same string the
+	 * list filters on — so the row under the cursor is always something the file could
+	 * actually mean. No models to offer means no picker: the submenu is then the plain
+	 * field it was before this existed, which is also what a session with no configured
+	 * provider gets.
+	 */
+	private buildPicker(theme: Theme, model: string): SelectList | undefined {
+		if (this.choices.length === 0) return undefined;
+		const items: SelectItem[] = [
+			{ value: "", label: "(inherit)", description: "this session's model" },
+			...this.choices.map((choice) => ({
+				value: choice.value,
+				label: choice.label,
+				description: choice.description,
+			})),
+		];
+		const picker = new SelectList(items, PICKER_MAX_VISIBLE, selectListTheme(theme));
+		// Opens on the profile's own model, so Enter on an untouched submenu is a no-op
+		// rather than a clear. A model the registry does not know (a hand-written id, a
+		// provider that is not logged in) opens on `(inherit)`, which the line above the
+		// field names, so what Enter would write is never hidden.
+		const index = this.choices.findIndex((choice) => choice.value === model);
+		picker.setSelectedIndex(index >= 0 && model !== "" ? index + 1 : 0);
+		picker.onSelect = (item) => this.saveModel(item.value);
+		return picker;
+	}
+
+	/**
+	 * Narrow the picker to what the field holds. Skipped when the text has not changed:
+	 * `setFilter` resets the selection to the first row, and a left arrow must not move
+	 * the cursor off the model the user just walked to.
+	 */
+	private filterPicker(): void {
+		if (!this.picker) return;
+		const text = this.input.getValue();
+		if (text !== this.filterText) {
+			this.filterText = text;
+			this.picker.setFilter(text);
+		}
+		this.showResolution();
+	}
+
+	/**
+	 * The line under the picker, for text the list has no row for. Without it the
+	 * fallback would be invisible: the list says nothing matched, and what an Enter
+	 * would write is not shown anywhere until the row is read back. A match keeps the
+	 * line empty — the highlighted row is already the answer.
+	 */
+	private showResolution(): void {
+		const typed = this.input.getValue().trim();
+		if (typed === "" || (this.picker?.getSelectedItem() ?? null) !== null) {
+			this.resolution.setText("");
+			return;
+		}
+		const resolved = resolveTypedModel(this.choices, typed);
+		if (resolved.kind === "inherit") {
+			this.resolution.setText("");
+			return;
+		}
+		if (resolved.kind === "ambiguous") {
+			this.resolution.setText(this.theme.fg("dim", `${resolved.matches.length} models match — keep typing`));
+			return;
+		}
+		this.resolution.setText(this.theme.fg("dim", `Enter writes ${resolved.value}`));
+	}
+
+	/**
+	 * Write what the field means. Two rules, in order: a highlighted row wins while the
+	 * list has a match — the filter is a prefix of `provider/id`, so the text may be a
+	 * fragment of several models and the row is the one being looked at — and with no
+	 * match the text itself is the value, resolved to `provider/id` when the registry
+	 * knows the id and written as typed when it does not. That second half is the
+	 * free-text field this replaces, kept as an escape hatch because the registry is not
+	 * the whole world. Text that names several models writes nothing and says why.
+	 */
+	private saveModel(typed: string): void {
+		const selected = this.picker?.getSelectedItem() ?? null;
+		const resolved: TypedModel = selected
+			? { kind: "model", value: selected.value }
+			: resolveTypedModel(this.choices, typed);
+		if (resolved.kind === "ambiguous") {
+			const shown = resolved.matches.slice(0, 3).join(", ");
+			const rest = resolved.matches.length > 3 ? `, +${resolved.matches.length - 3} more` : "";
+			this.host.status(`"${typed.trim()}" matches ${resolved.matches.length} models (${shown}${rest})`);
+			return;
+		}
+		// An empty value is a key removal, not a null — see `setModel`.
+		const model = resolved.kind === "inherit" ? undefined : resolved.value || undefined;
+		this.host.commit(setModel(this.host.currentDraft(), this.name, model), (written) => {
+			if (written) this.host.refresh(profileRow(this.name), this.rowValue());
+			// Saving the model moves on to the rows rather than trapping the
+			// keyboard in a field the user is most likely done with.
+			this.focusRows();
+		});
 	}
 
 	/** What the row for this profile shows now: model and thinking, `—` when absent. */
@@ -428,6 +589,8 @@ class SettingsScreen extends Container implements ScreenHost {
 	private draft: ConfigDraft;
 	/** The one mutation waiting on a `y`, or null when nothing is pending. */
 	private pending: PendingCreate | null = null;
+	/** The registry snapshot the profile submenus offer; read once, never refreshed. */
+	private readonly models: readonly ModelChoice[];
 	private readonly header: Text;
 	private readonly statusLine: Text;
 	private list: SettingsList;
@@ -439,6 +602,7 @@ class SettingsScreen extends Container implements ScreenHost {
 		this.scopes = scopeOptions(options.ctx.cwd, getAgentDir());
 		this.target = defaultTarget(options.ctx.cwd, getAgentDir());
 		this.draft = readDraft(this.target.file);
+		this.models = modelChoices(options.ctx.modelRegistry);
 		this.header = new Text("", 1, 0);
 		this.statusLine = new Text("", 1, 0);
 		// An unparseable file still opens and still renders; the status line is where
@@ -455,6 +619,10 @@ class SettingsScreen extends Container implements ScreenHost {
 
 	currentDraft(): ConfigDraft {
 		return this.draft;
+	}
+
+	modelChoices(): readonly ModelChoice[] {
+		return this.models;
 	}
 
 	/** One sentence below the rows; empty clears it. */

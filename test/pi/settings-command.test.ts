@@ -166,7 +166,7 @@ test("opening the screen writes nothing, and Esc reaches done()", async () => {
 });
 
 /** Open a screen over a config file that does not exist yet. */
-async function openScreen(): Promise<{
+async function openScreen(modelRegistry?: unknown): Promise<{
 	send: (data: string) => void;
 	closed: Promise<void>;
 	component: () => ScreenComponent;
@@ -177,6 +177,9 @@ async function openScreen(): Promise<{
 		cwd: process.cwd(),
 		hasUI: true,
 		mode: "tui",
+		// Absent in most tests on purpose: the screen has to survive a context that
+		// carries no registry at all, which is what the picker's fallback is for.
+		modelRegistry,
 		ui: {
 			notify() {},
 			custom(factory: (tui: unknown, theme: unknown, keys: unknown, done: () => void) => ScreenComponent) {
@@ -233,6 +236,197 @@ test("a file that parses but cannot hold an edit is refused, not thrown", async 
 		assert.equal(readFileSync(file, "utf8"), "[1, 2]\n", "the file must be left alone");
 
 		screen.send(ESC);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+/*
+ * The model picker. Its rows come from the registry snapshot the command context
+ * carries, so a fake registry drives the whole interaction: which model is
+ * highlighted, what an Enter writes, and what happens to text that names no model
+ * at all. Everything is asserted against the file, not the screen — the file is
+ * the contract.
+ */
+
+/** A config that already has one profile, so its submenu can be opened directly. */
+const ONE_PROFILE = '{\n\t"enableProfiles": true,\n\t"profiles": { "fast": {} }\n}\n';
+
+/** Two models from one provider, one from another, one of them nameless. */
+function fakeRegistry() {
+	return {
+		getAvailable: () => [
+			{ provider: "oc-openai", id: "glm-5.3-flash", name: "GLM 5.3 Flash" },
+			{ provider: "oc-openai", id: "deepseek-flash", name: "DeepSeek Flash" },
+			{ provider: "cc", id: "shared-id" },
+		],
+		getProviderDisplayName: (provider: string) => (provider === "oc-openai" ? "OC OpenAI" : provider),
+	};
+}
+
+/** Row 0 is Scope, row 1 is Enable profiles, row 2 is the profile. */
+function openProfile(screen: { send: (data: string) => void }): void {
+	screen.send(DOWN);
+	screen.send(DOWN);
+	screen.send(ENTER);
+}
+
+/** Esc leaves one level: the profile submenu first, the screen second. */
+function escapeAll(screen: { send: (data: string) => void }): void {
+	screen.send(ESC);
+	screen.send(ESC);
+}
+
+/** Type text into the focused field, one key at a time. */
+function type(screen: { send: (data: string) => void }, text: string): void {
+	for (const char of text) screen.send(char);
+}
+
+/** The `model` the file holds, or undefined when the key is not there at all. */
+function savedModel(file: string): string | undefined {
+	const parsed = JSON.parse(readFileSync(file, "utf8")) as {
+		profiles?: Record<string, { model?: string }>;
+	};
+	return parsed.profiles?.fast?.model;
+}
+
+test("the model list offers the registry's models, with their names", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, ONE_PROFILE);
+		const screen = await openScreen(fakeRegistry());
+		openProfile(screen);
+
+		const rendered = screen.component().render(80).join("\n");
+		// Inherit is still the first row: the picker adds choices, it does not remove one.
+		assert.match(rendered, /\(inherit\)/);
+		assert.match(rendered, /glm-5\.3-flash/);
+		assert.match(rendered, /GLM 5\.3 Flash · OC OpenAI/);
+		// The nameless model falls back to its provider label.
+		assert.match(rendered, /shared-id/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("Enter writes the highlighted row, arrows walk the list", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, ONE_PROFILE);
+		const screen = await openScreen(fakeRegistry());
+		openProfile(screen);
+
+		// Rows sort by id, so two downs from `(inherit)` land on glm-5.3-flash.
+		screen.send(DOWN);
+		screen.send(DOWN);
+		screen.send(ENTER);
+
+		assert.equal(savedModel(file), "oc-openai/glm-5.3-flash");
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("text that no row starts with is resolved through the registry", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, ONE_PROFILE);
+		const screen = await openScreen(fakeRegistry());
+		openProfile(screen);
+
+		// No row *starts with* "deepseek" — the list filters on `provider/id` — so this is
+		// the free-text path, and the line under the list says what it would write.
+		type(screen, "deepseek");
+		assert.match(screen.component().render(80).join("\n"), /Enter writes oc-openai\/deepseek-flash/);
+		screen.send(ENTER);
+
+		assert.equal(savedModel(file), "oc-openai/deepseek-flash");
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("text that names a model in no registry is still written as typed", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, ONE_PROFILE);
+		const screen = await openScreen(fakeRegistry());
+		openProfile(screen);
+
+		// The field was free text before the picker existed, and the registry is not the
+		// whole world: a provider that is not logged in has to stay reachable.
+		type(screen, "local/llama-3");
+		screen.send(ENTER);
+
+		assert.equal(savedModel(file), "local/llama-3");
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("text that matches several models writes nothing and says which", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, ONE_PROFILE);
+		const screen = await openScreen(fakeRegistry());
+		openProfile(screen);
+
+		// "flash" is a fragment of two ids: writing either one would be a guess.
+		type(screen, "flash");
+		screen.send(ENTER);
+
+		const rendered = screen.component().render(80).join("\n");
+		assert.match(rendered, /matches 2 models/);
+		assert.match(rendered, /oc-openai\/deepseek-flash/);
+		assert.equal(savedModel(file), undefined, "an ambiguous name must not be written");
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("Enter on an untouched submenu is a no-op, not a cleared model", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, ONE_PROFILE);
+		const screen = await openScreen(fakeRegistry());
+		openProfile(screen);
+
+		// The picker opens on the profile's own model, so a reflex Enter writes back the
+		// value that is already there — unchanged text, which is how the screen has always
+		// behaved for a field the user did not touch.
+		screen.send(ENTER);
+
+		assert.equal(readFileSync(file, "utf8"), ONE_PROFILE, "Enter alone must not rewrite the file");
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("without a registry the submenu is the plain model field it replaced", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, ONE_PROFILE);
+		const screen = await openScreen();
+		openProfile(screen);
+
+		const rendered = screen.component().render(80).join("\n");
+		// `(inherit)` still shows on the model line and the Thinking row; what is gone is
+		// the picker itself, and the key hint that only makes sense with one.
+		assert.doesNotMatch(rendered, /↑↓ pick a model/);
+		assert.doesNotMatch(rendered, /no model matches/);
+		assert.match(rendered, /Tab switches between the model field and the rows/);
+
+		type(screen, "oc-openai/glm-5.3-flash");
+		screen.send(ENTER);
+
+		assert.equal(savedModel(file), "oc-openai/glm-5.3-flash");
+
+		escapeAll(screen);
 		await screen.closed;
 		cleanup();
 	});
