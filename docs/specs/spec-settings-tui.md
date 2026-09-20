@@ -6,6 +6,8 @@ project wins when it exists, schema-aware editor (not a raw JSONC text box), com
 registry-backed picker — see "Model picker" and `Resolved decisions` 4.
 **Amended 2026-08 (presentation):** the picker is no longer on screen — the model is a `Model` row
 that opens it when pressed; see "Model picker" and `Resolved decisions` 5.
+**Amended 2026-08 (search removed):** the picker's filter field and its typed-text resolution are
+gone — it is a plain list; see "Model picker" and `Resolved decisions` 6.
 Three follow-up questions were answered by the user on approval: command name
 `/subagent-settings`; adding a profile inserts `{}` and opens its submenu; creating a file that
 does not exist requires an explicit confirm. See "Resolved decisions".
@@ -252,33 +254,25 @@ it calls `done`, at which point the row's value is updated and the selection ret
 new is invented, and no model field is on screen while the rows are.
 
 The picker is a list over the models `ctx.modelRegistry.getAvailable()` can actually run, built by
-`src/config/models.ts` — pure, so *what* it shows and *what* an Enter writes are tested without a
-terminal.
+`src/config/models.ts` — pure, so *what* it shows is tested without a terminal. The list is the whole
+interaction: nothing is typed into it.
 
 - Rows are `(inherit)` first, then every available model: `label` = the bare id, `description` =
   the model's name and provider label. `value` is `provider/id` — the canonical string the config
-  holds and the one handed to `pi --model` (`src/children/launch-script.ts:123`) — and it is what
-  the list filters on, so what the user types is what the file gets.
+  holds and the one handed to `pi --model` (`src/children/launch-script.ts:123`) — so the row under
+  the cursor is always something the file could actually mean.
 - The picker opens on the profile's own model when the key is set, on `(inherit)` otherwise: the row
   hands its current value to the submenu, so the picker needs no access to the profile.
-- The `Input` at the top of the picker is the filter, not the value. It is deliberately **not**
-  seeded with the current model: a seeded field would filter the list down to that one row before
-  the user typed anything.
-- ↑/↓ walk the list, Enter saves the highlighted row and returns the cursor to the `Model` row, Tab
-  switches between the field and the list, Esc closes the picker writing nothing.
-- **Free text survives.** When the typed text matches no row, Enter resolves it against the
-  registry: an exact `provider/id`, a bare id, or a unique fragment becomes the canonical
-  `provider/id`; a string naming nothing is written as typed — the field was free text before the
-  picker existed, and the registry is not the whole world (providers not logged in, models pi has
-  not fetched). The line under the field says what will be written, so the fallback is never silent.
-- **Ambiguity is refused, not guessed.** Text naming several models (e.g. `flash` with two
-  providers logged in) writes nothing and says so on the status line — the same refusal pi's own
-  resolver makes for ambiguous bare ids (`dist/core/model-resolver.d.ts`).
-- Empty stays empty: `(inherit)` and an empty field both remove the `model` key, which downstream
-  reads as "inherit this session's model".
-- **No registry, no list.** A session that never configured a provider — or any caller passing a
-  bare context — yields no rows: the picker holds only the field and writes what is typed, exactly
-  as the field behaved before the picker existed.
+- ↑/↓ walk the list, Enter saves the highlighted row and returns the cursor to the `Model` row, Esc
+  closes the picker writing nothing.
+- **A stored model the registry does not offer keeps a row.** A hand-written id, or one whose
+  provider is not logged in, is appended to the list as its own row (described as *not in the model
+  list*). The picker is the only way to write a model, so the value the file already holds has to be
+  visible there — otherwise opening the picker and pressing Enter would drop it with no way back.
+- `(inherit)` removes the `model` key, which downstream reads as "inherit this session's model".
+- **No registry, no rows to walk.** A session that never configured a provider — or any caller
+  passing a bare context — yields a list holding `(inherit)` alone, with a line under it saying
+  there are no models available. Such a session can unset a model, not choose one.
 - **The screen still never touches the session's model.** Picking a row writes a profile's `model`
   key; `ctx.setModel` is not called anywhere.
 
@@ -341,13 +335,13 @@ the rebuild.
 | File | Change |
 |---|---|
 | `src/config/draft.ts` | **new** — document layer: `readDraft`/`draft*`/`set*`/`addProfile`/`renameProfile`/`deleteProfile`/`writeDraft`, `DraftError` |
-| `src/config/models.ts` | **new** — the picker's rows and the typed-text rule: `modelChoices(registry)`, `resolveTypedModel(choices, typed)`, structural `ModelRegistryLike` |
+| `src/config/models.ts` | **new** — the picker's rows: `modelChoices(registry)` and a structural `ModelRegistryLike` |
 | `src/config/config.ts` | **new exports** — `settingsTargets(cwd, agentDir, env)` + `defaultTarget(...)`, reusing the existing candidate table and `CONFIG_DIR_NAME` so the screen cannot drift from resolution |
 | `src/pi/settings-tui.ts` | **new** — `createSettingsScreen({ ctx, theme, done })`, `SettingsListTheme` implementation, submenu container, status/hint lines |
 | `index.ts` | `pi.registerCommand("subagent-settings", …)` — the file's header already declares it wiring-only |
 | `test/config/draft.test.ts` | **new** — unit tests for the document layer |
 | `test/config/config.test.ts` | cases for `settingsTargets` / `defaultTarget` |
-| `test/config/models.test.ts` | **new** — unit tests for the picker's rows and the typed-text rule |
+| `test/config/models.test.ts` | **new** — unit tests for the picker's rows |
 | `docs/intent.md` | config section: mention `/subagent-settings` and the no-hot-reload consequence |
 
 No new dependencies: `jsonc-parser` is already a runtime dependency and `pi-tui` a peer — the
@@ -412,13 +406,11 @@ New cases, one per rule:
 14. `modelChoices` maps a registry snapshot to rows: `value` is `provider/id`, the provider display
     name is used, a nameless model falls back to the provider id, duplicates and malformed entries
     are dropped, and no registry (or an empty one) yields no rows.
-15. `resolveTypedModel`: `""` → inherit; a canonical value and a bare id → the canonical value; a
-    unique fragment → that model; several matches → `ambiguous`; an unknown string → itself.
-16. `test/pi/settings-command.test.ts` drives the submenu with a fake registry: opening the `Model`
+15. `test/pi/settings-command.test.ts` drives the submenu with a fake registry: opening the `Model`
     row offers the registry's models with the stored one highlighted, Enter writes the highlighted
-    one, a bare fragment resolves through the registry, unknown text is written as typed, ambiguous
-    text writes nothing, an untouched picker writes nothing, Esc in the picker writes nothing, and
-    without a registry the picker holds only the field.
+    one, an untouched picker writes nothing, Esc in the picker writes nothing, a stored model the
+    registry does not offer keeps a row of its own, and without a registry the picker holds
+    `(inherit)` alone and says so.
 
 Verification of the screen is manual and recorded, not faked: open `/subagent-settings` in a herdr
 session, flip `enableProfiles`, add a profile, rename it, delete it, Esc, reload — then `git diff`
@@ -431,8 +423,8 @@ session, flip `enableProfiles`, add a profile, rename it, delete it, Esc, reload
   error; call `done()` on every exit path including Esc.
 - **Ask first:** renaming the command; adding a dependency; adding a merged/effective view; editing
   keys outside `enableProfiles`/`profiles`; re-resolving config after write (hot reload); changing
-  the picker's agreed shape (`Resolved decisions` 4 and 5) — a session-model row, registry
-  validation of hand-typed ids, or refreshing the registry while the screen is open.
+  the picker's agreed shape (`Resolved decisions` 4–6) — a session-model row, a text field back in
+  the picker, or refreshing the registry while the screen is open.
 - **Never:** `JSON.stringify` the config; write a file the user did not select; create `~/.pi` or
   `<cwd>/.pi` as a side effect of opening; overwrite an unparseable file; register the command as
   `settings`; let a validation error leave the file half-written.
@@ -444,8 +436,8 @@ session, flip `enableProfiles`, add a profile, rename it, delete it, Esc, reload
 - Migrating an existing `.json` file to `.jsonc`.
 - Switching the *session's* model — the picker writes a profile's `model` key; `ctx.setModel` is
   not called.
-- Validating a hand-typed model beyond the ambiguity refusal: a string the registry does not know
-  is written as typed, exactly as it was before the picker existed.
+- Writing a model the registry does not offer: the picker has no field, so such a model can only
+  arrive by hand-editing the file (and keeps a row of its own once it is there).
 - Multiple-scope editing in one screen (one file per session).
 - Mouse support beyond what `SettingsList` already implements.
 
@@ -470,10 +462,10 @@ session, flip `enableProfiles`, add a profile, rename it, delete it, Esc, reload
     `(inherit)` when the key is absent; Enter opens the picker with `(inherit)` first and the
     profile's own model highlighted; ↑/↓ walk it, Enter writes the highlighted `provider/id`,
     closes the picker, and leaves the cursor on the `Model` row.
-13. Typed text naming one model writes its canonical `provider/id`; text naming none is written as
-    typed; text naming several writes nothing and says so.
-14. A session with no available models gets a picker holding only the free-text field, not an empty
-    list.
+13. ↑/↓ walk the picker, Enter writes the highlighted `provider/id` and closes it, and `(inherit)`
+    removes the key; nothing on the picker is typed.
+14. A session with no available models gets a picker holding `(inherit)` alone with a line saying
+    so, and a profile whose stored model is not in the registry keeps a row of its own for it.
 15. Nothing above is weakened by the picker: the write path, the create confirm, rollback, comment
     preservation, and the rows are untouched.
 
@@ -493,13 +485,22 @@ Answered by the user on approval (2026-08) — not open questions:
    as the first row, free text kept as the fallback when nothing matches, free text written
    verbatim unless the registry resolves it (bare id or unique fragment → `provider/id`), and
    ambiguous text refused rather than guessed. The picker lives in `src/config/models.ts` so the
-   rules are tested without a terminal.
+   rules are tested without a terminal. Superseded in part by 6: the free-text fallback, the
+   resolution line, and the ambiguity refusal are gone; `(inherit)` and the list remain.
 5. **The model is a row, not a field** (2026-08, presentation) — the user asked for the model name
    to be a row that opens the list when pressed, so the always-visible filter field and list are gone
    from the profile submenu: a `Model` row carries the value (`provider/id`,
    `anthropic/claude-sonnet-4`; `(inherit)` when the key is absent) and Enter opens the picker as
    that row's submenu, via pi-tui's own `SettingsList` submenu mechanism — the same one `Rename` and
-   the profile rows already use. The filter field, the list, the resolution line, and the free-text
-   fallback all move inside that picker. Consequences accepted with it: one extra keypress to reach
-   the picker, and the row shows the raw stored string, so a model the registry does not know reads
-   back exactly as it was typed.
+   the profile rows already use. The list, the filter field, the resolution line, and the free-text
+   fallback all move inside that picker — the field and the line do not survive 6. Consequences
+   accepted with it: one extra keypress to reach the picker, and the row shows the raw stored
+   string, so a model the registry does not know reads back exactly as it was typed.
+6. **The picker's search is gone** (2026-08) — the user asked to remove the search from the config
+   TUI: the filter `Input` above the list, the line under it that named what an Enter would write,
+   and the typed-text rule behind both (`resolveTypedModel`) are deleted, so `ModelPicker` is a
+   plain `SelectList` and the arrows are the only way to move. Consequences accepted with it: a
+   model the registry does not offer can no longer be set from the screen (it has to be hand-edited
+   into the file), and — because the picker is now the only way to write a model — a stored model
+   the registry does not offer gets a row of its own, so an Enter on an untouched picker cannot drop
+   the value that is already in the file.

@@ -169,9 +169,9 @@ file), otherwise `<agentDir>/tinysubagent.jsonc`, created on the first edit and 
 `y/n` confirm. It edits `enableProfiles` and `profiles.<name>.{model, thinking}` and nothing
 else, through comment-preserving `jsonc-parser` edits, so a hand-maintained file is never
 rewritten as JSON; each change is written immediately. A profile's `model` is picked from the
-models `ctx.modelRegistry` can actually run and written as `provider/id`; free text is still
-accepted for anything the registry does not know (written as typed, unless a bare id or unique
-fragment names exactly one model), and text naming several models is refused rather than guessed.
+models `ctx.modelRegistry` can actually run and written as `provider/id`. A model the registry does
+not offer keeps a row of its own so a value already in the file is never lost, but it cannot be
+typed in from the screen.
 `current` is reserved and cannot be added or renamed to.
 
 There is no hot reload. Config is resolved once at registration, so a settings edit takes

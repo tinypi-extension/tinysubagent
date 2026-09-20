@@ -65,12 +65,7 @@ import {
 	type ConfigDraft,
 	type DraftError,
 } from "../config/draft.ts";
-import {
-	modelChoices,
-	resolveTypedModel,
-	type ModelChoice,
-	type TypedModel,
-} from "../config/models.ts";
+import { modelChoices, type ModelChoice } from "../config/models.ts";
 import { THINKING_LEVELS, isThinkingLevel, type ThinkingLevel } from "../types.ts";
 
 /** Rows the list shows at once. The screen lives in the editor's place, so short. */
@@ -89,9 +84,8 @@ const MODEL_ROW = "model";
 /** The key line under the profile's rows. */
 const ROWS_HINT = "↑↓ pick a row · Enter opens · Esc closes";
 
-/** The picker's key line, and the field-only one for a session with no models to list. */
-const PICKER_HINT = "↑↓ walk models · Enter saves · typing filters · Tab to the list · Esc closes";
-const FIELD_HINT = "Enter saves what you typed · Esc closes";
+/** The picker's key line: the list is the whole interaction, so nothing is typed. */
+const PICKER_HINT = "↑↓ walk models · Enter saves · Esc closes";
 
 /** Row id of one profile: names are dynamic, so the id carries the name. */
 function profileRow(name: string): string {
@@ -127,9 +121,8 @@ function settingsListTheme(theme: Theme): SettingsListTheme {
 /**
  * `SelectList`'s theme, rebuilt against the live `Theme` for the same reason as
  * the settings list's. Its no-match line is written for pi's slash-command list
- * ("No matching commands"), so the text is replaced rather than passed through —
- * and it is the one place the free-text fallback can be explained, right where
- * the user sees that nothing matched.
+ * ("No matching commands") and this list is never filtered, so it cannot be
+ * reached; it is replaced anyway rather than left to say something about commands.
  */
 function selectListTheme(theme: Theme): SelectListTheme {
 	return {
@@ -137,7 +130,7 @@ function selectListTheme(theme: Theme): SelectListTheme {
 		selectedText: (text) => theme.fg("accent", text),
 		description: (text) => theme.fg("muted", text),
 		scrollInfo: (text) => theme.fg("dim", text),
-		noMatch: () => theme.fg("dim", "  no model matches — Enter writes what you typed"),
+		noMatch: () => theme.fg("dim", "  no models to pick"),
 	};
 }
 
@@ -255,32 +248,24 @@ class NameSubmenu extends Container {
  * The model list for one profile, opened from its `Model` row and rendered in that
  * row's place for as long as it is up.
  *
- * The field filters and never holds the current model — the highlighted row is what
- * says which one that is — the list holds the models the registry offers, and the line
- * under it names what a fragment that matches no row would write. That line is the
- * free-text path the picker did not replace, kept because the registry is not the whole
- * world (a provider that is not logged in, a model pi has not fetched). Nothing is
- * written here: what the user chose goes back through `done`, and the row that owns it
- * does the writing, so the write path — validation, the create confirm, the error
- * status — stays where every other edit already goes through it.
+ * The list is the whole interaction: `(inherit)` first, then every model the registry
+ * offers, walked with the arrows and saved with Enter. Nothing is typed, which is the
+ * cost of dropping the filter field — a model the registry does not offer has no row to
+ * write it into — and it is paid back in the one place it has to be: the value the file
+ * already holds gets a row of its own when the registry does not offer it, so a
+ * hand-written id stays visible and an Enter on an untouched picker cannot drop it.
+ * Nothing is written here: what the user chose goes back through `done`, and the row
+ * that owns it does the writing, so the write path — validation, the create confirm,
+ * the error status — stays where every other edit already goes through it.
  */
 class ModelPicker extends Container {
-	private readonly theme: Theme;
-	private readonly host: ScreenHost;
 	private readonly done: SubmenuDone;
-	private readonly input: Input;
-	private readonly choices: readonly ModelChoice[];
-	private readonly picker: SelectList | undefined;
-	/** Say what text that matched no row would write; empty while a row matches. */
-	private readonly resolution: Text;
-	/** The last text handed to the picker, so a cursor key cannot reset its selection. */
-	private filterText = "";
-	/** Which child owns the keyboard: the filter field, or the list under it. */
-	private focus: "field" | "list" = "field";
+	private readonly picker: SelectList;
+	/** One line when the registry offered nothing, so the short list explains itself. */
+	private readonly note: Text;
 
 	constructor(options: {
 		theme: Theme;
-		host: ScreenHost;
 		name: string;
 		/** The row's value: the model as the file has it, or `(inherit)`. */
 		current: string;
@@ -288,159 +273,64 @@ class ModelPicker extends Container {
 		done: SubmenuDone;
 	}) {
 		super();
-		const { theme, host, name, current, choices, done } = options;
-		this.theme = theme;
-		this.host = host;
+		const { theme, name, current, choices, done } = options;
 		this.done = done;
-		this.choices = choices;
-
-		this.input = new Input({
-			prompt: "model: ",
-			placeholder: choices.length > 0 ? "filter models" : "inherit",
-		});
-		this.input.focused = true;
-		// The field is deliberately not seeded with the current model: the list already
-		// marks that row, and a seeded field would filter the list down to it before one
-		// character was typed. Empty still means "no key at all" — see `save`.
-		this.input.onSubmit = (value) => this.save(value);
-		this.input.onEscape = () => this.done();
-		this.picker = this.buildPicker(theme, current === INHERIT ? "" : current);
-		this.resolution = new Text("", 1, 0);
+		this.picker = this.buildPicker(theme, choices, current === INHERIT ? "" : current);
+		this.note = new Text(
+			choices.length === 0 ? theme.fg("dim", "  no models available to pick") : "",
+			1,
+			0,
+		);
 
 		this.addChild(new Text(theme.bold(`Model for "${name}"`), 1, 0));
-		this.addChild(this.input);
-		if (this.picker) this.addChild(this.picker);
-		this.addChild(this.resolution);
+		this.addChild(this.picker);
+		this.addChild(this.note);
 	}
 
 	handleInput(data: string): void {
-		// Esc closes the picker on either focus: it replaced the rows and there is
-		// nothing under it to step back to, so it is a screen of its own.
+		// Esc closes the picker: it replaced the rows and there is nothing under it to
+		// step back to, so it is a screen of its own.
 		if (matchesKey(data, Key.escape)) {
 			this.done();
 			return;
 		}
-		if (matchesKey(data, Key.tab)) {
-			if (this.picker) {
-				if (this.focus === "field") this.focusList();
-				else this.focusField();
-			}
-			return;
-		}
-		if (this.focus === "list") {
-			this.picker?.handleInput(data);
-			return;
-		}
-		// The arrows belong to the list, so walking the models never needs Tab first.
-		if ((matchesKey(data, Key.up) || matchesKey(data, Key.down)) && this.picker) {
-			this.picker.handleInput(data);
-			return;
-		}
-		this.input.handleInput(data);
-		this.filterPicker();
+		this.picker.handleInput(data);
 	}
 
 	/**
 	 * The list itself: `(inherit)` first, then every model the registry offers, sorted
-	 * by id. `value` is the `provider/id` string the file holds — and the same string
-	 * the list filters on — so the row under the cursor is always something the file
-	 * could actually mean. No models to offer means no list: the picker is then the plain
-	 * free-text field it replaced, which is also what a session with no configured
-	 * provider gets.
+	 * by id. `value` is the `provider/id` string the file holds, so the row under the
+	 * cursor is always something the file could actually mean. A model the registry does
+	 * not offer is appended when it is this profile's current model: the list is the only
+	 * way to write a model now, so the one value that already exists has to be on it, or
+	 * Enter would quietly drop it.
 	 */
-	private buildPicker(theme: Theme, model: string): SelectList | undefined {
-		if (this.choices.length === 0) return undefined;
+	private buildPicker(theme: Theme, choices: readonly ModelChoice[], model: string): SelectList {
 		const items: SelectItem[] = [
 			{ value: "", label: INHERIT, description: "this session's model" },
-			...this.choices.map((choice) => ({
+			...choices.map((choice) => ({
 				value: choice.value,
 				label: choice.label,
 				description: choice.description,
 			})),
 		];
+		if (model !== "" && !choices.some((choice) => choice.value === model)) {
+			items.push({ value: model, label: model, description: "not in the model list" });
+		}
 		const picker = new SelectList(items, PICKER_MAX_VISIBLE, selectListTheme(theme));
-		// Opens on the profile's own model, so Enter on an untouched submenu is a no-op
-		// rather than a clear. A model the registry does not know (a hand-written id, a
-		// provider that is not logged in) opens on `(inherit)`, which the row above the
-		// field names, so what Enter would write is never hidden.
-		const index = this.choices.findIndex((choice) => choice.value === model);
-		picker.setSelectedIndex(index >= 0 && model !== "" ? index + 1 : 0);
+		// Opens on the profile's own model, so Enter on an untouched picker is a no-op
+		// rather than a clear. Every value the row can hold is a row here — `(inherit)`
+		// included — so the cursor always has something to land on.
+		const index = items.findIndex((item) => item.value === model);
+		picker.setSelectedIndex(index === -1 ? 0 : index);
 		picker.onSelect = (item) => this.save(item.value);
 		picker.onCancel = () => this.done();
 		return picker;
 	}
 
-	/**
-	 * Narrow the list to what the field holds. Skipped when the text has not changed:
-	 * `setFilter` resets the selection to the first row, and a left arrow must not move
-	 * the cursor off the model the user just walked to.
-	 */
-	private filterPicker(): void {
-		if (!this.picker) return;
-		const text = this.input.getValue();
-		if (text !== this.filterText) {
-			this.filterText = text;
-			this.picker.setFilter(text);
-		}
-		this.showResolution();
-	}
-
-	/**
-	 * The line under the list, for text the list has no row for. Without it the fallback
-	 * would be invisible: the list says nothing matched, and what an Enter would write is
-	 * not shown anywhere until the value is read back off the row. A match keeps the line
-	 * empty — the highlighted row is already the answer.
-	 */
-	private showResolution(): void {
-		const typed = this.input.getValue().trim();
-		if (typed === "" || (this.picker?.getSelectedItem() ?? null) !== null) {
-			this.resolution.setText("");
-			return;
-		}
-		const resolved = resolveTypedModel(this.choices, typed);
-		if (resolved.kind === "inherit") {
-			this.resolution.setText("");
-			return;
-		}
-		if (resolved.kind === "ambiguous") {
-			this.resolution.setText(this.theme.fg("dim", `${resolved.matches.length} models match — keep typing`));
-			return;
-		}
-		this.resolution.setText(this.theme.fg("dim", `Enter writes ${resolved.value}`));
-	}
-
-	/**
-	 * Report what the field and the list mean together. Two rules, in order: a highlighted
-	 * row wins while the list has a match — the filter is a prefix of `provider/id`, so the
-	 * text may be a fragment of several models and the row is the one being looked at — and
-	 * with no match the text itself is the value, resolved to `provider/id` when the
-	 * registry knows the id and written as typed when it does not. Text that names several
-	 * models reports nothing and says why, leaving the picker open to be corrected.
-	 */
-	private save(typed: string): void {
-		const selected = this.picker?.getSelectedItem() ?? null;
-		const resolved: TypedModel = selected
-			? { kind: "model", value: selected.value }
-			: resolveTypedModel(this.choices, typed);
-		if (resolved.kind === "ambiguous") {
-			const shown = resolved.matches.slice(0, 3).join(", ");
-			const rest = resolved.matches.length > 3 ? `, +${resolved.matches.length - 3} more` : "";
-			this.host.status(`"${typed.trim()}" matches ${resolved.matches.length} models (${shown}${rest})`);
-			return;
-		}
-		// Empty is the inherit case, not an empty model: the row the picker's `(inherit)`
-		// entry carries is a key removal, and so is a field left blank.
-		this.done(resolved.kind === "inherit" || resolved.value === "" ? INHERIT : resolved.value);
-	}
-
-	private focusList(): void {
-		this.focus = "list";
-		this.input.focused = false;
-	}
-
-	private focusField(): void {
-		this.focus = "field";
-		this.input.focused = true;
+	/** The highlighted row is the answer: `(inherit)` removes the key, nothing else. */
+	private save(value: string): void {
+		this.done(value === "" ? INHERIT : value);
 	}
 }
 
@@ -462,7 +352,7 @@ class ProfileSubmenu extends Container {
 	private readonly name: string;
 	private readonly done: SubmenuDone;
 	private readonly list: SettingsList;
-	/** The registry's models, and the picker that offers them; no models, no list. */
+	/** The registry's models, handed to the picker; none means nothing to offer. */
 	private readonly choices: readonly ModelChoice[];
 	/** The line under the rows, which the picker swaps for its own while it is open. */
 	private readonly hintLine: Text;
@@ -552,10 +442,9 @@ class ProfileSubmenu extends Container {
 	 * long as it is up, because the keys that work change with what is on screen.
 	 */
 	private openPicker(current: string, submenuDone: SubmenuDone): ModelPicker {
-		this.hintLine.setText(this.theme.fg("dim", this.choices.length > 0 ? PICKER_HINT : FIELD_HINT));
+		this.hintLine.setText(this.theme.fg("dim", PICKER_HINT));
 		return new ModelPicker({
 			theme: this.theme,
-			host: this.host,
 			name: this.name,
 			current,
 			choices: this.choices,
@@ -574,7 +463,8 @@ class ProfileSubmenu extends Container {
 	/**
 	 * The model as the row shows it: the file's own string, or `(inherit)` when there is
 	 * no key at all. A model the registry does not know is shown exactly as stored — this
-	 * row is the only place the typed value is ever read back, so nothing may prettify it.
+	 * row and the picker's extra row for it are the only places the value is read back, so
+	 * nothing may prettify it.
 	 */
 	private modelValue(): string {
 		return this.model === "" ? INHERIT : this.model;

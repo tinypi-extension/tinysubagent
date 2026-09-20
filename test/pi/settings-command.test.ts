@@ -179,7 +179,7 @@ async function openScreen(modelRegistry?: unknown): Promise<{
 		hasUI: true,
 		mode: "tui",
 		// Absent in most tests on purpose: the screen has to survive a context that
-		// carries no registry at all, which is what the picker's fallback is for.
+		// carries no registry at all, and the picker has to render an empty list there.
 		modelRegistry,
 		ui: {
 			notify() {},
@@ -245,9 +245,8 @@ test("a file that parses but cannot hold an edit is refused, not thrown", async 
 /*
  * The model picker. Its rows come from the registry snapshot the command context
  * carries, so a fake registry drives the whole interaction: which model is
- * highlighted, what an Enter writes, and what happens to text that names no model
- * at all. Everything is asserted against the file, not the screen — the file is
- * the contract.
+ * highlighted and what an Enter writes. Everything is asserted against the file,
+ * not the screen — the file is the contract.
  */
 
 /** A config that already has one profile, so its submenu can be opened directly. */
@@ -295,11 +294,6 @@ function escapeAll(screen: { send: (data: string) => void }): void {
 	screen.send(ESC);
 }
 
-/** Type text into the focused field, one key at a time. */
-function type(screen: { send: (data: string) => void }, text: string): void {
-	for (const char of text) screen.send(char);
-}
-
 /** The `model` the file holds, or undefined when the key is not there at all. */
 function savedModel(file: string): string | undefined {
 	const parsed = JSON.parse(readFileSync(file, "utf8")) as {
@@ -332,7 +326,7 @@ test("the profile's rows show the stored model, and Enter opens the list", async
 		// The nameless model falls back to its provider label.
 		assert.match(rendered, /shared-id/);
 		// The rows are gone while the picker is up, and the hint says which keys work now.
-		assert.match(rendered, /typing filters/);
+		assert.match(rendered, /↑↓ walk models/);
 		assert.doesNotMatch(rendered, /↑↓ pick a row/);
 
 		escapeAll(screen);
@@ -355,7 +349,7 @@ test("Esc in the picker writes nothing and puts the rows back", async () => {
 
 		const rows = screen.component().render(80).join("\n");
 		assert.match(rows, /Thinking/);
-		assert.doesNotMatch(rows, /typing filters/);
+		assert.doesNotMatch(rows, /↑↓ walk models/);
 		assert.equal(readFileSync(file, "utf8"), ONE_PROFILE, "Esc must not write the walked-to model");
 
 		escapeAll(screen);
@@ -406,61 +400,23 @@ test("Enter writes the highlighted row, arrows walk the list", async () => {
 	});
 });
 
-test("text that no row starts with is resolved through the registry", async () => {
+test("a stored model the registry does not offer keeps a row of its own", async () => {
 	await withScratchConfig(async (file, cleanup) => {
-		writeFileSync(file, ONE_PROFILE);
+		// A hand-written id, or a provider that is not logged in. The row shows it, and the
+		// list has to show it too: with the field gone there is nowhere else it could live,
+		// and an Enter on an untouched picker would otherwise drop the value.
+		writeFileSync(file, '{\n\t"profiles": { "fast": { "model": "local/llama-3" } }\n}\n');
 		const screen = await openScreen(fakeRegistry());
 		openModel(screen);
-
-		// No row *starts with* "deepseek" — the list filters on `provider/id` — so this is
-		// the free-text path, and the line under the list says what it would write.
-		type(screen, "deepseek");
-		assert.match(screen.component().render(80).join("\n"), /Enter writes oc-openai\/deepseek-flash/);
-		screen.send(ENTER);
-
-		assert.equal(savedModel(file), "oc-openai/deepseek-flash");
-
-		escapeAll(screen);
-		await screen.closed;
-		cleanup();
-	});
-});
-
-test("text that names a model in no registry is still written as typed", async () => {
-	await withScratchConfig(async (file, cleanup) => {
-		writeFileSync(file, ONE_PROFILE);
-		const screen = await openScreen(fakeRegistry());
-		openModel(screen);
-
-		// The field was free text before the picker existed, and the registry is not the
-		// whole world: a provider that is not logged in has to stay reachable.
-		type(screen, "local/llama-3");
-		screen.send(ENTER);
-
-		assert.equal(savedModel(file), "local/llama-3");
-
-		escapeAll(screen);
-		await screen.closed;
-		cleanup();
-	});
-});
-
-test("text that matches several models writes nothing and says which", async () => {
-	await withScratchConfig(async (file, cleanup) => {
-		writeFileSync(file, ONE_PROFILE);
-		const screen = await openScreen(fakeRegistry());
-		openModel(screen);
-
-		// "flash" is a fragment of two ids: writing either one would be a guess.
-		type(screen, "flash");
-		screen.send(ENTER);
 
 		const rendered = screen.component().render(80).join("\n");
-		assert.match(rendered, /matches 2 models/);
-		assert.match(rendered, /oc-openai\/deepseek-flash/);
-		// Refused means nothing was written *and* the picker is still up to be corrected.
-		assert.match(rendered, /typing filters/);
-		assert.equal(savedModel(file), undefined, "an ambiguous name must not be written");
+		assert.match(rendered, /local\/llama-3/);
+		assert.match(rendered, /not in the model list/);
+
+		// The picker opened on that row, so a reflex Enter writes back what was there.
+		screen.send(ENTER);
+
+		assert.equal(savedModel(file), "local/llama-3", "the stored value must survive an untouched picker");
 
 		escapeAll(screen);
 		await screen.closed;
@@ -488,23 +444,24 @@ test("Enter on an untouched submenu is a no-op, not a cleared model", async () =
 	});
 });
 
-test("without a registry the submenu is the plain model field it replaced", async () => {
+test("without a registry the picker offers nothing but (inherit) and says so", async () => {
 	await withScratchConfig(async (file, cleanup) => {
 		writeFileSync(file, ONE_PROFILE);
 		const screen = await openScreen();
 		openModel(screen);
 
 		const rendered = screen.component().render(80).join("\n");
-		// With no models to list there is no list and no line about one; what is left is
-		// the free-text field, which is what the picker replaced.
-		assert.doesNotMatch(rendered, /↑↓ walk models/);
-		assert.doesNotMatch(rendered, /no model matches/);
-		assert.match(rendered, /Enter saves what you typed/);
+		// With no models to list there is nothing to walk: the list holds `(inherit)`
+		// alone, and the line under it says why it is that short. There is no field to
+		// type a model into any more, so a session with no registry can only unset one.
+		assert.match(rendered, /↑↓ walk models/);
+		assert.match(rendered, /\(inherit\)/);
+		assert.match(rendered, /no models available/);
+		assert.doesNotMatch(rendered, /no matches/);
 
-		type(screen, "oc-openai/glm-5.3-flash");
 		screen.send(ENTER);
 
-		assert.equal(savedModel(file), "oc-openai/glm-5.3-flash");
+		assert.equal(readFileSync(file, "utf8"), ONE_PROFILE, "Enter on (inherit) writes nothing");
 
 		escapeAll(screen);
 		await screen.closed;

@@ -1,14 +1,11 @@
 /**
- * The model list the settings screen offers, and the rule that turns typed text
- * into the string a `model` key holds.
+ * The model list the settings screen's picker shows.
  *
  * This module is pure on purpose. The picker itself is a pi-tui `SelectList` and
- * needs a terminal to exist, but everything that decides *what* it shows and
- * *what* an Enter writes is a function of the registry snapshot and a string —
- * so it is tested without one. It also gives the screen one place to look when
- * the registry is absent (a session that never configured a provider, or a
- * caller that passed a bare context): an empty list, and a free-text field that
- * behaves exactly as it did before the picker existed.
+ * needs a terminal to exist, but everything that decides *what* it shows is a
+ * function of the registry snapshot — so it is tested without one. It also gives
+ * the screen one place to look when the registry is absent (a session that never
+ * configured a provider, or a caller that passed a bare context): an empty list.
  */
 
 /** What this module needs off a `ModelRegistry`; kept structural so tests can fake it. */
@@ -26,18 +23,10 @@ export interface RegistryModel {
 	name?: string;
 }
 
-/** What the typed text means: a key removal, one model, or a question. */
-export type TypedModel =
-	| { kind: "inherit" }
-	| { kind: "model"; value: string }
-	| { kind: "ambiguous"; matches: readonly string[] };
-
 /** One picker row: `value` is what gets written, `label` what is shown. */
 export interface ModelChoice {
 	/** `provider/id` — the canonical reference the config file holds. */
 	value: string;
-	/** The bare id, kept for resolving what the user typed by hand. */
-	id: string;
 	label: string;
 	description: string;
 }
@@ -58,7 +47,6 @@ export function modelChoices(registry: ModelRegistryLike | undefined): ModelChoi
 		const provider = registry?.getProviderDisplayName?.(model.provider) ?? model.provider;
 		found.set(value, {
 			value,
-			id: model.id,
 			label: model.id,
 			// The name is the human half and may be missing; the provider label always is.
 			description: model.name ? `${model.name} · ${provider}` : provider,
@@ -67,43 +55,6 @@ export function modelChoices(registry: ModelRegistryLike | undefined): ModelChoi
 	return [...found.values()].sort(
 		(a, b) => a.label.localeCompare(b.label) || a.value.localeCompare(b.value),
 	);
-}
-
-/**
- * The `model` value a typed string means, or `undefined` for "no key at all"
- * (which downstream reads as "inherit this session's model").
- *
- * Typing is not the same as picking. The picker filters on `value` — a prefix of
- * `provider/id` — so neither a bare id (`glm-5.3-flash`) nor a fragment
- * (`sonnet`) matches a row even when the registry knows the model, and pi's own
- * resolver accepts a bare id only when it is unambiguous. Resolving here means
- * the file gets the canonical form either way, a string that names nothing is
- * still written as typed — the field was free text before the picker existed,
- * and the registry is not the whole world (providers not logged in, models pi
- * has not fetched) — and a string that names several models is refused rather
- * than resolved to whichever one happened to sort first.
- */
-export function resolveTypedModel(choices: readonly ModelChoice[], typed: string): TypedModel {
-	const text = typed.trim();
-	// Empty is the inherit case, not an empty model.
-	if (text === "") return { kind: "inherit" };
-	if (choices.some((choice) => choice.value === text)) return { kind: "model", value: text };
-	const lowered = text.toLowerCase();
-	const byId = choices.filter((choice) => choice.id.toLowerCase() === lowered);
-	if (byId.length > 0) return named(byId);
-	// A fragment, as the picker's own search is a fragment search. Ids first so that
-	// "sonnet" finds `claude-sonnet-4` before a provider id halfway matches.
-	const byFragment = choices.filter(
-		(choice) =>
-			choice.id.toLowerCase().includes(lowered) || choice.value.toLowerCase().includes(lowered),
-	);
-	return byFragment.length > 0 ? named(byFragment) : { kind: "model", value: text };
-}
-
-/** One match is the model; several are a question only the user can answer. */
-function named(matches: ModelChoice[]): TypedModel {
-	if (matches.length === 1) return { kind: "model", value: matches[0]!.value };
-	return { kind: "ambiguous", matches: matches.map((choice) => choice.value) };
 }
 
 /** The registry's snapshot, or nothing when there is no registry to ask. */
