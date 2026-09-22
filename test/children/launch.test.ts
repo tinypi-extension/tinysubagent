@@ -71,7 +71,10 @@ test("the task markdown carries the role, the task, and the reporting contract",
 	// here too: a child that never learns the name is only ever scraped.
 	assert.match(md, new RegExp(`call \`${REPORT_TOOL_NAME}\``));
 	assert.match(md, /`result` argument/);
-	assert.match(md, /self-contained summary/);
+	// The pane message is not the deliverable: the tool call is. Saying so keeps a
+	// model from treating a written summary as a finished hand-back.
+	assert.match(md, /only the call delivers/);
+	assert.doesNotMatch(md, /self-contained summary/);
 });
 
 test("the task markdown stays a single well-formed document", () => {
