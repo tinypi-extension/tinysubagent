@@ -209,6 +209,29 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		writeReportFile("failed", "error", refusal);
 	});
 
+	// The bounded self-correction an unreported `done` gets before the hold. Kept out
+	// of the settle handler so that handler stays a classification of the settle
+	// rather than accumulating reminder policy.
+	//
+	// The model's contract text is `task-markdown.ts`, read before the run starts;
+	// this is the correction for a child that read it and forgot the call, so it
+	// repeats the tool name and what to pass rather than the whole output contract.
+	function nudgeToReport(): void {
+		if (reportNudges >= REPORT_NUDGE_LIMIT) return;
+		// Spent before the send, not after: `sendUserMessage` is fire-and-forget — it
+		// returns void and pi swallows its own rejection — so there is no failure to
+		// observe here. Spending it anyway fails safe: a reminder that never arrived
+		// still leaves the child no closer to a loop and no further from the hold a
+		// human resolves.
+		reportNudges += 1;
+		pi.sendUserMessage(
+			`You ended your turn without calling \`${REPORT_TOOL_NAME}\`, so nothing has reached ` +
+				"the agent that spawned you yet. If your task is complete, call " +
+				`\`${REPORT_TOOL_NAME}\` now with your full result — the complete text, not a ` +
+				"pointer to it. If it is not complete, keep working and call it when it is.",
+		);
+	}
+
 	pi.on("agent_settled", (_event, _ctx) => {
 		if (finished) return;
 
@@ -225,21 +248,11 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		// covers an abort pi did label.
 		if (runSignal?.aborted === true || settle === "interrupted") return;
 
-		// An unreported turn end gets a bounded self-correction before the hold: the
-		// model that simply forgot to call the report tool is asked for it directly,
-		// and that message starts a new run. Placing this after the interrupt check is
-		// deliberate — nudging a child the user just Esc'd would talk over the redirect
-		// they pressed Esc to make.
+		// An unreported turn end gets a bounded self-correction before the hold.
+		// Placing this after the interrupt check is deliberate — nudging a child the
+		// user just Esc'd would talk over the redirect they pressed Esc to make.
 		if (settle === "done") {
-			if (reportNudges < REPORT_NUDGE_LIMIT) {
-				reportNudges += 1;
-				pi.sendUserMessage(
-					`You ended your turn without calling \`${REPORT_TOOL_NAME}\`, so nothing has reached ` +
-						"the agent that spawned you yet. If your task is complete, call " +
-						`\`${REPORT_TOOL_NAME}\` now with your full result — the complete text, not a ` +
-						"pointer to it. If it is not complete, keep working and call it when it is.",
-				);
-			}
+			nudgeToReport();
 
 			// Still a hold: the child stays alive at its prompt with its context intact,
 			// and the watcher keeps waiting. Writing a content-free `done` and shutting

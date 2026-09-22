@@ -142,8 +142,9 @@ Lifecycle:
 3. One steer message arrives for the batch, labelled per child.
 4. A pane closes only when its child calls `subagent_report` (then it is `completed`),
    when the user quits it (exit 0 → `completed`), or when it is closed by hand
-   (`cancelled`). A child that ends its turn without reporting keeps its pane open and
-   **holds the batch** — ask it for the report in the pane. A failed child is marked
+   (`cancelled`). A child that ends its turn without reporting is asked to report by its own
+   settle handler — at most twice — and then, if it still says nothing, keeps its pane open
+   and **holds the batch** — ask it for the report in the pane. A failed child is marked
    `failed` and its pane left open. A close does **not** rebalance the survivors — the
    layout is set at spawn time — and because the 3/5 pass fires only when the column is
    born, a divider you dragged by hand is never snapped back.

@@ -136,8 +136,9 @@ Behavior:
    is documented as "Available in all contexts (event handlers, tools, commands,
    shortcuts)" and *requests* a graceful shutdown rather than killing pi mid-`execute`,
    so the tool result still lands and the sidecar is already on disk either way.
-3. On a failed write, stay alive and return the failure, so the child can retry or finish
-   normally and fall back to the settle path.
+3. On a failed write, stay alive and return the failure so the model retries: there is no
+   settle fallback left to carry the result (`docs/spec-report-required.md`), so an
+   unreported turn end holds the batch instead of closing the pane.
 4. A second call is a no-op.
 
 `tinysubagent_done` is removed. It is unreachable today, and pi ignores unknown names in
@@ -163,20 +164,27 @@ itself as "deliberately free of any pi extension API" and `child.ts` imports tha
 
 ## The reminder
 
-Two placements, because a single reminder is what the forgetfulness proves insufficient:
+Three placements, because one alone is what the forgetfulness proves insufficient:
 
 **1. `buildTaskMarkdown` (`src/children/task-markdown.ts:15`)** — the output contract, read last:
 
 > When your task is complete, call `subagent_report` with your full result in the
 > `result` argument. That call is what the caller receives and what closes this pane —
-> do not skip it. Write your final assistant message as that same self-contained summary;
-> if the report does not arrive, the caller reads it instead.
+> do not skip it. A final assistant message is for the human watching the pane, not for
+> the caller; only the call delivers. Ending your turn without the call sends nothing:
+> this pane stays open and the caller keeps waiting until you report.
 
 **2. The tool's own `description`** — the only text a model sees when deciding whether to
 call it, and the reason the old tool was invisible:
 
 > Finish this subagent and hand your result back to the agent that spawned you. Pass the
 > complete result text — not a summary of where to find it. Calling this closes the pane.
+
+**3. The settle handler (`src/children/child.ts`)** — added by the amendment in
+`docs/spec-report-required.md`: a child that ends a turn without reporting is sent a user
+message naming the tool, at most `REPORT_NUDGE_LIMIT` (2) times, before the pane is left to
+hold. That spec owns the mechanism and why the cap is load-bearing; this section just
+records that the reminder now exists in three places, not two.
 
 ## Delegation is unchanged
 
@@ -220,8 +228,8 @@ New coverage:
 
 - `child.test.ts` — report writes `{type:"done",result}` atomically and leaves no `.tmp`
   behind; a failed path returns false without throwing; the legacy signatures still work;
-  a `done` settle whose sidecar write fails still requests shutdown, so the parent cannot
-  hang.
+  a `done` settle now asks the child to report and holds the pane open instead of
+  requesting shutdown, and a report that arrives after one of those holds still lands.
 - `watcher.test.ts` — a report carrying `result` classifies as `via:"report"` **and
   ignores a contradicting session file** (this is the rule that proves the payload is
   authoritative); a legacy `{"type":"done"}` still scrapes; the malformed-report test
@@ -241,7 +249,8 @@ New coverage:
   sidecar file; touching `deliver()` in `index.ts`; the parent-pull design.
 - **Never:** make the report the only path (a forgetful child must still produce a
   result) — **amended by `spec-report-required.md`: the report now *is* the only automatic
-  close, and an unreported turn end holds the batch until a human acts**; let the child
+  close, and an unreported turn end asks the child for the report a bounded number of times
+  and then holds the batch until a human acts**; let the child
   import from `spawn.ts` or vice versa; weaken an existing test to make this pass; remove
   the malformed-report anti-hang rule.
 
@@ -258,7 +267,8 @@ New coverage:
 1. A child calling `subagent_report({result})` lands that exact text in the parent's
    steer message as `via:"report"`, even when the child's session file says something else.
 2. A child that never calls the tool still produces a correctly-labelled result — the
-   suite proves it for the settle, legacy-report, and clean-exit paths.
+   suite proves it for the legacy-report and clean-exit paths. (The settle path is gone:
+   `docs/spec-report-required.md` made an unreported turn end a hold, not a completion.)
 3. A role with a `--tools` allowlist can call the report tool without listing it.
 4. A role with no `tools` frontmatter still receives no `--tools` flag, and a role whose
    patterns match nothing is not narrowed to the report tool alone.

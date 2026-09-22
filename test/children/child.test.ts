@@ -455,22 +455,6 @@ test("a failed report write keeps the child alive and says so", async () => {
 	}
 });
 
-test("a done settle nudges rather than sitting silent, and keeps the pane open", async () => {
-	await withReportFile((report) => {
-		const stub = stubChildApi();
-		tinysubagentChild(stub.api as never);
-		finishTurn(stub);
-		settleNow(stub);
-
-		// An unreported turn end is not an ending: no sidecar, no shutdown. The
-		// child stays alive with its context intact, but the settle handler now
-		// asks it to report before falling back to the silent hold.
-		assert.equal(existsSync(report), false);
-		assert.equal(stub.shutdowns(), 0);
-		assert.equal(stub.nudges().length, 1);
-	});
-});
-
 test("an unreported done settle nudges the child to report, then holds", async () => {
 	await withReportFile((report) => {
 		const stub = stubChildApi();
@@ -537,6 +521,35 @@ test("a child that already handed its result back is not nudged", async () => {
 
 		assert.equal(stub.nudges().length, 0);
 		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "done", result: "PONG" });
+	});
+});
+
+test("a report after an unreported settle still lands and closes the pane", async () => {
+	await withReportFile(async (report) => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never);
+
+		// The reminder asked, and the child then does call the tool. The hand-back has
+		// to work exactly as it does on the first pass: the settle before it wrote
+		// nothing and shut nothing down, so there is no state for a late report to trip
+		// over. A reminder a child cannot act on would be noise, not a correction —
+		// this is the half of the contract the nudge exists for.
+		finishTurn(stub);
+		settleNow(stub);
+		assert.equal(stub.nudges().length, 1);
+
+		const tool = stub.tools[0];
+		assert.ok(tool?.execute);
+		await tool.execute("call-1", { result: "PONG" }, undefined, undefined, stub.ctx);
+
+		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "done", result: "PONG" });
+		assert.equal(stub.shutdowns(), 1);
+
+		// The settle that follows the shutdown is not nudged again: the child has
+		// already handed its result back.
+		finishTurn(stub);
+		settleNow(stub);
+		assert.equal(stub.nudges().length, 1);
 	});
 });
 

@@ -77,6 +77,12 @@ pi 0.85.1: `_emitAgentSettled()` clears the run-active flag before it emits, so
 path and runs a full new turn. The nested run settles back through this same handler —
 which is why the reminder is capped.
 
+That check was a live session, not a stub: an extension registering `agent_settled` and
+sending the reminder, driven against a throwaway provider with no network. The observed
+sequence was `agent_settled n=1 isIdle=true` → `agent_start n=2` → a second model call →
+`agent_settled n=2`. The unit tests stop at the send — they assert the reminder goes out
+and that the cap holds — so the session is what proves a send becomes a turn.
+
 This amends, deliberately:
 
 - **Assumption 3** now reads as edited above: the child is *asked* to resolve itself, a
@@ -97,7 +103,8 @@ the hold it exists to shorten.
 This is the point of the change and it is also its cost. `docs/intent.md:45` promises
 "never hang forever on N/N"; the honest replacement is: **the batch waits until every
 child has reported, exited, failed, or had its pane closed.** A child that ends a turn
-without reporting holds the batch until a human acts on its pane.
+without reporting asks itself for the report a bounded number of times (the amendment) and
+then holds the batch until a human acts on its pane.
 
 The escape hatches are all one keystroke: say "call `subagent_report`" in the pane, or
 `/quit` it (exit 0 → `completed`), or close the pane (`cancelled`).
@@ -125,7 +132,7 @@ quietly contradicted.
 | File | Change |
 |---|---|
 | `src/children/child.ts` | `done` branch of `agent_settled` writes nothing and does not shutdown; it sends a bounded reminder to report (amendment) then falls silent; rewrite the module doc ("the settle fallback") and the tool's failed-write message |
-| `src/children/task-markdown.ts` | output contract states the pane stays open until the tool is called |
+| `src/children/task-markdown.ts` | output contract states the pane stays open until the tool is called, and that the pane message is not the hand-back |
 | `docs/intent.md` | line 45 carve-out; the interrupt paragraph keeps its silence rule |
 | `docs/spec-report-tool.md` | status line points here; `Never` boundary and the classification row for `done` without `result` corrected |
 | `test/children/child.test.ts` | inverted expectations above |
@@ -158,10 +165,12 @@ waiting", and `via:"turn-end"` is still reachable through a manual quit-then-set
    scrape when the child forgets to report.
 5. `npm run typecheck` and `npm test` pass; `npm run smoke:tool` delivers exactly one steer
    message, labelled `completed (reported)`.
-6. An unreported `done` settle sends at most `REPORT_NUDGE_LIMIT` reminders to the child; a
-   report that follows one of them still lands `via:"report"` and closes the pane. The
-   reminder's ability to start a new run is verified against a live pi session, not only
-   against a stub (see the amendment).
+6. An unreported `done` settle sends at most `REPORT_NUDGE_LIMIT` reminders to the child,
+   and one of them does not foreclose the ending: a report that arrives after it still
+   lands `via:"report"` and closes the pane. Both are asserted in `child.test.ts`. That a
+   reminder *can* start a new run is a property of pi rather than of this repo, so the
+   live-session evidence for it is recorded in the amendment instead of being a criterion
+   the suite cannot carry.
 
 ## Resolved decisions (at approval)
 
