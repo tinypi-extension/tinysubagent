@@ -79,13 +79,15 @@ which is why the reminder is capped.
 
 That was first confirmed in a headless in-process session against a throwaway provider
 (`agent_settled n=1 isIdle=true` → `agent_start n=2` → a second model call →
-`agent_settled n=2`), and is now pinned by `scripts/smoke-nudge.ts`, which makes the same
-claim where it matters: a real pi child in a real pane, against a local provider that
-answers the child's first turn with prose and no tool call. The harness passes only when
-the reminder reaches the model and the child then reports — the pane closes and the
-orchestrator receives `completed (reported)`. Run against `main`'s child handler, the same
-harness makes exactly one request and times out: the child ends its turn unreported and
-nothing revives it, which is the bug this amendment fixes.
+`agent_settled n=2`), and is now the claim `scripts/smoke-nudge.ts` checks where it matters:
+a real pi child in a real pane, against a local provider that answers the child's first turn
+with prose and no tool call. The harness passes only when the reminder reaches the model and
+the child then reports — the pane closes and the orchestrator receives `completed
+(reported)`. It is manual (`npm run smoke:nudge`, needing a live herdr session), so no gate
+runs it. Run by hand with the reminder disabled (`REPORT_NUDGE_LIMIT = 0`) and everything
+else identical, it makes exactly one model request and then times out: the child ends its
+turn unreported and nothing revives it. That is the bug, and it is now a harness that fails
+without the nudge rather than a claim in prose.
 
 This amends, deliberately:
 
@@ -138,8 +140,8 @@ quietly contradicted.
 | `src/children/child.ts` | `done` branch of `agent_settled` writes nothing and does not shutdown; it sends a bounded reminder to report (amendment) then falls silent; rewrite the module doc ("the settle fallback") and the tool's failed-write message |
 | `src/children/task-markdown.ts` | output contract states the pane stays open until the tool is called, and that the pane message is not the hand-back |
 | `docs/intent.md` | line 45 carve-out; the interrupt paragraph keeps its silence rule |
-| `scripts/smoke-nudge.ts` | the real-pane proof that a reminder becomes a turn (amendment) |
 | `docs/spec-report-tool.md` | status line points here; `Never` boundary and the classification row for `done` without `result` corrected |
+| `scripts/smoke-nudge.ts` | the real-pane check that a reminder becomes a turn (amendment) |
 | `test/children/child.test.ts` | inverted expectations above |
 | `test/children/watcher.test.ts` | only if a case asserts the settle path produces a terminal outcome from a `{"type":"done"}` written by the child — the watcher's own handling of that payload is unchanged and stays tested |
 
@@ -174,8 +176,8 @@ waiting", and `via:"turn-end"` is still reachable through a manual quit-then-set
    and one of them does not foreclose the ending: a report that arrives after it still
    lands `via:"report"` and closes the pane. Both are asserted in `child.test.ts`. That a
    reminder *can* start a new run is a property of pi rather than of this repo, so the
-   evidence for it is `scripts/smoke-nudge.ts` — recorded in the amendment instead of
-   being a criterion the stub suite cannot carry.
+   evidence for it is the manual `scripts/smoke-nudge.ts` — recorded in the amendment
+   instead of being a criterion the stub suite cannot carry.
 
 ## Resolved decisions (at approval)
 

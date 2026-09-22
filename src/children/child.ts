@@ -117,6 +117,18 @@ import { REPORT_TOOL_NAME } from "../types.ts";
  */
 const REPORT_NUDGE_LIMIT = 2;
 
+/**
+ * The reminder an unreported `done` sends before the hold. Exported because
+ * `scripts/smoke-nudge.ts` drives a real child and has to recognise the message
+ * the settle handler put into that child's session — one text, one owner, so the
+ * two cannot drift.
+ */
+export const REPORT_REMINDER =
+	`You ended your turn without calling \`${REPORT_TOOL_NAME}\`, so nothing has reached ` +
+	"the agent that spawned you yet. If your task is complete, call " +
+	`\`${REPORT_TOOL_NAME}\` now with your full result — the complete text, not a ` +
+	"pointer to it. If it is not complete, keep working and call it when it is.";
+
 export default function tinysubagentChild(pi: ExtensionAPI): void {
 	/** Messages from the most recent agent phase; the settle decides on these. */
 	let lastMessages: TurnMessage[] | undefined;
@@ -224,12 +236,7 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		// still leaves the child no closer to a loop and no further from the hold a
 		// human resolves.
 		reportNudges += 1;
-		pi.sendUserMessage(
-			`You ended your turn without calling \`${REPORT_TOOL_NAME}\`, so nothing has reached ` +
-				"the agent that spawned you yet. If your task is complete, call " +
-				`\`${REPORT_TOOL_NAME}\` now with your full result — the complete text, not a ` +
-				"pointer to it. If it is not complete, keep working and call it when it is.",
-		);
+		pi.sendUserMessage(REPORT_REMINDER);
 	}
 
 	pi.on("agent_settled", (_event, _ctx) => {

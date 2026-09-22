@@ -250,6 +250,7 @@ the `tinysubagent-panes` plugin linked and enabled:
 npm run smoke            # end-to-end: plan artifacts, open pane, run a child, classify the result
 npm run smoke:tool       # drives the tool through a stub ExtensionAPI, asserts the steer message
 npm run smoke:interrupt  # interrupt handling in a child pane
+npm run smoke:nudge      # an unreported child is reminded in its own pane, and then reports
 ```
 
 `smoke` and `smoke-tool` take an agent name and flags, e.g.

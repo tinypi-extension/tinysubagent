@@ -20,16 +20,22 @@
  *   - a report that follows a reminder lands as a normal report: the pane closes
  *     and the orchestrator receives `completed (reported)`.
  *
+ * Run it with the reminder disabled (`REPORT_NUDGE_LIMIT = 0`) and it fails after
+ * one model request — the child ends its turn unreported and nothing revives it.
+ * That is the bug this harness exists to keep fixed, and it is the shape the child
+ * pane shows while the harness waits: the task, one prose answer, and a prompt
+ * still sitting there.
+ *
  * Usage: node scripts/smoke-nudge.ts [agent]
  *
- * Needs a herdr session with the tinysubagent plugin enabled, like the other
- * smoke scripts. No external provider and no credentials: the whole model side
- * is the local endpoint below.
+ * Manual, like the other smoke scripts: it needs a herdr session with the
+ * tinysubagent plugin enabled, and nothing gates on it. No external provider and
+ * no credentials — the whole model side is the local endpoint below.
  */
 
 import { strict as assert } from "node:assert";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,27 +43,35 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import tinysubagent from "../index.ts";
-import { discoverAgents } from "../src/config/agents.ts";
+import { REPORT_REMINDER } from "../src/children/child.ts";
 import { childSessionDirFor } from "../src/children/launch-paths.ts";
-import { herdrPaneClose, herdrPaneExists, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
+import { resolveProjectAgentDir } from "../src/children/requests.ts";
 import { TOOL_NAME } from "../src/children/spawn.ts";
+import { isInsideHerdr, herdrPaneExists, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
+import { discoverAgents } from "../src/config/agents.ts";
+import { REPORT_TOOL_NAME } from "../src/types.ts";
 
 function fail(message: string): never {
 	console.error(`\nFAIL ${message}`);
 	process.exit(1);
 }
 
+if (!isInsideHerdr()) fail("this harness needs a herdr session (HERDR_ENV is not set)");
 const plugin = await herdrPluginInfo(PLUGIN_ID);
 if (!plugin?.enabled) fail(`herdr plugin ${PLUGIN_ID} is missing or disabled`);
 
 const args = process.argv.slice(2);
 const { agents } = discoverAgents(process.cwd());
-const agentName = args.find((arg) => !arg.startsWith("--")) ?? "general";
+const agentName = args.find((arg) => !arg.startsWith("--")) ?? "worker";
 const agent = agents.find((entry) => entry.name === agentName) ?? agents[0];
 if (!agent) fail("no agents found");
 
-/** The reminder the child's own settle handler sends. Unique to that message. */
-const NUDGE_MARKER = "ended your turn without calling";
+/**
+ * A fragment of the reminder, taken from the message itself so a rewording moves
+ * both sides together. Short on purpose: a prefix survives whatever escaping the
+ * request body and the session jsonl apply to the full sentence.
+ */
+const NUDGE_MARKER = REPORT_REMINDER.slice(0, REPORT_REMINDER.indexOf("`")).trim();
 /** The result the fake model reports once the reminder arrives. */
 const RESULT = "NUDGED";
 
@@ -94,7 +108,7 @@ function reportTurn(result: string): string {
 		index: 0,
 		id: "call_smoke_report",
 		type: "function",
-		function: { name: "subagent_report", arguments: JSON.stringify({ result }) },
+		function: { name: REPORT_TOOL_NAME, arguments: JSON.stringify({ result }) },
 	};
 	return (
 		frame({ role: "assistant", content: "" }, null) +
@@ -113,11 +127,8 @@ const server = createServer((req, res) => {
 		requests.push(raw);
 		const recover = raw.includes(NUDGE_MARKER) && !reported;
 		reported ||= recover;
-		const body = recover
-			? reportTurn(RESULT)
-			: textTurn("The answer is 41. I am done.");
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-		res.end(body);
+		res.end(recover ? reportTurn(RESULT) : textTurn("The answer is 41. I am done."));
 	});
 });
 const port: number = await new Promise((resolve) => {
@@ -168,11 +179,17 @@ process.env.PI_HERDR_LAUNCH_PREFIX = `env PI_CODING_AGENT_DIR=${childAgentDir}`;
 
 // ── Session dir of our own ──────────────────────────────────────────────────
 const sessionDir = join(getAgentDir(), "sessions", "--tinysubagent-smoke--");
+const sessionId = "smoke-nudge";
+const sessionFile = join(sessionDir, `${sessionId}-${Date.now()}.jsonl`);
 mkdirSync(sessionDir, { recursive: true });
-const sessionFile = join(sessionDir, `smoke-nudge-${Date.now()}.jsonl`);
+// The orchestrator's own outputs — the launch script and the task markdown — land
+// under here, keyed by session id. Only this run's subtree is ours to remove.
+const artifactDir = join(sessionDir, "artifacts", sessionId);
 
 function cleanup(): void {
 	rmSync(scratch, { recursive: true, force: true });
+	rmSync(artifactDir, { recursive: true, force: true });
+	rmSync(sessionFile, { force: true });
 	server.close();
 }
 
@@ -203,7 +220,7 @@ const ctx = {
 	model: { provider: "oc-openai", id: "deepseek-flash" },
 	sessionManager: {
 		getSessionFile: () => sessionFile,
-		getSessionId: () => "smoke-nudge",
+		getSessionId: () => sessionId,
 		getCwd: () => process.cwd(),
 		getEntries: () => [],
 	},
@@ -215,15 +232,18 @@ const ctx = {
 };
 
 tinysubagent(api as never);
-const tool = tools[0] as {
-	execute: (
-		id: string,
-		params: unknown,
-		signal: unknown,
-		onUpdate: unknown,
-		ctx: unknown,
-	) => Promise<{ content: { text: string }[]; details: Record<string, unknown> }>;
-};
+const tool = tools[0] as
+	| {
+			execute: (
+				id: string,
+				params: unknown,
+				signal: unknown,
+				onUpdate: unknown,
+				ctx: unknown,
+			) => Promise<{ content: { text: string }[]; details: Record<string, unknown> }>;
+	  }
+	| undefined;
+if (!tool) fail("the extension registered no tool — is the plugin entrypoint loaded?");
 
 const ack = await tool.execute(
 	"call-1",
@@ -239,14 +259,17 @@ if (!spawned?.paneId) {
 	fail(`nothing was spawned: ${JSON.stringify(ack.details)}`);
 }
 const { paneId } = spawned;
-// The ack names the pane but not the child's files; the launch recipe owns that
-// derivation, so ask it rather than guessing a second time.
-const plannedDir = childSessionDirFor(getAgentDir(), process.cwd());
+
+// Where the child's session and its sidecars live: the same rule the tool uses,
+// because the child is launched with an explicit `--session` path under it.
+const plannedDir = childSessionDirFor(resolveProjectAgentDir(process.cwd()) ?? getAgentDir(), process.cwd());
 const spawnedAt = Date.now();
 console.log(`spawned pane ${paneId} against ${endpoint}`);
 console.log(ack.content[0]?.text ?? "(no ack text)");
 
-// Never leave a live child behind, however this harness dies.
+// Never leave a live child behind, however this harness dies. `execFileSync` and
+// not the async `herdrPaneClose` helper: this runs from `process.on("exit")`,
+// where only synchronous work finishes.
 let reaped = false;
 function reap(): void {
 	if (reaped) return;
@@ -257,6 +280,51 @@ function reap(): void {
 		// Already gone.
 	}
 }
+
+/** The child's own files for this run, once we know which they are. */
+let childSessionFile: string | null = null;
+
+/**
+ * This run's child session files. The child is launched with an explicit
+ * `--session` path under `plannedDir`, and pi creates it as it starts, so this
+ * finds it before the run has produced anything to assert on.
+ */
+function childSessionsSoFar(): string[] {
+	return readdirSync(plannedDir)
+		.filter((entry) => entry.endsWith(".jsonl"))
+		.map((entry) => join(plannedDir, entry))
+		.filter((file) => statSync(file).mtimeMs >= spawnedAt);
+}
+
+// Learn the session path as soon as pi writes it, so that even a signal arriving
+// before the child reports still knows which files this run created. Bounded: a
+// child pi that never starts is diagnosed by the timeout, not by waiting here.
+for (let waited = 0; childSessionFile === null && waited < 10_000; waited += 100) {
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	childSessionFile = childSessionsSoFar()[0] ?? null;
+}
+
+/** Reap, restore the environment, and delete everything this run created. */
+function shutdown(): void {
+	reap();
+	if (childSessionFile !== null) {
+		// The report sidecar itself is normally gone by now: the orchestrator's
+		// watcher deletes it as soon as it accepts the outcome (`watcher.ts`), so
+		// `completed (reported)` is the surviving evidence that it was consumed.
+		for (const suffix of ["", ".done", ".exitcode"]) {
+			rmSync(`${childSessionFile}${suffix}`, { force: true });
+		}
+	}
+	process.env.PI_HERDR_LAUNCH_PREFIX = previousPrefix;
+	cleanup();
+}
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+	process.on(signal, () => {
+		shutdown();
+		process.exit(130);
+	});
+}
+process.on("exit", shutdown);
 
 const timeoutMs = 180_000;
 const timeout = setTimeout(
@@ -270,8 +338,7 @@ const timeout = setTimeout(
 				return "(pane capture unavailable)";
 			}
 		})();
-		reap();
-		cleanup();
+		shutdown();
 		fail(
 			`timed out after ${timeoutMs / 1000}s with ${requests.length} model request(s).\n` +
 				"If the count is 1, the child ended its turn unreported and nothing revived it —\n" +
@@ -287,6 +354,14 @@ clearTimeout(timeout);
 console.log(`\n── steer message ──\n${sent.map((entry) => entry.message.content).join("\n\n")}`);
 const body = sent.map((entry) => entry.message.content).join("\n");
 
+// The child's own session, from the files this run planned. Checked before any
+// assertion, so that a failure below still knows what to delete on the way out.
+const childSessions = childSessionsSoFar();
+if (childSessions.length !== 1) {
+	fail(`expected one child session in ${plannedDir}, found ${childSessions.length}: ${childSessions.join(", ")}`);
+}
+childSessionFile = childSessions[0] as string;
+
 // The reminder reached the model: a request after the first carries it. Without
 // the nudge there is no second request at all, so this is the E2E claim.
 assert.ok(
@@ -301,33 +376,11 @@ assert.ok(
 	requests.slice(1).some((request) => request.includes(NUDGE_MARKER)),
 	"no model request after the first carried the reminder: the child was never asked to report",
 );
-// The tool ran, in the child, and succeeded: its own return text is in the next
-// turn's transcript. Nothing else in the run produces that string.
-assert.ok(
-	requests.some((request) => request.includes("Result reported")),
-	"the report tool never reported success inside the child",
-);
+// `via: "report"` is the only outcome that renders as "reported", so this one
+// assertion carries the hand-back: the sidecar arrived through the report tool.
 assert.equal(sent.length, 1, `expected one steer message, got ${sent.length}`);
 assert.ok(body.includes("completed (reported)"), `expected \`completed (reported)\`:\n${body}`);
 assert.ok(body.includes(RESULT), `expected the reported result \`${RESULT}\`:\n${body}`);
-
-// The child's session, from the files the launch recipe planned for this run.
-const childSessions = readdirSync(plannedDir)
-	.filter((entry) => entry.endsWith(".jsonl") && !entry.endsWith(".jsonl.done"))
-	.map((entry) => join(plannedDir, entry))
-	.filter((file) => statSync(file).mtimeMs >= spawnedAt);
-if (childSessions.length !== 1) {
-	fail(`expected one child session in ${plannedDir}, found ${childSessions.length}: ${childSessions.join(", ")}`);
-}
-const childSessionFile = childSessions[0] as string;
-
-// The sidecar itself is gone by now: the orchestrator's watcher deletes it as soon
-// as it accepts the outcome (`watcher.ts`), so `completed (reported)` above is the
-// surviving evidence that it was written and consumed.
-
-// And the child really did end: a reported child closes its own pane.
-const alive = await herdrPaneExists(paneId);
-assert.equal(alive, false, "the child pane is still open after a report");
 
 // The reminder is a user turn in the child's own session, exactly once. This is
 // the count the cap governs: a second reminder would put a second copy here.
@@ -338,16 +391,20 @@ assert.equal(
 	`the child's session does not carry exactly one reminder:\n${childSession.slice(-2000)}`,
 );
 
-// Leave the user's sessions tree as we found it: this run's child session and the
-// sidecars beside it. Only the paths this run planned are touched.
-for (const suffix of ["", ".done", ".exitcode"]) {
-	rmSync(`${childSessionFile}${suffix}`, { force: true });
-}
+// And the child really did end. The pane closes when the child's pi exits, which
+// happens *after* the watcher saw the sidecar and steered us, so poll rather than
+// probe once — and treat a failed probe (`null`) as "not still open", because a
+// transient herdr hiccup is not the bug under test.
+const alive = await (async function awaitPaneClosed(): Promise<boolean | null> {
+	const deadline = Date.now() + 15_000;
+	for (;;) {
+		const state = await herdrPaneExists(paneId);
+		if (state !== true || Date.now() >= deadline) return state;
+		await new Promise((resolve) => setTimeout(resolve, 250));
+	}
+})();
+assert.notEqual(alive, true, "the child pane is still open after a report");
 
-reap();
-process.env.PI_HERDR_LAUNCH_PREFIX = previousPrefix;
-cleanup();
-console.log(
-	"\nPASS an unreported child was reminded in its own pane, recovered, and reported",
-);
+shutdown();
+console.log("\nPASS an unreported child was reminded in its own pane, recovered, and reported");
 process.exit(0);
