@@ -23,6 +23,15 @@
  * used to close a pane the human was told to inspect, destroying the only copy
  * of the child's context with it.
  *
+ * Before it falls silent, though, the child gets a bounded self-correction. A
+ * model that simply forgot the call is asked for it directly: the settle handler
+ * sends itself a user message naming `subagent_report`, and that message starts a
+ * fresh run — the same mechanism a human typing in the pane uses. The reminder is
+ * capped, because each one is a real model turn and the run it starts settles
+ * back through this same handler; uncapped, a child that will never report would
+ * loop forever, which is worse than the hold the reminder exists to shorten. Once
+ * the cap is spent the child holds as before, and only a human resolves it.
+ *
  * ## Why `agent_settled` and not `agent_end`
  *
  * `agent_end` fires once per agent phase, and pi may follow it with an automatic
@@ -36,8 +45,8 @@
  *  - a transient error that pi retries is never mistaken for a failure;
  *  - a message the user steers into the pane is allowed to finish first;
  *  - an interrupted settle is not an ending (see below), and neither is an
- *    unreported `done` — silence in both cases leaves the watcher watching the
- *    pane for the child's next real settle.
+ *    unreported `done` once its reminders are spent — silence in both cases
+ *    leaves the watcher watching the pane for the child's next real settle.
  *
  * ## What an interrupt is
  *
@@ -100,11 +109,21 @@ import type { TurnMessage } from "./settle.ts";
 import { errorText, preflightFailure, preflightRefusal } from "./preflight.ts";
 import { REPORT_TOOL_NAME } from "../types.ts";
 
+/**
+ * How many times a settled-but-unreported child is reminded to call the report
+ * tool before it falls silent. Small on purpose: each reminder is a full model
+ * turn, and the run it starts settles back through the same handler, so an
+ * uncapped reminder would be a loop — strictly worse than the hold it shortens.
+ */
+const REPORT_NUDGE_LIMIT = 2;
+
 export default function tinysubagentChild(pi: ExtensionAPI): void {
 	/** Messages from the most recent agent phase; the settle decides on these. */
 	let lastMessages: TurnMessage[] | undefined;
 	/** Set once the child has reported success and begun shutting down. */
 	let finished = false;
+	/** Reminders sent so far for an unreported `done`; see `REPORT_NUDGE_LIMIT`. */
+	let reportNudges = 0;
 	/** Abort signal of the run that just ended; see where it is captured and why. */
 	let runSignal: AbortSignal | undefined;
 
@@ -193,13 +212,7 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 	pi.on("agent_settled", (_event, _ctx) => {
 		if (finished) return;
 
-		// An unreported turn end is not an ending: the child stays alive at its
-		// prompt with its context intact, and the watcher keeps waiting. Writing a
-		// content-free `done` and shutting down here is what used to close a pane
-		// the human was told to inspect. The batch holds until a human asks for
-		// the report, quits the child, or closes the pane.
 		const settle = settleReason(lastMessages);
-		if (settle === "done") return;
 
 		// The user Esc'd this child to redirect it. The loop unwound, but the child did
 		// not finish — it is alive at its prompt, so there is no ending to report, and
@@ -211,6 +224,28 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		// checks mean the same thing — the signal covers the tool call, the verdict
 		// covers an abort pi did label.
 		if (runSignal?.aborted === true || settle === "interrupted") return;
+
+		// An unreported turn end gets a bounded self-correction before the hold: the
+		// model that simply forgot to call the report tool is asked for it directly,
+		// and that message starts a new run. Placing this after the interrupt check is
+		// deliberate — nudging a child the user just Esc'd would talk over the redirect
+		// they pressed Esc to make.
+		if (settle === "done") {
+			if (reportNudges < REPORT_NUDGE_LIMIT) {
+				reportNudges += 1;
+				pi.sendUserMessage(
+					`You ended your turn without calling \`${REPORT_TOOL_NAME}\`, so nothing has reached ` +
+						"the agent that spawned you yet. If your task is complete, call " +
+						`\`${REPORT_TOOL_NAME}\` now with your full result — the complete text, not a ` +
+						"pointer to it. If it is not complete, keep working and call it when it is.",
+				);
+			}
+
+			// Still a hold: the child stays alive at its prompt with its context intact,
+			// and the watcher keeps waiting. Writing a content-free `done` and shutting
+			// down here is what used to close a pane the human was told to inspect.
+			return;
+		}
 
 		// A settle with no assistant message at all is also silence, not a failure:
 		// nothing reportable was produced and the child is still alive at its

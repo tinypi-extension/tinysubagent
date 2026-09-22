@@ -60,6 +60,7 @@ function stubChildApi(
 	const tools: RegisteredTool[] = [];
 	const listeners = new Map<string, unknown>();
 	let shutdowns = 0;
+	const nudges: string[] = [];
 	const ctx = {
 		shutdown() {
 			shutdowns += 1;
@@ -89,12 +90,17 @@ function stubChildApi(
 		listeners,
 		ctx,
 		shutdowns: () => shutdowns,
+		nudges: () => nudges,
 		api: {
 			registerTool(tool: RegisteredTool) {
 				tools.push(tool);
 			},
 			on(event: string, handler: unknown) {
 				listeners.set(event, handler);
+			},
+			/** The settle handler's bounded self-correction, recorded for assertions. */
+			sendUserMessage(content: string) {
+				nudges.push(content);
 			},
 		},
 	};
@@ -107,6 +113,26 @@ function typeInto(stub: ReturnType<typeof stubChildApi>, text = "carry on"): Pro
 	const input = stub.listeners.get("input") as InputHook | undefined;
 	assert.ok(input, "the child must listen for input");
 	return Promise.resolve(input({ type: "input", text, source: "interactive" }, stub.ctx));
+}
+
+/** The `agent_end` hook, as pi calls it: it records the phase's messages. */
+type EndHook = (event: unknown, ctx: unknown) => void;
+
+/** The `agent_settled` hook, as pi calls it: it decides the run's ending. */
+type SettleHook = (event: unknown, ctx: unknown) => unknown;
+
+/** Record a finished agent phase, as pi does just before it settles. */
+function finishTurn(stub: ReturnType<typeof stubChildApi>, stopReason = "stop"): void {
+	const end = stub.listeners.get("agent_end") as EndHook | undefined;
+	assert.ok(end, "the child must listen for agent_end");
+	end({ messages: [{ role: "assistant", stopReason }] }, stub.ctx);
+}
+
+/** Fire the settle hook for the phase `finishTurn` recorded. */
+function settleNow(stub: ReturnType<typeof stubChildApi>): void {
+	const settled = stub.listeners.get("agent_settled") as SettleHook | undefined;
+	assert.ok(settled, "the child must listen for agent_settled");
+	settled({}, stub.ctx);
 }
 
 test("a normal stop is a finished turn", () => {
@@ -429,25 +455,88 @@ test("a failed report write keeps the child alive and says so", async () => {
 	}
 });
 
-test("a done settle writes nothing and keeps the pane open", async () => {
+test("a done settle nudges rather than sitting silent, and keeps the pane open", async () => {
 	await withReportFile((report) => {
 		const stub = stubChildApi();
 		tinysubagentChild(stub.api as never);
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-		settled({}, stub.ctx);
+		finishTurn(stub);
+		settleNow(stub);
 
 		// An unreported turn end is not an ending: no sidecar, no shutdown. The
-		// child sits at its prompt with its context intact and the watcher keeps
-		// waiting; closing the pane here is what used to destroy the only copy of
-		// the child's context before a human could ask for the report.
+		// child stays alive with its context intact, but the settle handler now
+		// asks it to report before falling back to the silent hold.
 		assert.equal(existsSync(report), false);
 		assert.equal(stub.shutdowns(), 0);
+		assert.equal(stub.nudges().length, 1);
+	});
+});
+
+test("an unreported done settle nudges the child to report, then holds", async () => {
+	await withReportFile((report) => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never);
+
+		// The model finished its turn without calling the report tool. Prompt text
+		// alone has not made that reliable in practice, so the child's own settle
+		// handler asks it once — a bounded self-correction before the hold.
+		finishTurn(stub);
+		settleNow(stub);
+
+		assert.equal(stub.nudges().length, 1);
+		assert.match(stub.nudges()[0] ?? "", new RegExp(REPORT_TOOL_NAME));
+
+		// Still a hold: no sidecar, no shutdown, the pane stays open.
+		assert.equal(existsSync(report), false);
+		assert.equal(stub.shutdowns(), 0);
+	});
+});
+
+test("the report nudge is capped so a model that never reports cannot loop", async () => {
+	await withReportFile(() => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never);
+
+		// Each unreported turn end asks again, up to the cap. The nudge is a full
+		// model turn, so uncapped it would be a loop far worse than the hold it
+		// exists to avoid. The exact count pins the cap: a loose assertion would let
+		// `REPORT_NUDGE_LIMIT` drift without the test noticing.
+		finishTurn(stub);
+		for (let i = 0; i < 10; i += 1) settleNow(stub);
+
+		assert.equal(stub.nudges().length, 2);
+	});
+});
+
+test("a child the user redirected is not nudged", async () => {
+	await withReportFile((report) => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never);
+
+		// The user pressed Esc to redirect. The last thing they want is the child
+		// immediately talking over them with an automatic reminder.
+		finishTurn(stub, "aborted");
+		settleNow(stub);
+
+		assert.equal(stub.nudges().length, 0);
+		assert.equal(existsSync(report), false);
+	});
+});
+
+test("a child that already handed its result back is not nudged", async () => {
+	await withReportFile(async (report) => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never);
+		const tool = stub.tools[0];
+		assert.ok(tool?.execute);
+		await tool.execute("call-1", { result: "PONG" }, undefined, undefined, stub.ctx);
+
+		// pi settles as it shuts down. The result is already written, so a nudge
+		// here would only be noise on a child that is on its way out.
+		finishTurn(stub);
+		settleNow(stub);
+
+		assert.equal(stub.nudges().length, 0);
+		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "done", result: "PONG" });
 	});
 });
 

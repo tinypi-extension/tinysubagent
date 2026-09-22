@@ -1,6 +1,7 @@
 # Spec: the report is the only clean ending
 
-Status: **approved.** Supersedes the "Never" boundary of
+Status: **approved.** Amended after approval by "Bounded self-correction before the hold"
+below. Supersedes the "Never" boundary of
 `docs/spec-report-tool.md` ("a forgetful child must still produce a result") and amends
 `docs/intent.md:45` ("Never hang forever on N/N"). Both edits are deliberate and are part
 of this change, not side effects of it.
@@ -12,7 +13,8 @@ of this change, not side effects of it.
    (`src/children/launch-script.ts` agrees.)
 2. The ask is **unconditional**: a `done` settle that was not preceded by
    `subagent_report` never auto-closes the pane, whether the model forgot or refused.
-3. The human is the actor who resolves it, by typing into the pane or steering the child.
+3. The human is the actor who resolves it, by typing into the pane or steering the child —
+   now after the bounded self-correction the amendment below adds.
 4. Failure and interrupt paths keep today's behaviour: a failure reports and stays alive;
    an interrupt reports nothing and stays alive.
 5. The watcher needs no new state — "keep waiting" is already its default when no sidecar
@@ -45,7 +47,8 @@ Child-side, `agent_settled`, `settle === "done"` branch (`src/children/child.ts`
 | pane | `ctx.shutdown()` → pane closes | **stays open at the prompt** |
 | watcher | classifies `via:"turn-end"`, scrapes session | keeps polling the same pane |
 
-Nothing else moves. A report is still the only path that closes the pane automatically.
+Nothing else moves, except the bounded self-correction the amendment below adds. A report
+is still the only path that closes the pane automatically.
 
 ### What still ends a wait (all unchanged)
 
@@ -59,6 +62,35 @@ Nothing else moves. A report is still the only path that closes the pane automat
 
 The new terminal set is therefore: *reported*, *exited*, *failed*, *closed*. A finished
 turn is not in it.
+
+## Amendment: bounded self-correction before the hold
+
+Added after approval. The rule above assumed the human is the only actor who can resolve a
+held child. In practice a child often ends its turn having simply forgotten the tool call,
+and the batch then waits on a human who may not be watching. So the `done` branch gets one
+bounded automatic act before it holds: the settle handler sends the child a user message
+naming `subagent_report` and asking for its result.
+
+A message sent from `agent_settled` starts a fresh run in the same pane. Verified against
+pi 0.85.1: `_emitAgentSettled()` clears the run-active flag before it emits, so
+`ctx.isIdle()` is true in the handler and `pi.sendUserMessage()` takes the non-streaming
+path and runs a full new turn. The nested run settles back through this same handler —
+which is why the reminder is capped.
+
+This amends, deliberately:
+
+- **Assumption 3** now reads as edited above: the child is *asked* to resolve itself, a
+  bounded number of times; the human remains the actor who resolves a child whose
+  reminders are spent or ignored.
+- **"Nothing else moves"** gains the bounded reminder as a fourth movement. The reminder
+  writes no sidecar, does not shut the pane down, and steers the orchestrator nothing, so
+  resolved decision 1 below still holds.
+- **Failure and interrupt paths do not change.** The reminder sits *after* the interrupt
+  check, so a child the user just Esc'd is never nudged.
+
+`REPORT_NUDGE_LIMIT` (2) is load-bearing: each reminder is a full model turn, and the run it
+starts settles back through the same handler, so an uncapped reminder is a loop — worse than
+the hold it exists to shorten.
 
 ## Consequence: the batch can now wait indefinitely
 
@@ -92,7 +124,7 @@ quietly contradicted.
 
 | File | Change |
 |---|---|
-| `src/children/child.ts` | `done` branch of `agent_settled` writes nothing and does not shutdown; rewrite the module doc ("the settle fallback") and the tool's failed-write message |
+| `src/children/child.ts` | `done` branch of `agent_settled` writes nothing and does not shutdown; it sends a bounded reminder to report (amendment) then falls silent; rewrite the module doc ("the settle fallback") and the tool's failed-write message |
 | `src/children/task-markdown.ts` | output contract states the pane stays open until the tool is called |
 | `docs/intent.md` | line 45 carve-out; the interrupt paragraph keeps its silence rule |
 | `docs/spec-report-tool.md` | status line points here; `Never` boundary and the classification row for `done` without `result` corrected |
@@ -107,7 +139,7 @@ waiting", and `via:"turn-end"` is still reachable through a manual quit-then-set
 
 - **Always:** run `npm run typecheck` and `npm test` before calling this done; keep the
   sidecar contract byte-compatible (no new keys); state the new wait semantics in the docs
-  that promised the old ones.
+  that promised the old ones, including the bounded self-correction in the amendment.
 - **Ask first:** anything that delivers a message to the orchestrator while the batch is
   still waiting (see Open questions 1); a config/env switch to restore auto-close (2);
   changing failure or interrupt behaviour (it should not change).
@@ -126,13 +158,18 @@ waiting", and `via:"turn-end"` is still reachable through a manual quit-then-set
    scrape when the child forgets to report.
 5. `npm run typecheck` and `npm test` pass; `npm run smoke:tool` delivers exactly one steer
    message, labelled `completed (reported)`.
+6. An unreported `done` settle sends at most `REPORT_NUDGE_LIMIT` reminders to the child; a
+   report that follows one of them still lands `via:"report"` and closes the pane. The
+   reminder's ability to start a new run is verified against a live pi session, not only
+   against a stub (see the amendment).
 
 ## Resolved decisions (at approval)
 
 1. **The orchestrator gets no notice while the batch is held.** A child that ends a turn
    without reporting is resolved by a human at the pane, and the orchestrator hears nothing
    until that happens. A steer notice (option b) is a possible follow-up, not part of this
-   change.
+   change. The bounded reminder the amendment adds goes to the child, not the orchestrator,
+   so this still holds.
 2. **No config flag restores auto-close.** CI and the real-child smokes are callers to fix:
    their tasks must instruct the child to call `subagent_report`.
 3. **A settle with no assistant message stays silent too.** `settleReason` returns

@@ -45,8 +45,12 @@ If a child dies without completing, emit the partial result once the last *survi
 finishes, with the dead child marked `failed`. The batch waits until every child has
 reported, exited, failed, or had its pane closed. A child that ends its turn without
 calling `subagent_report` holds the batch: its pane stays open at its prompt and the
-orchestrator hears nothing until a human asks it for the report, quits it, or closes the
-pane. This amends the old "never hang forever on N/N" promise — see
+orchestrator hears nothing until the child is asked for the report, a human quits it or
+closes its pane. Before the hold, the child's own settle handler asks it to call the tool,
+at most twice — a message sent from `agent_settled` starts a fresh run in the same pane, so
+this is a bounded self-correction: it writes no sidecar and sends the orchestrator nothing.
+Once the reminders are spent, only a human resolves the child. This amends the old "never
+hang forever on N/N" promise — see
 `docs/spec-report-required.md`.
 
 Interrupting a child is not completing it. A user who presses Esc in a child's pane is
@@ -58,7 +62,9 @@ usable credentials) is `failed`, because a run that never started settles nothin
 batch would otherwise wait on it forever. The same silence covers a child that ends its
 turn without reporting — the settle writes nothing and the pane stays open, for the same
 reason: the child is alive, its context intact, and a human can still ask it for the
-report (`docs/spec-report-required.md`).
+report (`docs/spec-report-required.md`). The one automatic act there is the settle's
+bounded reminder to the child itself; the orchestrator hears nothing until the report, a
+quit, or a closed pane.
 (Distinct from the `interrupt` feature in *Out of scope*, which would be the orchestrator
 reaching into a child's turn; nothing here does that.)
 
