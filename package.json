@@ -17,6 +17,7 @@
     "smoke-layout": "node scripts/smoke-layout.ts",
     "smoke:interrupt": "node scripts/smoke-interrupt.ts",
     "smoke:provider-error": "node scripts/smoke-provider-error.ts",
+    "smoke:nudge": "node scripts/smoke-nudge.ts",
     "link-plugin": "herdr plugin link ./herdr-plugin --enabled"
   },
   "pi": {
