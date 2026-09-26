@@ -97,6 +97,7 @@ test("child argv puts the session, the hook, and the task in that order", () => 
 		piBin: "pi",
 		childSessionFile: "/s.jsonl",
 		childExtensionPath: "/child.ts",
+		name: "worker",
 		model: "oc-openai/deepseek-flash",
 		thinking: "low",
 		tools: ["read", "bash"],
@@ -108,6 +109,8 @@ test("child argv puts the session, the hook, and the task in that order", () => 
 		"/s.jsonl",
 		"-e",
 		"/child.ts",
+		"--name",
+		"worker",
 		"--model",
 		"oc-openai/deepseek-flash",
 		"--thinking",
@@ -118,11 +121,26 @@ test("child argv puts the session, the hook, and the task in that order", () => 
 	]);
 });
 
+test("the display name reaches the child verbatim", () => {
+	// No munging: the caller already decided the label, and `safeName` is only
+	// for filenames. Spaces and capitals survive into `pi --name`.
+	const argv = buildPiArgv({
+		piBin: "pi",
+		childSessionFile: "/s.jsonl",
+		childExtensionPath: "/child.ts",
+		name: "Worker One",
+		taskFile: "/t.md",
+	});
+	assert.deepEqual(argv.slice(5, 7), ["--name", "Worker One"]);
+	assert.equal(argv.filter((arg) => arg === "--name").length, 1);
+});
+
 test("optional flags are omitted rather than passed empty", () => {
 	const argv = buildPiArgv({
 		piBin: "pi",
 		childSessionFile: "/s.jsonl",
 		childExtensionPath: "/child.ts",
+		name: "",
 		model: null,
 		thinking: null,
 		tools: [],
@@ -138,6 +156,7 @@ test("optional flags are omitted rather than passed empty", () => {
 	]);
 	assert.equal(argv.includes("--model"), false);
 	assert.equal(argv.includes("--tools"), false);
+	assert.equal(argv.includes("--name"), false);
 });
 
 test("the wrapper always stamps the exit-code sidecar with the run id", () => {

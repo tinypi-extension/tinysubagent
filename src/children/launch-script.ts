@@ -107,6 +107,8 @@ export interface PiArgvOptions {
 	piBin: string;
 	childSessionFile: string;
 	childExtensionPath: string;
+	/** Session display name, passed through verbatim as `--name`. */
+	name?: string | null;
 	model?: string | null;
 	thinking?: string | null;
 	tools?: string[] | null;
@@ -120,6 +122,7 @@ export interface PiArgvOptions {
  */
 export function buildPiArgv(opts: PiArgvOptions): string[] {
 	const argv = [opts.piBin, "--session", opts.childSessionFile, "-e", opts.childExtensionPath];
+	if (opts.name) argv.push("--name", opts.name);
 	if (opts.model) argv.push("--model", opts.model);
 	if (opts.thinking) argv.push("--thinking", opts.thinking);
 	if (opts.tools && opts.tools.length > 0) argv.push("--tools", opts.tools.join(","));

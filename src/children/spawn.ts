@@ -95,6 +95,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		piBin: resolvePiBin(context.env),
 		childSessionFile: paths.childSessionFile,
 		childExtensionPath,
+		name: request.name,
 		model: profile.model,
 		thinking: profile.thinking,
 		tools,

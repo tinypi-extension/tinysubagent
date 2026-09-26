@@ -206,13 +206,13 @@ function writtenScript(sessionDir: string, sessionId: string): string {
  * cannot exist, so the spawn fails at the last step. That is far enough: the
  * launch files, allowlist included, are written before herdr is ever called.
  */
-async function spawnInScratch(agent: AgentDef): Promise<string> {
+async function spawnInScratch(agent: AgentDef, name: string = agent.name): Promise<string> {
 	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-spawn-"));
 	const saved = process.env.HERDR_BIN_PATH;
 	process.env.HERDR_BIN_PATH = join(dir, "no-herdr-here");
 	try {
 		const result = await spawnOne(
-			{ agent: agent.name, task: "x", name: agent.name },
+			{ agent: agent.name, task: "x", name },
 			{ ...context([agent]), cwd: dir, agentDir: dir, sessionDir: dir, env: {} },
 		);
 		assert.equal(result.ok, false);
@@ -250,6 +250,21 @@ test("a wildcard that matches nothing does not produce a one-tool allowlist", as
 	const unmatched: AgentDef = { ...worker, name: "unmatched", tools: ["codegraph_*"] };
 	const script = await spawnInScratch(unmatched);
 	assert.equal(script.includes("--tools"), false);
+});
+
+test("the spawn name becomes the child's own session display name", async () => {
+	// The child pi is started with `--name`, so its header and session list show a
+	// real label instead of the session file's generated id. Passed verbatim.
+	const script = await spawnInScratch(worker, "Worker One");
+	assert.match(script, /'--name' 'Worker One'/);
+	assert.equal(script.split("--name").length - 1, 1);
+});
+
+test("an empty spawn name passes no display-name flag", async () => {
+	// No name means unchanged argv: a bare `--name ''` would be a visible blank
+	// label, not "no label".
+	const script = await spawnInScratch(worker, "");
+	assert.equal(script.includes("--name"), false);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
