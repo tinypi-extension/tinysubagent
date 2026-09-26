@@ -254,3 +254,50 @@ test("an explicit launch prefix wins over the direnv default", () => {
 		"custom",
 	);
 });
+
+/** A minimal wrapper with the config env map the caller hands in. */
+function scriptWithEnv(env: Record<string, string> | undefined): string {
+	return buildLaunchScript({
+		name: "w",
+		agent: null,
+		id: "1",
+		cwd: "/proj",
+		piArgv: ["pi"],
+		envPath: "/usr/bin",
+		agentDir: null,
+		childSessionFile: "/s.jsonl",
+		reportFile: "/s.jsonl.done",
+		exitCodeFile: "/s.jsonl.exitcode",
+		holdOpenSecs: 0,
+		env,
+	});
+}
+
+test("config env is exported before the launch-owned PATH", () => {
+	const script = scriptWithEnv({ FOO: "bar", EMPTY: "" });
+	assert.match(script, /^export FOO='bar'$/m);
+	assert.match(script, /^export EMPTY=''$/m);
+	// The config block precedes PATH, so a config "PATH" is overwritten by the
+	// wrapper rather than needing a blocklist to keep the two in sync.
+	assert.equal(script.includes("# tinysubagent: env from config"), true);
+	assert.ok(script.indexOf("export FOO='bar'") < script.indexOf("export PATH="));
+	assert.ok(script.indexOf("# tinysubagent: env from config") < script.indexOf("export PATH="));
+});
+
+test("an env value containing a quote is escaped, not broken", () => {
+	const script = scriptWithEnv({ QUOTED: "test's" });
+	assert.match(script, /^export QUOTED='test'\\''s'$/m);
+});
+
+test("a newline in an env value stays inside the single-quoted word", () => {
+	const script = scriptWithEnv({ MULTI: "one\ntwo" });
+	// One export line, with the literal newline kept inside its quotes.
+	assert.match(script, /^export MULTI='one\ntwo'$/m);
+});
+
+test("no env means no env block at all", () => {
+	assert.equal(scriptWithEnv(undefined).includes("# tinysubagent: env from config"), false);
+	assert.equal(scriptWithEnv({}).includes("# tinysubagent: env from config"), false);
+	// Omitting the option and passing an empty map generate the same script.
+	assert.equal(scriptWithEnv(undefined), scriptWithEnv({}));
+});

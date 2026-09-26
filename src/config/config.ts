@@ -36,6 +36,8 @@ export interface ConfigSource {
 export interface TinysubagentConfig {
 	enableProfiles: boolean;
 	profiles: Record<string, Profile>;
+	/** Plain `NAME` → value pairs exported into the child's shell. Always present. */
+	env: Record<string, string>;
 	/**
 	 * Every file that was read successfully, highest precedence first. It rides
 	 * along with the config so a message raised long after loading (a named profile
@@ -279,6 +281,37 @@ function mergeProfiles(
 }
 
 /**
+ * Fold one file's env map in, overwriting same-named keys from lower scopes.
+ * Values are strings only — never coerced — and a key must be a POSIX shell
+ * identifier, because `export 'a b'=x` would corrupt the whole wrapper.
+ */
+function mergeEnv(
+	root: Record<string, unknown>,
+	file: string,
+	env: Record<string, string>,
+	warnings: string[],
+): void {
+	if (root.env === undefined) return;
+	if (typeof root.env !== "object" || root.env === null || Array.isArray(root.env)) {
+		warnings.push(`tinysubagent: "env" must be an object in ${file}; ignoring it.`);
+		return;
+	}
+	for (const [key, value] of Object.entries(root.env as Record<string, unknown>)) {
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+			warnings.push(
+				`tinysubagent: env key "${key}" in ${file} is not a valid shell identifier; ignoring it.`,
+			);
+			continue;
+		}
+		if (typeof value !== "string") {
+			warnings.push(`tinysubagent: env "${key}" in ${file} is not a string; ignoring it.`);
+			continue;
+		}
+		env[key] = value;
+	}
+}
+
+/**
  * Resolve the effective config from every existing scope. A missing file is not
  * an error and not a warning — it is the documented default state meaning
  * "profiles are off".
@@ -300,6 +333,7 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	const candidates = override ? [override] : configSources(cwd, agentDir);
 
 	const profiles: Record<string, Profile> = {};
+	const env: Record<string, string> = {};
 	const sources: ConfigSource[] = [];
 	let enableProfiles = false;
 
@@ -317,6 +351,7 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 			enableProfiles = root.enableProfiles === true;
 		}
 		mergeProfiles(root, source.file, profiles, warnings);
+		mergeEnv(root, source.file, env, warnings);
 	}
 
 	if (enableProfiles && Object.keys(profiles).length === 0) {
@@ -327,5 +362,5 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 		);
 	}
 
-	return { config: { enableProfiles, profiles, sources }, warnings };
+	return { config: { enableProfiles, profiles, env, sources }, warnings };
 }

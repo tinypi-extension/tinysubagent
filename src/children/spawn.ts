@@ -109,6 +109,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		cwd: context.cwd,
 		piArgv,
 		envPath: context.env.PATH ?? "",
+		env: context.config.env,
 		agentDir: context.agentDirOverride,
 		childSessionFile: paths.childSessionFile,
 		reportFile: paths.reportFile,

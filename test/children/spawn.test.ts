@@ -144,7 +144,7 @@ function context(agents: readonly AgentDef[], allToolNames: string[] = ["read", 
 		env: {},
 		allToolNames,
 		agents,
-		config: { enableProfiles: false, profiles: {}, sources: [] },
+		config: { enableProfiles: false, profiles: {}, env: {}, sources: [] },
 	};
 }
 
@@ -206,14 +206,15 @@ function writtenScript(sessionDir: string, sessionId: string): string {
  * cannot exist, so the spawn fails at the last step. That is far enough: the
  * launch files, allowlist included, are written before herdr is ever called.
  */
-async function spawnInScratch(agent: AgentDef, name: string = agent.name): Promise<string> {
+async function spawnInScratch(agent: AgentDef, name: string = agent.name, configEnv: Record<string, string> = {}): Promise<string> {
 	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-spawn-"));
 	const saved = process.env.HERDR_BIN_PATH;
 	process.env.HERDR_BIN_PATH = join(dir, "no-herdr-here");
 	try {
+		const base = context([agent]);
 		const result = await spawnOne(
 			{ agent: agent.name, task: "x", name },
-			{ ...context([agent]), cwd: dir, agentDir: dir, sessionDir: dir, env: {} },
+			{ ...base, cwd: dir, agentDir: dir, sessionDir: dir, env: {}, config: { ...base.config, env: configEnv } },
 		);
 		assert.equal(result.ok, false);
 		assert.match(result.ok === false ? result.error : "", /could not open a pane/);
@@ -265,6 +266,13 @@ test("an empty spawn name passes no display-name flag", async () => {
 	// label, not "no label".
 	const script = await spawnInScratch(worker, "");
 	assert.equal(script.includes("--name"), false);
+});
+
+test("config env reaches the generated launch script", async () => {
+	// The only test that catches spawn.ts forgetting to hand the map to the
+	// wrapper it generates.
+	const script = await spawnInScratch(worker, "worker", { FOO: "bar" });
+	assert.match(script, /^export FOO='bar'$/m);
 });
 
 // ────────────────────────────────────────────────────────────────────────────

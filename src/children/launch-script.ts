@@ -33,6 +33,8 @@ export interface LaunchScriptOptions {
 	launchPrefix?: string;
 	/** Close the pane even on a crash instead of holding it open for inspection. */
 	holdOpenSecs?: number;
+	/** Plain NAME → value pairs from the settings file, exported before launch-owned vars. */
+	env?: Record<string, string>;
 }
 
 export const DEFAULT_HOLD_OPEN_SECS = 15;
@@ -62,8 +64,18 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
 		"# Ignore SIGTSTP: an argv-launched pane has no interactive parent shell to",
 		"# resume from, so Ctrl+Z would wedge the pane permanently.",
 		"trap '' TSTP",
-		`export PATH=${shellEscape(opts.envPath)}`,
 	];
+
+	// Config-owned variables come before every launch-owned export, so the wrapper's
+	// own PATH and PI_* values win on a collision without a blocklist to maintain.
+	if (opts.env && Object.keys(opts.env).length > 0) {
+		lines.push("# tinysubagent: env from config");
+		for (const [key, value] of Object.entries(opts.env)) {
+			lines.push(`export ${key}=${shellEscape(value)}`);
+		}
+	}
+
+	lines.push(`export PATH=${shellEscape(opts.envPath)}`);
 
 	if (opts.agentDir) {
 		lines.push(`export PI_CODING_AGENT_DIR=${shellEscape(opts.agentDir)}`);

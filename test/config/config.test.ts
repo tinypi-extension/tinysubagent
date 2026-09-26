@@ -390,6 +390,90 @@ test("a project file defining profiles while enableProfiles is off stays silent"
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// env: a plain NAME → value map, merged per key like profiles
+// ────────────────────────────────────────────────────────────────────────────
+
+test("an env map is read from one file", () => {
+	const file = writeConfig({ env: { FOO: "bar", PATH: "/custom" } });
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.env, { FOO: "bar", PATH: "/custom" });
+	assert.deepEqual(warnings, []);
+});
+
+test("an absent env key yields an empty map with no warning", () => {
+	const { config, warnings } = read(writeConfig({}));
+	assert.deepEqual(config.env, {});
+	assert.deepEqual(warnings, []);
+});
+
+test("env merges per key with the project winning and global-only keys surviving", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, JSONC_CONFIG_FILENAME, { env: { FOO: "global", BAR: "global-only" } });
+	writeProject(cwd, JSONC_CONFIG_FILENAME, { env: { FOO: "project", BAZ: "project-only" } });
+
+	const { config, warnings } = loadConfig(cwd, agentDir);
+	assert.deepEqual(config.env, { FOO: "project", BAR: "global-only", BAZ: "project-only" });
+	assert.deepEqual(warnings, []);
+});
+
+test("the override short-circuits and ignores both scopes' env", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, JSONC_CONFIG_FILENAME, { env: { FROM_GLOBAL: "g" } });
+	writeProject(cwd, JSONC_CONFIG_FILENAME, { env: { FROM_PROJECT: "p" } });
+	const override = writeConfig({ env: { FROM_OVERRIDE: "o" } });
+
+	withEnv(override, () => {
+		const { config, warnings } = loadConfig(cwd, agentDir);
+		assert.deepEqual(config.env, { FROM_OVERRIDE: "o" });
+		assert.deepEqual(warnings, []);
+	});
+});
+
+test("a non-string env value is skipped with one warning naming the key and the file", () => {
+	const file = writeConfig({ env: { A: "1", B: 5 } });
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.env, { A: "1" });
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0] ?? "", /env "B" in .* is not a string; ignoring it\./);
+	assert.ok(warnings[0]?.includes(file), `warning did not name ${file}: ${warnings[0]}`);
+});
+
+test("every non-string value type is rejected, never coerced", () => {
+	const file = writeConfig({ env: { N: 5, F: false, Z: null, O: { a: 1 }, A: [1] } });
+	const { config, warnings } = read(file);
+	// No value is stringified: booleans, numbers, null, objects and arrays are out.
+	assert.deepEqual(config.env, {});
+	assert.equal(warnings.length, 5);
+});
+
+test("a non-object env drops the whole map with one warning", () => {
+	for (const bad of [["A"], "A", 5]) {
+		const file = writeConfig({ env: bad });
+		const { config, warnings } = read(file);
+		assert.deepEqual(config.env, {});
+		assert.equal(warnings.length, 1);
+		assert.match(warnings[0] ?? "", /"env" must be an object/);
+		assert.ok(warnings[0]?.includes(file), `warning did not name ${file}: ${warnings[0]}`);
+	}
+});
+
+test("an invalid env key is skipped while the rest of the block lands", () => {
+	const file = writeConfig({ env: { "a b": "bad", X: "1" } });
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.env, { X: "1" });
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0] ?? "", /env key "a b" in .* is not a valid shell identifier/);
+	assert.ok(warnings[0]?.includes(file), `warning did not name ${file}: ${warnings[0]}`);
+});
+
+test("an empty env value survives as an empty string", () => {
+	const { config, warnings } = read(writeConfig({ env: { EMPTY: "" } }));
+	assert.deepEqual(config.env, { EMPTY: "" });
+	assert.equal(config.env.EMPTY, "");
+	assert.deepEqual(warnings, []);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // Failure: a bad file is skipped, and a lower scope can still carry the config
 // ────────────────────────────────────────────────────────────────────────────
 
