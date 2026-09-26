@@ -11,6 +11,7 @@ window, and reports back as a steer message.
   orchestrator keeps 3/5 of the split; every live sub shares one right-hand column, stacked
   and equal in height.
 - **Model profiles** — optional `light` / `core` / `pro`-style (or whatever you use) with `{ model, thinking }` pairs.
+- **Per-child `env`** — hand a subagent static variables without changing the orchestrator's own environment.
 - **Small enough to read** — one `index.ts` plus focused modules.
 
 The tool is registered **only when pi runs inside herdr**. Outside herdr there is no pane
@@ -107,64 +108,6 @@ Notes on `tools`:
   explanation: a grandchild's result lands in the subagent's own session, and nothing
   carries it up to the orchestrator.
 
-## Use it
-
-The tool name is `subagent`.
-
-```
-subagent({ agent: "scout", task: "Map how config resolution works in src/config/config.ts and report the precedence order.", name: "config-recon" })
-```
-
-```
-subagent({
-  tasks: [
-    { agent: "scout",   task: "Find every call site of spawnOne and report them.",            name: "spawn-sites" },
-    { agent: "worker",  task: "Add a unit test for resolveProfile with an unknown profile.",  name: "profile-test", profile: "light" }
-  ]
-})
-```
-
-| Parameter | Applies to | Notes |
-| --- | --- | --- |
-| `agent` | single | Role name, from those listed in the tool description. |
-| `task` | single | Complete, self-contained brief. The child cannot see this conversation. |
-| `tasks` | parallel | Array of `{ agent, task, name?, profile? }`. Maximum 4. |
-| `name` | both | Label for the pane and result. Defaults to the agent name. |
-| `profile` | both | Only present when profiles are enabled. Defaults to your session's model and thinking. |
-| `cwd` | both | Defaults to this session's cwd. |
-
-Lifecycle:
-
-1. Returns immediately with an acknowledgment line per child, plus the panes opened. The
-   first child splits a right-hand column off the orchestrator, which is resized to 3/5 of
-   the split rect; a later child joins that live column and re-divides it equally.
-2. End your turn and wait — no polling, no unrelated work.
-3. One steer message arrives for the batch, labelled per child.
-4. A pane closes only when its child calls `subagent_report` (then it is `completed`),
-   when the user quits it (exit 0 → `completed`), or when it is closed by hand
-   (`cancelled`). A child that ends its turn without reporting keeps its pane open and
-   **holds the batch** — ask it for the report in the pane. A failed child is marked
-   `failed` and its pane left open. A close does **not** rebalance the survivors — the
-   layout is set at spawn time — and because the 3/5 pass fires only when the column is
-   born, a divider you dragged by hand is never snapped back.
-
-You can type into a child's pane at any time. Esc **is not a completion**: the child stays
-in the batch, its pane stays open, and the batch is held until it reports or the pane goes
-away. An interrupted child is not `failed`.
-
-The silence is only for a child that is still alive and steerable. One that pi refuses to
-start at all — no model selected, or no usable credentials for the provider it was spawned
-with — is reported as `failed (error)`, with the reason in the message:
-
-```
-**Error:** pi could not start this subagent: no API key configured for "oc-openai" — run /login oc-openai.
-```
-
-So an interrupt is not `failed`, but the redirect the user types into that pane is, if pi
-refuses to run it. The pane stays open either way, and that is where the credential gets
-fixed; without the report the batch would wait on the child forever, because a run that
-never started settles nothing.
-
 ## Profiles
 
 A profile is a `{ model, thinking }` pair a child is launched with, configured in
@@ -202,9 +145,9 @@ A profile is a `{ model, thinking }` pair a child is launched with, configured i
 
 - **Scope beats filename:** a project `.json` outranks a global `.jsonc`.
 - **Within one directory** `.jsonc` wins and the sibling `.json` is silently ignored.
-- Files **layer**: `profiles` merge by name, higher scope winning per name, so a project
-  file can add one profile and inherit the rest. `enableProfiles` comes from the
-  highest-precedence file specifying it.
+- Files **layer**: `profiles` merge by name and `env` merges per key, higher scope winning,
+  so a project file can add one profile or one variable and inherit the rest.
+  `enableProfiles` comes from the highest-precedence file specifying it.
 - Both formats allow comments and trailing commas.
 - An unreadable or unparseable file is skipped with a warning naming it, and the next
   scope applies.
@@ -216,6 +159,36 @@ To commit a project config under a bare `.pi/` gitignore rule you need a negatio
 .pi/*
 !.pi/tinysubagent.jsonc
 ```
+- Config with TUI via `/subagent-settings`
+## Environment variables
+
+`env` hands each subagent a static variable without changing the environment of the session
+that spawned it — nothing is exported into the orchestrator:
+
+```jsonc
+{
+  "env": {
+    "PROJECT_NAME": "tinysubagent",
+    "VERBOSE": "1"
+  }
+}
+```
+
+- **Values are strings, always.** A number, boolean, `null`, array or object is skipped with
+  a warning rather than coerced. `{"DEBUG": false}` would otherwise export the string
+  `"false"`, which every shell test reads as *true*; and a JSON number round-trips through
+  IEEE754, so `1.0` becomes `"1"` and a long numeric id loses its last digits.
+- **Keys must be shell identifiers** — `[A-Za-z_][A-Za-z0-9_]*`. `"a b"` is skipped with a
+  warning, because `export a b=x` breaks the whole launch script, not just one variable.
+- `"FOO": ""` exports `FOO` as set-but-empty. Omit the key to leave it unset.
+- **Merged per key**, project over global, exactly like `profiles`; a
+  `$PI_TINYSUBAGENT_CONFIG` override replaces both.
+- **A collision goes to the launcher.** `PATH`, `PI_CODING_AGENT_DIR` and the
+  `PI_TINYSUBAGENT_*` variables a child uses to report back are written after `env`, so a
+  config value of the same name is overwritten.
+
+A bad entry never blocks a spawn: the key is dropped, the warning joins the other config
+warnings at session start, and the child launches with everything that was valid.
 
 ## Troubleshooting
 
@@ -228,6 +201,8 @@ To commit a project config under a bare `.pi/` gitignore rule you need a negatio
 | "no agent definitions found" | No role files | Add a markdown file with `name`, `description`, `tools` frontmatter. |
 | `profile "x" cannot be used: profiles are disabled` | `enableProfiles` is not `true` | Set it in the highest-precedence file named in the error. |
 | `unknown profile "x"` | Typo, or the profile is in a lower-precedence file | Check the names in the error and that profile's config file. |
+| `env "DEBUG" … is not a string` | A non-string `env` value | Quote it: `"DEBUG": "0"`. Booleans and numbers are skipped, not converted. |
+| `env key "a b" … is not a valid shell identifier` | Key is not a shell name | Use letters, digits and `_`, not starting with a digit. |
 | A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion; a long child holds the batch — watch its pane. |
 | Warnings about unmatched tool patterns | A `tools` entry matched no real tool | Fix the typo or wildcard in that role's frontmatter. |
 | "Nested delegation is not supported yet" | A role lists `subagent` in `tools` | Remove it from that role's frontmatter. |
