@@ -10,9 +10,12 @@
  * is a deliberate choice over registering-and-failing: outside herdr there is no
  * pane to split, so offering the tool would only invite calls that cannot work.
  *
- * Only three things leave the orchestrator's process: the launch script it
- * writes, the `herdr plugin pane open` call that runs it, and the poll that
- * notices when the child is done. Everything else is a file on disk.
+ * Only four things leave the orchestrator's process: the launch script it
+ * writes, the `herdr plugin pane open` call that runs it, the poll that
+ * notices when the child is done, and — only when a `systemOneAPIKey` is
+ * configured — the SystemOne routing request, which carries each task brief
+ * to `systemOneBaseUrl` to choose the child's profile. Everything else is a
+ * file on disk.
  *
  * This file is wiring only. The tool definition lives in `src/pi/tool.ts`, the
  * session hooks in `src/pi/lifecycle.ts`, and the per-registration state below
@@ -30,6 +33,7 @@ import { registerLifecycle } from "./src/pi/lifecycle.ts";
 import { offerPluginFix, type PluginFixGuard } from "./src/pi/plugin-fix.ts";
 import { createTool } from "./src/pi/tool.ts";
 import { createSettingsScreen } from "./src/pi/settings-tui.ts";
+import { createRouteFn } from "./src/systemone/route.ts";
 
 export default function tinysubagent(pi: ExtensionAPI): void {
 	// Registered above the herdr guard: editing a config file needs no pane, so the
@@ -94,6 +98,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 			columns,
 			watchers,
 			isShuttingDown: () => shuttingDown,
+			route: createRouteFn(config),
 		}),
 	);
 }

@@ -23,6 +23,23 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 // strictness.
 import { parse as parseJsonc, printParseErrorCode, type ParseError } from "jsonc-parser";
 import { isThinkingLevel, type Profile } from "../types.ts";
+import { DEFAULT_SYSTEMONE_BASE_URL, normalizeBaseUrl } from "../systemone/client.ts";
+
+/** Re-exported so callers of the config need not know where the default lives. */
+export { DEFAULT_SYSTEMONE_BASE_URL };
+
+/**
+ * SystemOne profile routing, resolved from the override or global file only.
+ * A repo-checked-in project file can never aim the routing key at a host of its
+ * choosing, so project scope is inert for both keys.
+ */
+export interface SystemOneConfig {
+	apiKey: string;
+	/** Normalised: no trailing `/`, `/v1` or `/systemone`. */
+	baseUrl: string;
+	/** Absolute path of the file that supplied the key. */
+	file: string;
+}
 
 /** Which scope a config file belongs to. Scope outranks the filename. */
 export type ConfigScope = "override" | "project" | "global";
@@ -38,6 +55,11 @@ export interface TinysubagentConfig {
 	profiles: Record<string, Profile>;
 	/** Plain `NAME` → value pairs exported into the child's shell. Always present. */
 	env: Record<string, string>;
+	/**
+	 * Routing credentials when a `systemOneAPIKey` was resolved from the override
+	 * or global file, `null` when routing is off. Project scope never decides it.
+	 */
+	systemOne: SystemOneConfig | null;
 	/**
 	 * Every file that was read successfully, highest precedence first. It rides
 	 * along with the config so a message raised long after loading (a named profile
@@ -312,6 +334,84 @@ function mergeEnv(
 }
 
 /**
+ * Resolve the SystemOne routing keys from the files that were successfully read,
+ * highest precedence first. Only the override and global scopes carry weight:
+ * a project file that mentions either key is inert and warned about, because a
+ * repository must not be able to enable routing (and aim briefs at a host) or
+ * redirect an inherited key.
+ *
+ * The `{key, baseUrl}` pair resolves together, from one file: the first file
+ * supplying `systemOneAPIKey` decides on/off *and* supplies `systemOneBaseUrl`;
+ * a URL anywhere else is ignored. Every refusal — a non-string, empty, or
+ * null-clearing key, an unusable URL — turns routing off without falling
+ * through to a lower file, and no warning ever names the key or the URL.
+ */
+function resolveSystemOne(
+	read: readonly { source: ConfigSource; root: Record<string, unknown> }[],
+	warnings: string[],
+): SystemOneConfig | null {
+	for (let i = read.length - 1; i >= 0; i--) {
+		const { source, root } = read[i]!;
+		const hasKey = Object.hasOwn(root, "systemOneAPIKey");
+		const hasUrl = Object.hasOwn(root, "systemOneBaseUrl");
+		if (source.scope === "project") {
+			if (hasKey || hasUrl) {
+				warnings.push(
+					`tinysubagent: ${source.file} is project-scoped, so its routing keys are ignored; ` +
+						`put "systemOneAPIKey" and "systemOneBaseUrl" in the override or global file.`,
+				);
+			}
+			continue;
+		}
+		if (!hasKey) {
+			if (hasUrl) {
+				warnings.push(
+					`tinysubagent: "systemOneBaseUrl" in ${source.file} is ignored because that file ` +
+						`has no "systemOneAPIKey"; routing keys resolve together from one file.`,
+				);
+			}
+			continue;
+		}
+		// This file supplies the key, so it decides on/off and owns the URL.
+		const rawKey = root.systemOneAPIKey;
+		if (rawKey === null) return null; // an explicit clear, not a mistake
+		if (typeof rawKey !== "string") {
+			warnings.push(
+				`tinysubagent: "systemOneAPIKey" in ${source.file} is not a string; routing is off.`,
+			);
+			return null;
+		}
+		const apiKey = rawKey.trim();
+		if (apiKey === "") {
+			warnings.push(
+				`tinysubagent: "systemOneAPIKey" in ${source.file} is empty; routing is off.`,
+			);
+			return null;
+		}
+		const rawUrl = root.systemOneBaseUrl;
+		if (rawUrl === undefined) {
+			return { apiKey, baseUrl: DEFAULT_SYSTEMONE_BASE_URL, file: source.file };
+		}
+		if (typeof rawUrl !== "string") {
+			warnings.push(
+				`tinysubagent: "systemOneBaseUrl" in ${source.file} is not a string; routing is off.`,
+			);
+			return null;
+		}
+		const baseUrl = normalizeBaseUrl(rawUrl);
+		if (baseUrl === null) {
+			warnings.push(
+				`tinysubagent: "systemOneBaseUrl" in ${source.file} is not a usable http(s) URL; ` +
+					`routing is off.`,
+			);
+			return null;
+		}
+		return { apiKey, baseUrl, file: source.file };
+	}
+	return null;
+}
+
+/**
  * Resolve the effective config from every existing scope. A missing file is not
  * an error and not a warning — it is the documented default state meaning
  * "profiles are off".
@@ -335,6 +435,9 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	const profiles: Record<string, Profile> = {};
 	const env: Record<string, string> = {};
 	const sources: ConfigSource[] = [];
+	// Every root that parsed, in read order (lowest precedence first), so the
+	// routing resolver can walk them highest-first without re-reading anything.
+	const read: { source: ConfigSource; root: Record<string, unknown> }[] = [];
 	let enableProfiles = false;
 
 	// Lowest precedence first, so a later (higher-precedence) read overwrites.
@@ -352,7 +455,10 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 		}
 		mergeProfiles(root, source.file, profiles, warnings);
 		mergeEnv(root, source.file, env, warnings);
+		read.push({ source, root });
 	}
+
+	const systemOne = resolveSystemOne(read, warnings);
 
 	if (enableProfiles && Object.keys(profiles).length === 0) {
 		const named = sources[0]?.file ?? CONFIG_FILENAME;
@@ -362,5 +468,5 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 		);
 	}
 
-	return { config: { enableProfiles, profiles, env, sources }, warnings };
+	return { config: { enableProfiles, profiles, env, systemOne, sources }, warnings };
 }

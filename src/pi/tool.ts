@@ -33,6 +33,7 @@ import { type TinysubagentConfig } from "../config/config.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { collectRequests, resolveCwd, resolveProjectAgentDir } from "../children/requests.ts";
 import { TOOL_NAME, parentModelSpec, parentThinking, spawnOne } from "../children/spawn.ts";
+import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.ts";
 import type { SpawnContext, ToolParams } from "../children/contract.ts";
 import type { RunningSubagent } from "../children/watcher.ts";
 import type { AgentDef } from "../types.ts";
@@ -66,10 +67,16 @@ export interface ToolDeps {
 	watchers: Set<AbortController>;
 	/** Reads the caller's shutdown flag, so delivery stops after it. */
 	isShuttingDown: () => boolean;
+	/**
+	 * The routing seam: when a SystemOne key is configured, rewrites each
+	 * request's profile before the validation loop. Injectable so tests never
+	 * touch the network.
+	 */
+	route: RouteFn;
 }
 
 export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> {
-	const { pi, config, parameters, advertisedAgents, capability, columns, watchers, isShuttingDown } = deps;
+	const { pi, config, parameters, advertisedAgents, capability, columns, watchers, isShuttingDown, route } = deps;
 
 	return {
 		name: TOOL_NAME,
@@ -97,6 +104,21 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 
 			const mode = collectRequests(params);
 			if (!mode.ok) return failure(mode.error);
+
+			// Routing rewrites each request's profile before the validation loop
+			// runs. It never fails a spawn: every transport failure, rejection, or
+			// incoherent answer lands on `current` inside routeProfiles, and
+			// requests whose agent is unknown are skipped there — they are refused
+			// by the loop below exactly as before, with no brief sent for a spawn
+			// that will not happen.
+			const routeWarnings: string[] = [];
+			if (routingActive(config)) {
+				await routeProfiles(mode.requests, config, {
+					route,
+					agents: discovered.agents,
+					warn: (message) => routeWarnings.push(message),
+				});
+			}
 
 			// Validate every profile before opening any pane, so a bad batch fails
 			// whole rather than halfway.
@@ -155,6 +177,12 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				...spawned.map((entry) => ackLine(entry)),
 				...failures.map((entry) => `failed ${entry.agent}: ${entry.error}`),
 				...spawned.flatMap((entry) => entry.warnings),
+				// Routing warnings are diagnostic text for the model — the choice
+				// fell back to `current` and the model should know why. `renderResult`
+				// stays as-is deliberately: it is the same parts with a theme, so
+				// plain-text lines the renderer has never been taught about would
+				// only lose their meaning in colour.
+				...routeWarnings,
 			];
 
 			const note = runnings.length === 0 ? NOTE_NOTHING : NOTE_STARTED;

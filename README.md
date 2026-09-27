@@ -127,7 +127,8 @@ A profile is a `{ model, thinking }` pair a child is launched with, configured i
 - `current` is built in, means "inherit this session", and **cannot be redefined** (a
   config that tries is ignored with a warning).
 - A named profile is refused unless `enableProfiles` is literally `true`. When profiles are
-  off the `profile` parameter is removed from the schema entirely.
+  off — or SystemOne routing is active — the `profile` parameter is removed from the schema
+  entirely.
 - `model` and `thinking` are each optional and fall back to your session's value.
 - `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Unknown values
   warn and are ignored.
@@ -160,6 +161,42 @@ To commit a project config under a bare `.pi/` gitignore rule you need a negatio
 !.pi/tinysubagent.jsonc
 ```
 - Config with TUI via `/subagent-settings`
+
+### SystemOne routing
+
+When a SystemOne key is configured, the orchestrator asks a routing service to pick the
+profile for each task instead of making the model choose `profile` itself:
+
+```jsonc
+{
+  "enableProfiles": true,
+  "profiles": { "light": { "model": "<small-model>", "thinking": "low" } },
+  "systemOneAPIKey": "sk-…",                     // a secret — treat it like any API key
+  "systemOneBaseUrl": "https://api.typesafe.ai"  // optional; this is the default
+}
+```
+
+- Routing is active when **all three** hold: a `systemOneAPIKey` is configured,
+  `enableProfiles` is `true`, and at least one named profile exists. Then the `profile`
+  parameter disappears from the tool schema and SystemOne chooses the profile per task
+  from the configured names.
+- **The pair resolves as one unit, from one file.** The first file supplying
+  `systemOneAPIKey` decides whether routing is on *and* supplies the `systemOneBaseUrl`;
+  a `systemOneBaseUrl` in any other file is ignored.
+- **Project scope is inert for both keys.** A checked-in project file can neither enable,
+  disable, nor redirect routing — put them in the override or global file.
+- `http:` base URLs are accepted only for loopback hosts (`localhost`, `127.0.0.1`,
+  `::1`).
+- **Every failure falls back to `current`**, and never fails or delays a spawn beyond a
+  2 s budget: no key configured, a timeout, a non-2xx/3xx status, an unparseable body, an
+  answer without `probabilities`, or a chosen name that is not a configured profile. The
+  invariant: with routing on, `[current]` in a spawn acknowledgment means the SystemOne
+  call produced **no decision** — `current` is never a routing outcome.
+- **Privacy cost:** enabling the key means **every task brief leaves the machine** and is
+  readable by the provider at `systemOneBaseUrl`. Briefs contain code and file contents.
+- Hand-edit only: `/subagent-settings` edits `enableProfiles` and `profiles.<name>`, never
+  the routing keys.
+
 ## Environment variables
 
 `env` hands each subagent a static variable without changing the environment of the session
@@ -206,6 +243,11 @@ warnings at session start, and the child launches with everything that was valid
 | A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion; a long child holds the batch — watch its pane. |
 | Warnings about unmatched tool patterns | A `tools` entry matched no real tool | Fix the typo or wildcard in that role's frontmatter. |
 | "Nested delegation is not supported yet" | A role lists `subagent` in `tools` | Remove it from that role's frontmatter. |
+| `<file> is project-scoped, so its routing keys are ignored` | `systemOneAPIKey` or `systemOneBaseUrl` sits in a checked-in project file | Project scope is inert for the routing keys; put both in the override or global file. |
+| `"systemOneBaseUrl" in <file> is ignored because that file has no "systemOneAPIKey"` | The routing keys resolve together from one file | Move `systemOneBaseUrl` into the same file as the `systemOneAPIKey` that turns routing on. |
+| `"systemOneAPIKey" in <file> is not a string` / `is empty` | A malformed or blank key | Routing is off; set the key as a non-empty string, or remove it. |
+| `"systemOneBaseUrl" in <file> is not a usable http(s) URL` | A malformed or non-https URL | Routing is off; use an `https:` URL (plain `http:` is accepted only for loopback). |
+| Spawn ack shows `[current]` while routing is on | The SystemOne call produced no decision (timeout, error, unusable answer) and the fallback applied | By design: `current` is never a routing outcome, and `[profile]` in an ack is always the *resolved* profile. |
 
 Config warnings are also surfaced as a notification at session start.
 

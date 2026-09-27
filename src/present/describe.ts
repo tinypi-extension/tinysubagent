@@ -11,6 +11,7 @@ import { Type, type TSchema } from "typebox";
 import { MAX_PARALLEL_TASKS } from "../children/requests.ts";
 import { CURRENT_PROFILE, type TinysubagentConfig } from "../config/config.ts";
 import { availableProfileNames, profileParamDescription } from "../config/profiles.ts";
+import { profileCandidates, routingActive } from "../systemone/route.ts";
 import { type AgentDef } from "../types.ts";
 
 export const MAX_LISTED_AGENTS = 12;
@@ -49,12 +50,24 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 	}
 
 	if (config.enableProfiles) {
-		lines.push(
-			"",
-			`Profiles: ${availableProfileNames(config)
+		if (routingActive(config)) {
+			// Routing picks, so the model is told what the chooser chooses among —
+			// and that it does not set `profile` at all.
+			const candidates = profileCandidates(config)
 				.map((name) => `\`${name}\``)
-				.join(", ")}. \`${CURRENT_PROFILE}\` is the default and runs on this session's model and thinking level.`,
-		);
+				.join(", ");
+			lines.push(
+				"",
+				`Profiles: chosen automatically per task by SystemOne from ${candidates}; you do not set \`profile\`. If routing produces no decision, the session's own model and thinking are used.`,
+			);
+		} else {
+			lines.push(
+				"",
+				`Profiles: ${availableProfileNames(config)
+					.map((name) => `\`${name}\``)
+					.join(", ")}. \`${CURRENT_PROFILE}\` is the default and runs on this session's model and thinking level.`,
+			);
+		}
 	}
 
 	return lines.join("\n");
@@ -69,10 +82,12 @@ export const PROMPT_GUIDELINES = [
 ];
 
 /**
- * The `profile` parameter only exists when profiles are enabled — the model is
- * never offered a knob that would do nothing.
+ * The `profile` parameter only exists when profiles are enabled *and routing
+ * is off* — the model is never offered a knob that would do nothing, and when
+ * routing is active the choice is not the model's to make.
  */
 export function buildParameters(config: TinysubagentConfig) {
+	const profileOffered = config.enableProfiles && !routingActive(config);
 	const properties: Record<string, TSchema> = {
 		agent: Type.Optional(
 			Type.String({
@@ -94,7 +109,9 @@ export function buildParameters(config: TinysubagentConfig) {
 					agent: Type.String({ description: "Role to run." }),
 					task: Type.String({ description: "Self-contained brief for this subagent." }),
 					name: Type.Optional(Type.String({ description: "Label for this subagent." })),
-					profile: Type.Optional(Type.String({ description: "Profile for this subagent." })),
+					...(profileOffered
+						? { profile: Type.Optional(Type.String({ description: "Profile for this subagent." })) }
+						: {}),
 				}),
 				{
 					maxItems: MAX_PARALLEL_TASKS,
@@ -107,7 +124,7 @@ export function buildParameters(config: TinysubagentConfig) {
 		),
 	};
 
-	if (config.enableProfiles) {
+	if (profileOffered) {
 		properties.profile = Type.Optional(Type.String({ description: profileParamDescription(config) }));
 	}
 	return Type.Object(properties);

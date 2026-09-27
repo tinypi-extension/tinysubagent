@@ -13,8 +13,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-
 import tinysubagent from "../../index.ts";
 import { discoverAgents } from "../../src/config/agents.ts";
 import { loadConfig } from "../../src/config/config.ts";
@@ -62,7 +60,7 @@ function stubApi() {
 
 /** Run the factory with a chosen herdr environment, restoring it afterwards. */
 function withEnv(env: Record<string, string | undefined>, run: () => void): void {
-	const keys = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH"];
+	const keys = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "PI_TINYSUBAGENT_CONFIG"];
 	const saved = keys.map((key) => [key, process.env[key]] as const);
 	for (const key of keys) {
 		const value = env[key];
@@ -175,28 +173,242 @@ test("the batch size in the description matches the enforced cap", () => {
 	assert.match(stub.tools[0]?.description ?? "", new RegExp(`up to ${MAX_PARALLEL_TASKS}`));
 });
 
-test("the profile parameter exists exactly when profiles are enabled", () => {
-	// The knob must not be offered when turning it would do nothing, so the schema
-	// and the config have to agree in both directions.
-	// Deliberately the real global config: this test compares the advertised schema
-	// against the config on disk, so a project-only lookup would miss the point.
-	const { config } = loadConfig(process.cwd(), getAgentDir());
+/**
+ * Write a scratch config file and hand back its path. With
+ * `PI_TINYSUBAGENT_CONFIG` pointing at it, only this file is read — so the
+ * developer's real global key cannot flip these cases, and the scratch
+ * `.pi/agents` role discovery is unaffected.
+ */
+function tempConfigFile(value: Record<string, unknown>): { file: string; cleanup: () => void } {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-config-"));
+	const file = join(dir, "tinysubagent.jsonc");
+	writeFileSync(file, JSON.stringify(value));
+	return { file, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+const PROFILE_PAIR = {
+	light: { model: "m-light", thinking: "low" },
+	pro: { model: "m-pro", thinking: "high" },
+};
+
+/**
+ * The four-case matrix over `enableProfiles` × routing, driven through a temp
+ * config file. Each case registers the tool fresh, so the schema and the
+ * description can be asserted against the exact config on disk.
+ */
+function registerWithConfig(file: string): Registered {
 	const stub = stubApi();
-	withEnv(INSIDE, () => {
+	withEnv({ ...INSIDE, PI_TINYSUBAGENT_CONFIG: file }, () => {
 		tinysubagent(stub.api as never);
 	});
+	const tool = stub.tools[0];
+	assert.ok(tool, "the tool was not registered inside herdr");
+	return tool;
+}
 
-	const properties = stub.tools[0]?.parameters?.properties ?? {};
-	const has = (key: string) => Object.hasOwn(properties, key);
+/** Whether the `tasks` array item schema offers a `profile` member. */
+function tasksOfferProfile(tool: Registered): boolean {
+	const properties = tool.parameters?.properties ?? {};
+	const tasks = properties.tasks as { items?: { properties?: Record<string, unknown> } } | undefined;
+	return Object.hasOwn(tasks?.items?.properties ?? {}, "profile");
+}
 
-	assert.equal(has("profile"), config.enableProfiles);
-	// Everything else is unconditional.
+function assertSharedSchema(tool: Registered): void {
+	const properties = tool.parameters?.properties ?? {};
 	for (const key of ["agent", "task", "tasks", "cwd"]) {
-		assert.ok(has(key), `missing parameter: ${key}`);
+		assert.ok(Object.hasOwn(properties, key), `missing parameter: ${key}`);
+	}
+}
+
+/**
+ * `profile` exists exactly when profiles are enabled and routing is off: the
+ * schema (top level and per-task) and the description must agree with the
+ * config in all four combinations, including a real SystemOne key.
+ */
+test("the profile parameter exists exactly when profiles are enabled and routing is off", () => {
+	const cases: { name: string; value: Record<string, unknown>; profile: boolean }[] = [
+		{ name: "profiles off, routing off", value: { enableProfiles: false, profiles: PROFILE_PAIR }, profile: false },
+		{ name: "profiles on, routing off", value: { enableProfiles: true, profiles: PROFILE_PAIR }, profile: true },
+		{
+			name: "profiles on, routing on",
+			value: {
+				enableProfiles: true,
+				profiles: PROFILE_PAIR,
+				systemOneAPIKey: "sk-test-DEADBEEF",
+				systemOneBaseUrl: "https://api.typesafe.ai",
+			},
+			profile: false,
+		},
+		{
+			name: "profiles off, routing on",
+			value: {
+				enableProfiles: false,
+				profiles: PROFILE_PAIR,
+				systemOneAPIKey: "sk-test-DEADBEEF",
+				systemOneBaseUrl: "https://api.typesafe.ai",
+			},
+			profile: false,
+		},
+	];
+
+	for (const { name, value, profile } of cases) {
+		const { file, cleanup } = tempConfigFile(value);
+		try {
+			const tool = registerWithConfig(file);
+			assertSharedSchema(tool);
+			assert.equal(
+				Object.hasOwn(tool.parameters?.properties ?? {}, "profile"),
+				profile,
+				`top-level profile wrong in case: ${name}`,
+			);
+			assert.equal(tasksOfferProfile(tool), profile, `tasks[].profile wrong in case: ${name}`);
+
+			const description = tool.description ?? "";
+			const enableProfiles = value.enableProfiles === true;
+			assert.equal(description.includes("Profiles:"), enableProfiles, `description wrong in case: ${name}`);
+
+			if (profile) {
+				// Routing off: the model picks from the configured profiles itself.
+				assert.ok(description.includes("`light`") && description.includes("`pro`"), `candidate list wrong in case: ${name}`);
+				assert.doesNotMatch(description, /chosen automatically/);
+			} else if (enableProfiles) {
+				// Routing on: the choice is made per task, not offered as a parameter.
+				assert.match(description, /chosen automatically per task by SystemOne/);
+				assert.ok(description.includes("`light`") && description.includes("`pro`"), `candidates wrong in case: ${name}`);
+			}
+		} finally {
+			cleanup();
+		}
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Routing credentials never reach the model or the config warnings
+// ────────────────────────────────────────────────────────────────────────────
+
+const FAKE_KEY = "sk-systemone-DEADBEEF-1234567890";
+const FAKE_URL = "https://routing.example.invalid";
+
+test("with routing on, the key and endpoint appear in no description, schema, or spawn result", async () => {
+	const { file, cleanup } = tempConfigFile({
+		enableProfiles: true,
+		profiles: PROFILE_PAIR,
+		systemOneAPIKey: FAKE_KEY,
+		systemOneBaseUrl: FAKE_URL,
+	});
+	const { cwd, ctx } = spawnFixture();
+	// Inline registration (not `registerWithConfig`) so the shutdown listener can
+	// be fired in `finally`, as the other spawn tests do.
+	const stub = stubApi();
+	withEnv({ ...INSIDE, PI_TINYSUBAGENT_CONFIG: file }, () => {
+		tinysubagent(stub.api as never);
+	});
+	const tool = stub.tools[0];
+	assert.ok(tool, "the tool was not registered inside herdr");
+	const restoreEnv = enterHerdrEnv();
+
+	// The registered tool dials the real endpoint through `globalThis.fetch`; an
+	// immediate 500 ends the call in the fallback, with no real network. The stub
+	// must not leak either value into anything the tool returns.
+	const savedFetch = globalThis.fetch;
+	globalThis.fetch = (async () => ({
+		ok: false,
+		status: 500,
+		statusText: "no",
+		arrayBuffer: async () => new ArrayBuffer(0),
+	})) as unknown as typeof fetch;
+
+	try {
+		const description = tool.description ?? "";
+		const schema = JSON.stringify(tool.parameters ?? {});
+		// Guard: routing really is on, so the assertions below are not vacuous.
+		assert.match(description, /chosen automatically per task by SystemOne/);
+		assert.ok(!description.includes(FAKE_KEY), "the description leaks the key");
+		assert.ok(!description.includes(FAKE_URL), "the description leaks the endpoint");
+		assert.ok(!schema.includes(FAKE_KEY), "the parameter schema leaks the key");
+		assert.ok(!schema.includes(FAKE_URL), "the parameter schema leaks the endpoint");
+
+		const execute = tool.execute as (
+			toolCallId: string,
+			params: unknown,
+			signal: unknown,
+			onUpdate: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
+		const { result } = await withSpawnHerdrStub(() =>
+			execute("call-1", { agent: "worker", task: "a brief that would travel" }, undefined, () => {}, ctx),
+		);
+		const text = ((result as { content?: { text?: string }[] }).content ?? [])
+			.map((part) => part.text ?? "")
+			.join("\n");
+		assert.match(text, /\[current\]/, `the fallback did not apply: ${text}`);
+		assert.ok(!text.includes(FAKE_KEY), "the spawn result leaks the key");
+		assert.ok(!text.includes(FAKE_URL), "the spawn result leaks the endpoint");
+	} finally {
+		globalThis.fetch = savedFetch;
+		(stub.listeners.get("session_shutdown") as (() => void) | undefined)?.();
+		restoreEnv();
+		rmSync(cwd, { recursive: true, force: true });
+		cleanup();
+	}
+});
+
+test("config warnings about the routing keys never name the key or the URL", () => {
+	const agentDir = mkdtempSync(join(tmpdir(), "tinysubagent-ext-agent-"));
+
+	// A base URL without a key in the same (override) file: the URL is ignored.
+	const { file, cleanup } = tempConfigFile({
+		enableProfiles: true,
+		profiles: PROFILE_PAIR,
+		systemOneBaseUrl: FAKE_URL,
+	});
+	try {
+		withEnv({ PI_TINYSUBAGENT_CONFIG: file }, () => {
+			const { config, warnings } = loadConfig(process.cwd(), agentDir);
+			assert.equal(config.systemOne, null);
+			assert.ok(
+				warnings.some((w) =>
+					/"systemOneBaseUrl" in .* is ignored because that file has no "systemOneAPIKey"/.test(w),
+				),
+				`expected the URL-without-key warning in: ${warnings.join("\n")}`,
+			);
+			const joined = warnings.join("\n");
+			assert.ok(!joined.includes(FAKE_KEY), "the key leaked into a config warning");
+			assert.ok(!joined.includes(FAKE_URL), "the base URL leaked into a config warning");
+		});
+	} finally {
+		cleanup();
 	}
 
-	const description = stub.tools[0]?.description ?? "";
-	assert.equal(description.includes("Profiles:"), config.enableProfiles);
+	// A project file carrying the routing keys is inert: it can neither enable nor
+	// redirect routing, and its warning names the file, not the values.
+	const projectCwd = mkdtempSync(join(tmpdir(), "tinysubagent-ext-project-"));
+	mkdirSync(join(projectCwd, ".pi"), { recursive: true });
+	writeFileSync(
+		join(projectCwd, ".pi", "tinysubagent.jsonc"),
+		JSON.stringify({
+			enableProfiles: true,
+			profiles: PROFILE_PAIR,
+			systemOneAPIKey: FAKE_KEY,
+			systemOneBaseUrl: FAKE_URL,
+		}),
+	);
+	try {
+		withEnv({}, () => {
+			const { config, warnings } = loadConfig(projectCwd, agentDir);
+			assert.equal(config.systemOne, null);
+			assert.ok(
+				warnings.some((w) => /is project-scoped, so its routing keys are ignored/.test(w)),
+				`expected the project-scope warning in: ${warnings.join("\n")}`,
+			);
+			const joined = warnings.join("\n");
+			assert.ok(!joined.includes(FAKE_KEY), "the key leaked into a config warning");
+			assert.ok(!joined.includes(FAKE_URL), "the base URL leaked into a config warning");
+		});
+	} finally {
+		rmSync(projectCwd, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+	}
 });
 
 // ────────────────────────────────────────────────────────────────────────────

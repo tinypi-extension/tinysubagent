@@ -28,8 +28,11 @@ replacement that is small enough to read top-to-bottom and own.
   plus the single injected reporting tool `subagent_report`, which is added to
   every allowlist so a role can always hand its result back. A role with no `tools`
   list still gets no allowlist at all.
-- `profile` is compulsory when `enableProfiles` is true; absent from the schema when
-  false. `"current"` is always a valid implicit profile.
+- `profile` is compulsory when `enableProfiles` is true and SystemOne routing is off;
+  absent from the schema both when `enableProfiles` is false and when routing is active,
+  because routing picks a profile per task. `"current"` remains the implicit profile;
+  under routing, `[current]` in a spawn acknowledgment means the SystemOne call produced
+  no decision.
 - Single and parallel spawn.
 - Spawning leaves the orchestrator at 60% of the split rect, with all live subs stacked
   equally in one right-hand column.
@@ -89,6 +92,8 @@ agent reads, the per-session state, and the two registrations. Everything else l
 `types.ts` and `tool-patterns.ts`.
 
 - `config/` — settings plus agent/role and profile discovery.
+- `systemone/` — SystemOne routing transport client and policy: `client.ts` for the HTTP
+  call, `route.ts` for candidates and decisions.
 - `herdr/` — herdr transport: `cli.ts` for process invocation and plugin linking,
   `layout.ts` for pane geometry.
 - `children/` — the child lifecycle: spawn → launch script and sidecar paths → watcher →
@@ -145,13 +150,20 @@ Two rules, independent of each other. **Scope beats filename**: a project `.json
 global `.jsonc`. **Within one directory** `.jsonc` outranks `.json` and the sibling `.json` is
 ignored silently — writing a `.jsonc` is all it takes to switch over.
 
+A third rule is deliberately **not** independent of those two: the SystemOne
+`systemOneAPIKey` and `systemOneBaseUrl` pair resolves as one unit, from the single file that
+supplies `systemOneAPIKey` — the first such file in precedence order. A `systemOneBaseUrl` in
+another file is ignored. Project scope is inert for **both** keys: a project file can
+neither supply a key nor redirect one.
+
 The files layer, they do not replace. `profiles` merge by name with the higher scope winning
 per name, so a project file adding one profile inherits every global profile and redefining one
 replaces only that one. `enableProfiles` comes from the highest-precedence file that specifies
 the key.
 
 A project file that cannot be read or parsed is skipped with a warning naming it, and the
-global config still applies — a repo file can never disable profiles that were already working.
+global config still applies — a repo file can never disable profiles that were already working,
+and can never enable, disable, or redirect SystemOne routing.
 
 Repos should commit `.pi/tinysubagent.jsonc`, which needs a `.gitignore` negation pair: a bare
 `.pi/` ignore rule (very common — `.pi/` usually holds per-machine state) swallows the config
@@ -168,7 +180,9 @@ resolution actually reads — the project file when one exists (a scope row swit
 file), otherwise `<agentDir>/tinysubagent.jsonc`, created on the first edit and only after a
 `y/n` confirm. It edits `enableProfiles` and `profiles.<name>.{model, thinking}` and nothing
 else, through comment-preserving `jsonc-parser` edits, so a hand-maintained file is never
-rewritten as JSON; each change is written immediately. A profile's `model` is picked from the
+rewritten as JSON; each change is written immediately. The SystemOne routing keys are
+hand-edit only: a credential needs a secret-entry flow, not the existing `y/n` confirm, and the
+screen may write a file that ends up committed. A profile's `model` is picked from the
 models `ctx.modelRegistry` can actually run and written as `provider/id`. A model the registry does
 not offer keeps a row of its own so a value already in the file is never lost, but it cannot be
 typed in from the screen.

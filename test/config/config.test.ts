@@ -9,6 +9,7 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import {
 	CONFIG_FILENAME,
 	CURRENT_PROFILE,
+	DEFAULT_SYSTEMONE_BASE_URL,
 	JSONC_CONFIG_FILENAME,
 	configPath,
 	configSources,
@@ -690,4 +691,193 @@ test("the config path can be overridden, which is what makes it testable", () =>
 			assert.equal(configPath(cwd, agentDir), global);
 		});
 	});
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// SystemOne routing keys: override + global only, project scope inert,
+// `{key, baseUrl}` resolved together from one file
+// ────────────────────────────────────────────────────────────────────────────
+
+const S1_KEY = "sk-systemone-test-key";
+const S1_URL = "https://api.typesafe.ai";
+const S1_URL_V1 = "https://api.typesafe.ai/v1";
+const S1_URL_SYSTEMONE = "https://api.typesafe.ai/systemone";
+
+/** No warning may ever carry a credential or the routing endpoint. */
+function assertRedacted(warnings: readonly string[], ...secrets: string[]): void {
+	for (const warning of warnings) {
+		for (const secret of secrets) {
+			assert.equal(
+				warning.includes(secret),
+				false,
+				`warning leaks a secret: ${warning}`,
+			);
+		}
+	}
+}
+
+test("a project-scope routing key is inert and warns exactly once", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeProject(cwd, CONFIG_FILENAME, { systemOneAPIKey: S1_KEY });
+	const { config, warnings } = loadConfig(cwd, agentDir);
+	assert.equal(config.systemOne, null);
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0] ?? "", /tinysubagent\.json/);
+	assertRedacted(warnings, S1_KEY, S1_URL);
+});
+
+test("a project-scope routing URL is inert and warns exactly once", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeProject(cwd, CONFIG_FILENAME, { systemOneBaseUrl: S1_URL });
+	const { config, warnings } = loadConfig(cwd, agentDir);
+	assert.equal(config.systemOne, null);
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0] ?? "", /tinysubagent\.json/);
+	assertRedacted(warnings, S1_KEY, S1_URL);
+});
+
+test("the override file beats the global file for both routing keys", () => {
+	const override = writeConfig({
+		systemOneAPIKey: "override-key",
+		systemOneBaseUrl: "https://override.example/v1",
+	});
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, {
+		systemOneAPIKey: "global-key",
+		systemOneBaseUrl: "https://global.example/v1",
+	});
+	withEnv(override, () => {
+		const { config, warnings } = loadConfig(cwd, agentDir);
+		assert.deepEqual(config.systemOne, {
+			apiKey: "override-key",
+			baseUrl: "https://override.example",
+			file: override,
+		});
+		assert.deepEqual(warnings, []);
+		assertRedacted(warnings, "override-key", "global-key");
+	});
+});
+
+test("the URL only counts when it sits in the file that supplies the key", () => {
+	// Global has both keys; override has the key only. The override decides, so
+	// global's URL is invisible: the deciding file owns the base URL.
+	const override = writeConfig({ systemOneAPIKey: "override-key" });
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, {
+		systemOneAPIKey: "global-key",
+		systemOneBaseUrl: S1_URL_V1,
+	});
+	withEnv(override, () => {
+		const { config, warnings } = loadConfig(cwd, agentDir);
+		assert.ok(config.systemOne);
+		assert.equal(config.systemOne.apiKey, "override-key");
+		assert.equal(config.systemOne.baseUrl, DEFAULT_SYSTEMONE_BASE_URL);
+		assert.deepEqual(warnings, []);
+		assertRedacted(warnings, S1_URL);
+	});
+});
+
+test("a URL in a file that does not supply the key is inert and warns once", () => {
+	// The override carries a URL but no key, so it decides nothing: the URL is
+	// warned about once and routing stays off — the override short-circuits, so
+	// the shadowed global file is not consulted at all.
+	const override = writeConfig({ systemOneBaseUrl: S1_URL });
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, { systemOneAPIKey: "global-key" });
+	withEnv(override, () => {
+		const { config, warnings } = loadConfig(cwd, agentDir);
+		assert.equal(config.systemOne, null);
+		assert.equal(warnings.length, 1);
+		assertRedacted(warnings, S1_URL, "global-key");
+	});
+});
+
+test("a project-scope URL does not stop the global key from deciding", () => {
+	// The one consulted pair where a URL-only file sits next to a key file:
+	// the project file is inert for routing, so the global key decides.
+	const { cwd, agentDir } = twoDirs();
+	writeProject(cwd, CONFIG_FILENAME, { systemOneBaseUrl: S1_URL });
+	writeGlobal(agentDir, CONFIG_FILENAME, { systemOneAPIKey: "global-key" });
+	const { config, warnings } = loadConfig(cwd, agentDir);
+	assert.ok(config.systemOne);
+	assert.equal(config.systemOne.apiKey, "global-key");
+	assert.equal(config.systemOne.baseUrl, DEFAULT_SYSTEMONE_BASE_URL);
+	assert.equal(config.systemOne.file, path.join(agentDir, CONFIG_FILENAME));
+	assert.equal(warnings.length, 1);
+	assertRedacted(warnings, S1_URL, "global-key");
+});
+
+test("routing keys are read from the override file when PI_TINYSUBAGENT_CONFIG is set", () => {
+	const override = writeConfig({ systemOneAPIKey: "override-key", systemOneBaseUrl: S1_URL });
+	const { cwd, agentDir } = twoDirs();
+	withEnv(override, () => {
+		const { config, warnings } = loadConfig(cwd, agentDir);
+		assert.deepEqual(config.systemOne, {
+			apiKey: "override-key",
+			baseUrl: S1_URL,
+			file: override,
+		});
+		assert.deepEqual(warnings, []);
+	});
+});
+
+test("a trailing /v1 and /systemone are stripped from the base URL", () => {
+	for (const url of [S1_URL_V1, S1_URL_SYSTEMONE, `${S1_URL}/`]) {
+		const { config, warnings } = read(writeConfig({ systemOneAPIKey: S1_KEY, systemOneBaseUrl: url }));
+		assert.ok(config.systemOne);
+		assert.equal(config.systemOne.baseUrl, S1_URL, url);
+		assert.deepEqual(warnings, []);
+	}
+});
+
+test("an empty routing key turns routing off with exactly one warning", () => {
+	for (const key of ["", "   "]) {
+		const { config, warnings } = read(writeConfig({ systemOneAPIKey: key }));
+		assert.equal(config.systemOne, null);
+		assert.equal(warnings.length, 1);
+	}
+});
+
+test("a non-string routing key turns routing off with exactly one warning", () => {
+	const { config, warnings } = read(writeConfig({ systemOneAPIKey: 42 }));
+	assert.equal(config.systemOne, null);
+	assert.equal(warnings.length, 1);
+});
+
+test("an explicit null routing key turns routing off silently", () => {
+	const { config, warnings } = read(writeConfig({ systemOneAPIKey: null }));
+	assert.equal(config.systemOne, null);
+	assert.deepEqual(warnings, []);
+});
+
+test("a non-http scheme is refused with one warning", () => {
+	const { config, warnings } = read(
+		writeConfig({ systemOneAPIKey: S1_KEY, systemOneBaseUrl: "ftp://api.typesafe.ai" }),
+	);
+	assert.equal(config.systemOne, null);
+	assert.equal(warnings.length, 1);
+	assertRedacted(warnings, "ftp://api.typesafe.ai");
+});
+
+test("http: is refused outside loopback and accepted on localhost", () => {
+	const refused = read(
+		writeConfig({ systemOneAPIKey: S1_KEY, systemOneBaseUrl: "http://api.typesafe.ai" }),
+	);
+	assert.equal(refused.config.systemOne, null);
+	assert.equal(refused.warnings.length, 1);
+	assertRedacted(refused.warnings, "http://api.typesafe.ai");
+
+	const accepted = read(
+		writeConfig({ systemOneAPIKey: S1_KEY, systemOneBaseUrl: "http://localhost:8080" }),
+	);
+	assert.ok(accepted.config.systemOne);
+	assert.equal(accepted.config.systemOne.baseUrl, "http://localhost:8080");
+	assert.deepEqual(accepted.warnings, []);
+});
+
+test("the default base URL applies when the deciding file omits it", () => {
+	const { config, warnings } = read(writeConfig({ systemOneAPIKey: S1_KEY }));
+	assert.ok(config.systemOne);
+	assert.equal(config.systemOne.baseUrl, DEFAULT_SYSTEMONE_BASE_URL);
+	assert.deepEqual(warnings, []);
 });
