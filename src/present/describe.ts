@@ -11,7 +11,7 @@ import { Type, type TSchema } from "typebox";
 import { MAX_PARALLEL_TASKS } from "../children/requests.ts";
 import { CURRENT_PROFILE, type TinysubagentConfig } from "../config/config.ts";
 import { availableProfileNames, profileParamDescription } from "../config/profiles.ts";
-import { profileCandidates, routingActive } from "../systemone/route.ts";
+import { routingActive } from "../systemone/route.ts";
 import { type AgentDef } from "../types.ts";
 
 export const MAX_LISTED_AGENTS = 12;
@@ -49,25 +49,15 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 		lines.push(...advertiseAgents(agents));
 	}
 
-	if (config.enableProfiles) {
-		if (routingActive(config)) {
-			// Routing picks, so the model is told what the chooser chooses among —
-			// and that it does not set `profile` at all.
-			const candidates = profileCandidates(config)
+	// Routing picks the profile, so the model is told nothing about profiles at
+	// all: a candidate list is a knob it cannot turn.
+	if (config.enableProfiles && !routingActive(config)) {
+		lines.push(
+			"",
+			`Profiles: ${availableProfileNames(config)
 				.map((name) => `\`${name}\``)
-				.join(", ");
-			lines.push(
-				"",
-				`Profiles: chosen automatically per task by SystemOne from ${candidates}; you do not set \`profile\`. If routing produces no decision, the session's own model and thinking are used.`,
-			);
-		} else {
-			lines.push(
-				"",
-				`Profiles: ${availableProfileNames(config)
-					.map((name) => `\`${name}\``)
-					.join(", ")}. \`${CURRENT_PROFILE}\` is the default and runs on this session's model and thinking level.`,
-			);
-		}
+				.join(", ")}. \`${CURRENT_PROFILE}\` is the default and runs on this session's model and thinking level.`,
+		);
 	}
 
 	return lines.join("\n");

@@ -264,17 +264,17 @@ test("the profile parameter exists exactly when profiles are enabled and routing
 			assert.equal(tasksOfferProfile(tool), profile, `tasks[].profile wrong in case: ${name}`);
 
 			const description = tool.description ?? "";
-			const enableProfiles = value.enableProfiles === true;
-			assert.equal(description.includes("Profiles:"), enableProfiles, `description wrong in case: ${name}`);
+			// Profiles are advertised only when they are also offered as a parameter.
+			assert.equal(description.includes("Profiles:"), profile, `description wrong in case: ${name}`);
 
 			if (profile) {
 				// Routing off: the model picks from the configured profiles itself.
 				assert.ok(description.includes("`light`") && description.includes("`pro`"), `candidate list wrong in case: ${name}`);
 				assert.doesNotMatch(description, /chosen automatically/);
-			} else if (enableProfiles) {
-				// Routing on: the choice is made per task, not offered as a parameter.
-				assert.match(description, /chosen automatically per task by SystemOne/);
-				assert.ok(description.includes("`light`") && description.includes("`pro`"), `candidates wrong in case: ${name}`);
+			} else {
+				// Routing on (or profiles off): no profile text at all reaches the model.
+				assert.doesNotMatch(description, /SystemOne/, `routing hint leaked in case: ${name}`);
+				assert.doesNotMatch(description, /`light`|`pro`/, `candidate leaked in case: ${name}`);
 			}
 		} finally {
 			cleanup();
@@ -321,8 +321,10 @@ test("with routing on, the key and endpoint appear in no description, schema, or
 	try {
 		const description = tool.description ?? "";
 		const schema = JSON.stringify(tool.parameters ?? {});
-		// Guard: routing really is on, so the assertions below are not vacuous.
-		assert.match(description, /chosen automatically per task by SystemOne/);
+		// Guard: routing really is on — with routing off, `Profiles:` and the
+		// `profile` parameter would both be offered.
+		assert.ok(!description.includes("Profiles:"), "routing on must not advertise profiles");
+		assert.ok(!schema.includes("\"profile\""), "routing on must not offer the profile parameter");
 		assert.ok(!description.includes(FAKE_KEY), "the description leaks the key");
 		assert.ok(!description.includes(FAKE_URL), "the description leaks the endpoint");
 		assert.ok(!schema.includes(FAKE_KEY), "the parameter schema leaks the key");
