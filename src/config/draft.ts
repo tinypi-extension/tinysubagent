@@ -209,6 +209,26 @@ export function setEnableProfiles(draft: ConfigDraft, value: boolean): ConfigDra
 	return applyModify(draft, ["enableProfiles"], value);
 }
 
+/** The API key as stored in the file; absent means routing is off. */
+export function draftSystemOneAPIKey(draft: ConfigDraft): string | undefined {
+	const value = rootObject(draft)?.systemOneAPIKey;
+	return typeof value === "string" ? value : undefined;
+}
+
+/** The base URL as stored in the file; absent means the default is used. */
+export function draftSystemOneBaseUrl(draft: ConfigDraft): string | undefined {
+	const value = rootObject(draft)?.systemOneBaseUrl;
+	return typeof value === "string" ? value : undefined;
+}
+
+export function setSystemOneAPIKey(draft: ConfigDraft, value: string): ConfigDraft {
+	return applyModify(draft, ["systemOneAPIKey"], value);
+}
+
+export function setSystemOneBaseUrl(draft: ConfigDraft, value: string): ConfigDraft {
+	return applyModify(draft, ["systemOneBaseUrl"], value);
+}
+
 export function setModel(draft: ConfigDraft, name: string, model: string | undefined): ConfigDraft {
 	return applyModify(draft, ["profiles", name, "model"], model);
 }

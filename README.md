@@ -10,9 +10,8 @@ window, and reports back as a steer message.
 - **Single or parallel** — one task, or up to 4 reporting back in one message. The
   orchestrator keeps 3/5 of the split; every live sub shares one right-hand column, stacked
   and equal in height.
-- **Model profiles** — optional `light` / `core` / `pro`-style (or whatever you use) with `{ model, thinking }` pairs.
+- **Model profiles** — optional `light` / `core` / `pro`-style (or whatever) with `{ model, thinking }` pairs.
 - **Per-child `env`** — hand a subagent static variables without changing the orchestrator's own environment.
-- **Small enough to read** — one `index.ts` plus focused modules.
 
 The tool is registered **only when pi runs inside herdr**. Outside herdr there is no pane
 to split, so it is not offered at all.
@@ -23,9 +22,6 @@ to split, so it is not offered at all.
 | --- | --- |
 | pi | The pi coding agent. |
 | herdr | **0.8.2 or newer** (`herdr --version`). |
-| herdr running | `herdr status server --json` reports `"running": true`. |
-| `tinysubagent-panes` plugin | Ships in `herdr-plugin/`; pi offers to link it on the first session inside herdr. |
-| pi started inside a herdr pane | Registered only when `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` are set. |
 
 ## Install
 
@@ -58,6 +54,29 @@ herdr plugin enable tinysubagent-panes                           # if disabled
 
 In print/JSON mode there is no dialog and nothing is linked — trigger the `subagent` tool
 and the "not installed" error prints the exact path to link.
+
+### Reinstall over an existing install
+
+herdr stores the **absolute path** of the linked plugin, and the plugin id
+(`tinysubagent-panes`) never changes. So reinstalling tinysubagent — a new checkout, a
+moved repo, or switching from a local path to `git:...` — leaves the old link in place.
+The plugin id now matches the stale path, and the reinstall looks like it did nothing:
+herdr still runs the old plugin directory, and the new package conflicts with it.
+
+Remove the old link, then let pi link the new one:
+
+```bash
+herdr plugin unlink tinysubagent-panes   # drop the stale, path-pinned link
+herdr plugin list                        # verify: no tinysubagent-panes entry
+pi                                       # start pi inside a herdr pane
+# confirm the "Link the tinysubagent herdr plugin?" prompt
+herdr plugin list                        # verify: enabled  [local:/path/to/new/herdr-plugin]
+```
+
+Start pi from inside a herdr pane so the prompt appears; confirming it re-links the path
+the new install ships from. If the prompt does not appear, link the new path directly
+(`herdr plugin link /path/to/new/herdr-plugin --enabled`) and re-check with
+`herdr plugin list` that the `[local:...]` path is the new checkout.
 
 ### Verify
 
@@ -152,17 +171,9 @@ A profile is a `{ model, thinking }` pair a child is launched with, configured i
 - Both formats allow comments and trailing commas.
 - An unreadable or unparseable file is skipped with a warning naming it, and the next
   scope applies.
-
-To commit a project config under a bare `.pi/` gitignore rule you need a negation pair
-(git cannot re-include a file inside an excluded directory):
-
-```gitignore
-.pi/*
-!.pi/tinysubagent.jsonc
-```
 - Config with TUI via `/subagent-settings`
 
-### SystemOne routing
+### SystemOne profiles routing
 
 When a SystemOne key is configured, the orchestrator asks a routing service to pick the
 profile for each task instead of making the model choose `profile` itself:
@@ -171,7 +182,7 @@ profile for each task instead of making the model choose `profile` itself:
 {
   "enableProfiles": true,
   "profiles": { "light": { "model": "<small-model>", "thinking": "low" } },
-  "systemOneAPIKey": "sk-…",                     // a secret — treat it like any API key
+  "systemOneAPIKey": "sk-…",                     // a secret API key
   "systemOneBaseUrl": "https://api.typesafe.ai"  // optional; this is the default
 }
 ```
@@ -229,51 +240,27 @@ warnings at session start, and the child launches with everything that was valid
 
 ## Troubleshooting
 
+Most failures are one of three kinds: pi is not running inside a herdr pane, the
+`tinysubagent-panes` plugin is missing or stale, or a config value was rejected. Config
+warnings also appear as a notification at session start.
+
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | No `subagent` tool | pi is not inside herdr | Start pi from a herdr pane (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_SOCKET_PATH`). |
 | "herdr is not reachable from this pane" | herdr server stopped | `herdr status server --json`; restart herdr. |
 | "herdr >= 0.8.2 is required" | Old herdr | Update herdr, then restart the herdr session. |
 | Plugin "is not installed" / "is disabled" | Entrypoint never linked, or the offer was declined | Confirm the prompt, or run the `herdr plugin link <repo>/herdr-plugin --enabled` command from the error, then `herdr plugin list`. |
+| Reinstall had no effect / old panes still run | herdr kept the old absolute path; the fixed plugin id now matches the stale link | `herdr plugin unlink tinysubagent-panes`, start pi inside a herdr pane, confirm the link prompt, then `herdr plugin list` shows the new `[local:...]` path. See [Reinstall over an existing install](#reinstall-over-an-existing-install). |
 | "no agent definitions found" | No role files | Add a markdown file with `name`, `description`, `tools` frontmatter. |
 | `profile "x" cannot be used: profiles are disabled` | `enableProfiles` is not `true` | Set it in the highest-precedence file named in the error. |
 | `unknown profile "x"` | Typo, or the profile is in a lower-precedence file | Check the names in the error and that profile's config file. |
-| `env "DEBUG" … is not a string` | A non-string `env` value | Quote it: `"DEBUG": "0"`. Booleans and numbers are skipped, not converted. |
-| `env key "a b" … is not a valid shell identifier` | Key is not a shell name | Use letters, digits and `_`, not starting with a digit. |
-| A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion; a long child holds the batch — watch its pane. |
-| Warnings about unmatched tool patterns | A `tools` entry matched no real tool | Fix the typo or wildcard in that role's frontmatter. |
+| `env` warning: `… is not a string` | A non-string `env` value | Quote it: `"DEBUG": "0"`. Booleans and numbers are skipped, not converted. |
+| `env` warning: `key "a b" … is not a valid shell identifier` | Key is not a shell name | Use letters, digits and `_`, not starting with a digit. |
+| Warning about an unmatched tool pattern | A `tools` entry matched no real tool | Fix the typo or wildcard in that role's frontmatter. |
 | "Nested delegation is not supported yet" | A role lists `subagent` in `tools` | Remove it from that role's frontmatter. |
-| `<file> is project-scoped, so its routing keys are ignored` | `systemOneAPIKey` or `systemOneBaseUrl` sits in a checked-in project file | Project scope is inert for the routing keys; put both in the override or global file. |
-| `"systemOneBaseUrl" in <file> is ignored because that file has no "systemOneAPIKey"` | The routing keys resolve together from one file | Move `systemOneBaseUrl` into the same file as the `systemOneAPIKey` that turns routing on. |
-| `"systemOneAPIKey" in <file> is not a string` / `is empty` | A malformed or blank key | Routing is off; set the key as a non-empty string, or remove it. |
-| `"systemOneBaseUrl" in <file> is not a usable http(s) URL` | A malformed or non-https URL | Routing is off; use an `https:` URL (plain `http:` is accepted only for loopback). |
+| Routing warning: `project-scoped, so its routing keys are ignored`, `"systemOneBaseUrl" … has no "systemOneAPIKey"`, `"systemOneAPIKey" … is not a string` / `is empty`, `"systemOneBaseUrl" … is not a usable http(s) URL` | A routing key is malformed, or sits in a file that has no effect — both keys must resolve from one file, and project scope is inert | Routing stays off until it is fixed. Put both keys in the same global or override file as a non-empty string and an `https:` URL (plain `http:` only for loopback), or remove them. |
+| A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion; a long child holds the batch — watch its pane. |
 | Spawn ack shows `[current]` while routing is on | The SystemOne call produced no decision (timeout, error, unusable answer) and the fallback applied | By design: `current` is never a routing outcome, and `[profile]` in an ack is always the *resolved* profile. |
-
-Config warnings are also surfaced as a notification at session start.
-
-## Development
-
-```bash
-npm install
-npm test          # unit tests (node --test)
-npm run typecheck # tsc --noEmit
-```
-
-Smoke tests drive real herdr panes with a real pi child, and need a herdr session with
-the `tinysubagent-panes` plugin linked and enabled:
-
-```bash
-npm run smoke            # end-to-end: plan artifacts, open pane, run a child, classify the result
-npm run smoke:tool       # drives the tool through a stub ExtensionAPI, asserts the steer message
-npm run smoke:interrupt  # interrupt handling in a child pane
-```
-
-`smoke` and `smoke-tool` take an agent name and flags, e.g.
-`node scripts/smoke.ts scout light --parallel`, or `--bogus` for the failure path (an
-impossible model, expecting `failed` with the pane left open).
-
-Install a local checkout with `pi install /absolute/path/to/tinysubagent` (directories are
-added to settings without copying).
 
 ## License
 

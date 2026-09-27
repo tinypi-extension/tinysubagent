@@ -56,10 +56,14 @@ import {
 	draftError,
 	draftProfile,
 	draftProfiles,
+	draftSystemOneAPIKey,
+	draftSystemOneBaseUrl,
 	readDraft,
 	renameProfile,
 	setEnableProfiles,
 	setModel,
+	setSystemOneAPIKey,
+	setSystemOneBaseUrl,
 	setThinking,
 	writeDraft,
 	type ConfigDraft,
@@ -77,6 +81,8 @@ const PICKER_MAX_VISIBLE = 8;
 const SCOPE_ROW = "scope";
 const ENABLE_ROW = "enable-profiles";
 const ADD_ROW = "add-profile";
+const SYSTEMONE_KEY_ROW = "systemone-api-key";
+const SYSTEMONE_URL_ROW = "systemone-base-url";
 
 /** The profile submenu's model row: the one that opens the picker. */
 const MODEL_ROW = "model";
@@ -774,6 +780,34 @@ class SettingsScreen extends Container implements ScreenHost {
 			});
 		}
 		items.push({
+			id: SYSTEMONE_KEY_ROW,
+			label: "SystemOne API key",
+			description: `systemOneAPIKey in ${file}`,
+			currentValue: draftSystemOneAPIKey(this.draft) ?? "",
+			submenu: (current, done) =>
+				new NameSubmenu({
+					theme: this.theme,
+					title: "SystemOne API key",
+					initial: current,
+					submit: (value) => this.setSystemOneKey(value, done),
+					done: () => done(),
+				}),
+		});
+		items.push({
+			id: SYSTEMONE_URL_ROW,
+			label: "SystemOne base URL",
+			description: `systemOneBaseUrl in ${file}; defaults to ${new URL("https://api.typesafe.ai").href}`,
+			currentValue: draftSystemOneBaseUrl(this.draft) ?? "",
+			submenu: (current, done) =>
+				new NameSubmenu({
+					theme: this.theme,
+					title: "SystemOne base URL",
+					initial: current,
+					submit: (value) => this.setSystemOneUrl(value, done),
+					done: () => done(),
+				}),
+		});
+		items.push({
 			id: ADD_ROW,
 			label: "+ Add profile…",
 			description: `add a profile to ${file}`,
@@ -810,6 +844,26 @@ class SettingsScreen extends Container implements ScreenHost {
 			// replaces, so it would move a cursor on a list that is about to go away.
 			done();
 			this.rebuild(profileRow(name), true);
+		});
+	}
+
+	private setSystemOneKey(value: string, done: SubmenuDone): void {
+		const next = setSystemOneAPIKey(this.draft, value);
+		this.commit(next, (written) => {
+			if (!written) {
+				this.list.updateValue(SYSTEMONE_KEY_ROW, draftSystemOneAPIKey(this.draft) ?? "");
+			}
+			done();
+		});
+	}
+
+	private setSystemOneUrl(value: string, done: SubmenuDone): void {
+		const next = setSystemOneBaseUrl(this.draft, value);
+		this.commit(next, (written) => {
+			if (!written) {
+				this.list.updateValue(SYSTEMONE_URL_ROW, draftSystemOneBaseUrl(this.draft) ?? "");
+			}
+			done();
 		});
 	}
 
