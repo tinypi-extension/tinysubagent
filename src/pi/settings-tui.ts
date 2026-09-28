@@ -45,6 +45,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
 	JSONC_CONFIG_FILENAME,
+	DEFAULT_SYSTEMONE_BASE_URL,
 	SYSTEMONE_MODEL,
 	defaultTarget,
 	settingsTargets,
@@ -87,6 +88,22 @@ const ADD_ROW = "add-profile";
 const SYSTEMONE_KEY_ROW = "systemone-api-key";
 const SYSTEMONE_URL_ROW = "systemone-base-url";
 const SYSTEMONE_MODEL_ROW = "systemone-model";
+
+/**
+ * One SystemOne string row. The three keys are read, shown, and written alike,
+ * so a row spells out only what differs: its config key, the draft's own
+ * accessors for it, and the `defaultHint` the row says the key falls back to
+ * (the API key has no default, so it has none).
+ */
+interface SystemOneStringRow {
+	id: string;
+	label: string;
+	/** The config key named in the row's description. */
+	key: string;
+	get: (draft: ConfigDraft) => string | undefined;
+	set: (draft: ConfigDraft, value: string) => ConfigDraft;
+	defaultHint?: string;
+}
 
 /** The profile submenu's model row: the one that opens the picker. */
 const MODEL_ROW = "model";
@@ -507,8 +524,9 @@ class ProfileSubmenu extends Container {
 		}
 		if (id === "thinking") {
 			// `(inherit)` is the row's way of saying "no key", which `setThinking`
-			// turns into a key removal rather than a null.
-			const level = value === INHERIT ? undefined : isThinkingLevel(value) ? value : undefined;
+			// turns into a key removal rather than a null. Any other value that is not
+			// a level is refused the same way.
+			const level = value === INHERIT || !isThinkingLevel(value) ? undefined : value;
 			const previous = this.thinking;
 			this.host.commit(setThinking(this.host.currentDraft(), this.name, level), (written) => {
 				if (written) {
@@ -783,48 +801,50 @@ class SettingsScreen extends Container implements ScreenHost {
 					new ProfileSubmenu({ theme: this.theme, host: this, name, done }),
 			});
 		}
-		items.push({
-			id: SYSTEMONE_KEY_ROW,
-			label: "SystemOne API key",
-			description: `systemOneAPIKey in ${file}`,
-			currentValue: draftSystemOneAPIKey(this.draft) ?? "",
-			submenu: (current, done) =>
-				new NameSubmenu({
-					theme: this.theme,
-					title: "SystemOne API key",
-					initial: current,
-					submit: (value) => this.setSystemOneKey(value, done),
-					done: () => done(),
-				}),
-		});
-		items.push({
-			id: SYSTEMONE_URL_ROW,
-			label: "SystemOne base URL",
-			description: `systemOneBaseUrl in ${file}; defaults to ${new URL("https://api.typesafe.ai").href}`,
-			currentValue: draftSystemOneBaseUrl(this.draft) ?? "",
-			submenu: (current, done) =>
-				new NameSubmenu({
-					theme: this.theme,
-					title: "SystemOne base URL",
-					initial: current,
-					submit: (value) => this.setSystemOneUrl(value, done),
-					done: () => done(),
-				}),
-		});
-		items.push({
-			id: SYSTEMONE_MODEL_ROW,
-			label: "SystemOne model",
-			description: `systemOneModel in ${file}; defaults to ${SYSTEMONE_MODEL}`,
-			currentValue: draftSystemOneModel(this.draft) ?? "",
-			submenu: (current, done) =>
-				new NameSubmenu({
-					theme: this.theme,
-					title: "SystemOne model",
-					initial: current,
-					submit: (value) => this.setSystemOneModelRow(value, done),
-					done: () => done(),
-				}),
-		});
+		const systemOneRows: readonly SystemOneStringRow[] = [
+			{
+				id: SYSTEMONE_KEY_ROW,
+				label: "SystemOne API key",
+				key: "systemOneAPIKey",
+				get: draftSystemOneAPIKey,
+				set: setSystemOneAPIKey,
+			},
+			{
+				id: SYSTEMONE_URL_ROW,
+				label: "SystemOne base URL",
+				key: "systemOneBaseUrl",
+				get: draftSystemOneBaseUrl,
+				set: setSystemOneBaseUrl,
+				// `.href` keeps the trailing slash this row has always rendered.
+				defaultHint: new URL(DEFAULT_SYSTEMONE_BASE_URL).href,
+			},
+			{
+				id: SYSTEMONE_MODEL_ROW,
+				label: "SystemOne model",
+				key: "systemOneModel",
+				get: draftSystemOneModel,
+				set: setSystemOneModel,
+				defaultHint: SYSTEMONE_MODEL,
+			},
+		];
+		for (const row of systemOneRows) {
+			items.push({
+				id: row.id,
+				label: row.label,
+				description: row.defaultHint
+					? `${row.key} in ${file}; defaults to ${row.defaultHint}`
+					: `${row.key} in ${file}`,
+				currentValue: row.get(this.draft) ?? "",
+				submenu: (current, done) =>
+					new NameSubmenu({
+						theme: this.theme,
+						title: row.label,
+						initial: current,
+						submit: (value) => this.setSystemOneString(row, value, done),
+						done: () => done(),
+					}),
+			});
+		}
 		items.push({
 			id: ADD_ROW,
 			label: "+ Add profile…",
@@ -865,19 +885,12 @@ class SettingsScreen extends Container implements ScreenHost {
 		});
 	}
 
-	private setSystemOneKey(value: string, done: SubmenuDone): void {
-		const next = setSystemOneAPIKey(this.draft, value);
-		this.commit(next, () => this.syncRow(SYSTEMONE_KEY_ROW, draftSystemOneAPIKey(this.draft), done));
-	}
-
-	private setSystemOneUrl(value: string, done: SubmenuDone): void {
-		const next = setSystemOneBaseUrl(this.draft, value);
-		this.commit(next, () => this.syncRow(SYSTEMONE_URL_ROW, draftSystemOneBaseUrl(this.draft), done));
-	}
-
-	private setSystemOneModelRow(value: string, done: SubmenuDone): void {
-		const next = setSystemOneModel(this.draft, value);
-		this.commit(next, () => this.syncRow(SYSTEMONE_MODEL_ROW, draftSystemOneModel(this.draft), done));
+	/**
+	 * Write one SystemOne string, then put its row back to what the file says —
+	 * `get` runs after the write, so a refused one puts the old value back.
+	 */
+	private setSystemOneString(row: SystemOneStringRow, value: string, done: SubmenuDone): void {
+		this.commit(row.set(this.draft, value), () => this.syncRow(row.id, row.get(this.draft), done));
 	}
 
 	/**
