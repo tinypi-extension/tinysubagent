@@ -35,22 +35,19 @@ export function normalizeBaseUrl(raw: string): string | null {
 		url.hostname === "127.0.0.1" ||
 		url.hostname === "[::1]" ||
 		url.hostname === "::1";
-	if (url.protocol === "https:") {
-		// fine anywhere
-	} else if (url.protocol === "http:" && loopback) {
-		// fine locally
-	} else {
-		return null;
-	}
+	const allowed = url.protocol === "https:" || (url.protocol === "http:" && loopback);
+	if (!allowed) return null;
 	// Base URLs arrive as the host, or as an API prefix (`…/v1`, `…/systemone`)
-	// depending on which doc the user copied. Strip until stable.
+	// depending on which doc the user copied. Strip until stable: a round that
+	// changes nothing has already left `base` with no trailing `/`, so the loop
+	// exits with the answer in hand.
 	let base = url.href;
 	for (;;) {
 		const next = base.replace(/\/$/, "").replace(/\/(v1|systemone)$/, "");
 		if (next === base) break;
 		base = next;
 	}
-	return base.replace(/\/$/, "");
+	return base;
 }
 
 export interface RouteOnceInput {
@@ -93,9 +90,7 @@ export async function routeOnce(
 	);
 	// The caller's abort must end our attempt too — one attempt means one abort source each.
 	const onCallerAbort = () => controller.abort();
-	if (input.signal) {
-		input.signal.addEventListener("abort", onCallerAbort, { once: true });
-	}
+	input.signal?.addEventListener("abort", onCallerAbort, { once: true });
 
 	const body = JSON.stringify({
 		model: input.model ?? SYSTEMONE_MODEL,
@@ -162,8 +157,6 @@ export async function routeOnce(
 		return null;
 	} finally {
 		clearTimeout(timer);
-		if (input.signal) {
-			input.signal.removeEventListener("abort", onCallerAbort);
-		}
+		input.signal?.removeEventListener("abort", onCallerAbort);
 	}
 }
