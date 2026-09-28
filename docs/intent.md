@@ -151,10 +151,12 @@ global `.jsonc`. **Within one directory** `.jsonc` outranks `.json` and the sibl
 ignored silently — writing a `.jsonc` is all it takes to switch over.
 
 A third rule is deliberately **not** independent of those two: the SystemOne
-`systemOneAPIKey` and `systemOneBaseUrl` pair resolves as one unit, from the single file that
-supplies `systemOneAPIKey` — the first such file in precedence order. A `systemOneBaseUrl` in
-another file is ignored. Project scope is inert for **both** keys: a project file can
-neither supply a key nor redirect one.
+`systemOneAPIKey`, `systemOneBaseUrl` and `systemOneModel` resolve as one unit, from the single
+file that supplies `systemOneAPIKey` — the first such file in precedence order. A
+`systemOneBaseUrl` in another file is ignored, and `systemOneModel` there is inert and
+silent. Project scope is inert for **all three**: a project file can neither supply a key
+nor redirect one. `systemOneModel` never turns routing off: anything but a non-empty
+string silently degrades to `jev-latest`.
 
 The files layer, they do not replace. `profiles` merge by name with the higher scope winning
 per name, so a project file adding one profile inherits every global profile and redefining one
@@ -178,14 +180,15 @@ is excluded, so `.pi/*` is required rather than `.pi/`:
 The config is also editable from inside pi: `/subagent-settings` opens a screen over the file
 resolution actually reads — the project file when one exists (a scope row switches to the root
 file), otherwise `<agentDir>/tinysubagent.jsonc`, created on the first edit and only after a
-`y/n` confirm. It edits `enableProfiles` and `profiles.<name>.{model, thinking}` and nothing
-else, through comment-preserving `jsonc-parser` edits, so a hand-maintained file is never
-rewritten as JSON; each change is written immediately. The SystemOne routing keys are
-hand-edit only: a credential needs a secret-entry flow, not the existing `y/n` confirm, and the
-screen may write a file that ends up committed. A profile's `model` is picked from the
-models `ctx.modelRegistry` can actually run and written as `provider/id`. A model the registry does
-not offer keeps a row of its own so a value already in the file is never lost, but it cannot be
-typed in from the screen.
+`y/n` confirm. It edits `enableProfiles`, `profiles.<name>.{model, thinking}`, and the routing
+keys `systemOneAPIKey`, `systemOneBaseUrl`, and `systemOneModel` — and nothing else — through
+comment-preserving `jsonc-parser` edits, so a hand-maintained file is never rewritten as JSON;
+each change is written immediately. The routing keys are plain text fields with no secret-entry
+flow — the API key is shown on its row — and the screen may write a file that ends up committed,
+so a real credential prefers the override or global file. A profile's `model` is picked from the
+models `ctx.modelRegistry` can actually run and written as `provider/id`. A model the registry
+does not offer keeps a row of its own so a value already in the file is never lost, but it
+cannot be typed in from the screen.
 `current` is reserved and cannot be added or renamed to.
 
 There is no hot reload. Config is resolved once at registration, so a settings edit takes

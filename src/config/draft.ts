@@ -221,12 +221,22 @@ export function draftSystemOneBaseUrl(draft: ConfigDraft): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
+/** The model as stored in the file; absent means the default is used. */
+export function draftSystemOneModel(draft: ConfigDraft): string | undefined {
+	const value = rootObject(draft)?.systemOneModel;
+	return typeof value === "string" ? value : undefined;
+}
+
 export function setSystemOneAPIKey(draft: ConfigDraft, value: string): ConfigDraft {
 	return applyModify(draft, ["systemOneAPIKey"], value);
 }
 
 export function setSystemOneBaseUrl(draft: ConfigDraft, value: string): ConfigDraft {
 	return applyModify(draft, ["systemOneBaseUrl"], value);
+}
+
+export function setSystemOneModel(draft: ConfigDraft, value: string): ConfigDraft {
+	return applyModify(draft, ["systemOneModel"], value);
 }
 
 export function setModel(draft: ConfigDraft, name: string, model: string | undefined): ConfigDraft {

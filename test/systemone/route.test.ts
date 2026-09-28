@@ -18,6 +18,7 @@ import {
 const SYSTEM_ONE: NonNullable<TinysubagentConfig["systemOne"]> = {
 	apiKey: "sk-test-key",
 	baseUrl: "https://api.typesafe.ai",
+	model: "jev-latest",
 	file: "/tmp/tinysubagent.json",
 };
 
@@ -258,6 +259,24 @@ test("createRouteFn swallows a throwing fetch", async () => {
 	});
 	const outcome = await route({ agent: { name: "worker", description: "d" }, task: "t", criteria: {} });
 	assert.deepEqual(outcome, { choice: null });
+});
+
+test("createRouteFn sends the configured model, not a hardcoded one", async () => {
+	let sent: Record<string, unknown> = {};
+	const route = createRouteFn(configWith({ systemOne: { ...SYSTEM_ONE, model: "cc/acme/big" } }), {
+		fetch: (async (_url: string, init: RequestInit) => {
+			sent = JSON.parse(String(init.body)) as Record<string, unknown>;
+			return new Response(
+				JSON.stringify({
+					answers: { profile: { type: "choice", choice: "light", probabilities: { light: 1 } } },
+				}),
+				{ status: 200 },
+			);
+		}) as unknown as typeof globalThis.fetch,
+	});
+	const outcome = await route({ agent: { name: "worker", description: "d" }, task: "t", criteria: {} });
+	assert.deepEqual(outcome, { choice: "light", confidence: 0 });
+	assert.equal(sent.model, "cc/acme/big");
 });
 
 /** No warning may ever carry a credential or the routing endpoint. */

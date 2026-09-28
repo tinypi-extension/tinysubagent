@@ -459,9 +459,101 @@ test("without a registry the picker offers nothing but (inherit) and says so", a
 		assert.match(rendered, /no models available/);
 		assert.doesNotMatch(rendered, /no matches/);
 
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+/*
+ * The SystemOne rows. They sit under the enable row — API key, base URL, model —
+ * and each opens the same one-line name field. What is pinned here is that the
+ * model row is wired to `systemOneModel`, names the default it falls back to, and
+ * shows the value that was just written rather than the one it opened with.
+ */
+
+/** Down to the model row: three SystemOne rows below Enable profiles, and model last. */
+function focusSystemOneModel(screen: { send: (data: string) => void }): void {
+	for (let i = 0; i < 4; i++) screen.send(DOWN);
+}
+
+/** The model row's name field: focused, then opened. */
+function openSystemOneModel(screen: { send: (data: string) => void }): void {
+	focusSystemOneModel(screen);
+	screen.send(ENTER);
+}
+
+/** The `systemOneModel` the file holds, or undefined when the key is not there. */
+function savedSystemOneModel(file: string): string | undefined {
+	return (JSON.parse(readFileSync(file, "utf8")) as { systemOneModel?: string }).systemOneModel;
+}
+
+test("the SystemOne model row names the default and writes the typed model", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"systemOneAPIKey": "sk-test"\n}\n');
+		const screen = await openScreen();
+
+		// The row exists and is empty: no key in the file, so nothing is invented for it.
+		assert.match(screen.component().render(80).join("\n"), /SystemOne model/);
+
+		// Focus alone shows the row's own line: the description is where the default is
+		// named, so an empty row still tells the user what an omitted key does.
+		focusSystemOneModel(screen);
+		assert.match(screen.component().render(80).join("\n"), /systemOneModel in[\s\S]*defaults to\s*jev-latest/);
+
+		screen.send(ENTER);
+		screen.send("jev-typed");
 		screen.send(ENTER);
 
-		assert.equal(readFileSync(file, "utf8"), ONE_PROFILE, "Enter on (inherit) writes nothing");
+		assert.equal(savedSystemOneModel(file), "jev-typed");
+		assert.match(readFileSync(file, "utf8"), /"systemOneAPIKey": "sk-test"/, "the key was lost");
+		// The row is refreshed from the draft after the write, so it shows what the
+		// file says rather than the empty value it had when the field opened.
+		assert.match(screen.component().render(80).join("\n"), /SystemOne model\s+jev-typed/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("the SystemOne model row shows the stored model and Esc writes nothing", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		const stored = '{\n\t"systemOneModel": "jev-hand-written"\n}\n';
+		writeFileSync(file, stored);
+		const screen = await openScreen();
+
+		// Read back exactly as stored — the screen does not prettify or validate it.
+		assert.match(screen.component().render(80).join("\n"), /SystemOne model\s+jev-hand-written/);
+
+		openSystemOneModel(screen);
+		screen.send(ESC);
+
+		assert.equal(readFileSync(file, "utf8"), stored, "Esc must not write");
+		assert.match(screen.component().render(80).join("\n"), /jev-hand-written/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("a SystemOne row shows the value it just wrote, not the one it opened with", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		// An empty base URL and a stored model: two rows, two different starting points,
+		// both of which used to keep showing the value they opened with after a write.
+		writeFileSync(file, '{\n\t"systemOneModel": "jev-hand-written"\n}\n');
+		const screen = await openScreen();
+
+		// Down three times lands on the base URL, which is the row above the model.
+		for (let i = 0; i < 3; i++) screen.send(DOWN);
+		screen.send(ENTER);
+		screen.send("http://example.test");
+		screen.send(ENTER);
+
+		const rendered = screen.component().render(80).join("\n");
+		assert.match(readFileSync(file, "utf8"), /"systemOneBaseUrl": "http:\/\/example\.test"/);
+		assert.match(rendered, /SystemOne base URL\s+http:\/\/example\.test/);
 
 		escapeAll(screen);
 		await screen.closed;

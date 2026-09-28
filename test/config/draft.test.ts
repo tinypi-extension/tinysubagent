@@ -11,10 +11,12 @@ import {
 	draftError,
 	draftProfile,
 	draftProfiles,
+	draftSystemOneModel,
 	readDraft,
 	renameProfile,
 	setEnableProfiles,
 	setModel,
+	setSystemOneModel,
 	setThinking,
 	writeDraft,
 } from "../../src/config/draft.ts";
@@ -165,6 +167,7 @@ test("an unparseable file surfaces unparseable and no edit or write changes it",
 		setModel(draft, "work", "m"),
 		setThinking(draft, "work", "low"),
 		deleteProfile(draft, "work"),
+		setSystemOneModel(draft, "jev-experimental"),
 	]) {
 		assert.equal(unchanged.text, broken);
 	}
@@ -196,6 +199,22 @@ test("an unknown extra field on a profile survives an unrelated edit", () => {
 	assert.ok(edited.text.includes('"note": "hand-written, screen does not know it"'), "extra field lost");
 });
 
+test("setSystemOneModel writes the root key and preserves comments elsewhere", () => {
+	const { draft } = draftWith(DOC);
+	assert.equal(draftSystemOneModel(draft), undefined, "absent key read as a value");
+
+	const edited = setSystemOneModel(draft, "jev-experimental");
+	assert.equal(draftSystemOneModel(edited), "jev-experimental");
+	assert.ok(edited.text.includes('"jev-experimental"'));
+	assert.ok(edited.text.includes("// Profile roster, hand-tuned."), "comment lost on set");
+	assert.ok(edited.text.includes("// work laptop"), "sibling comment lost");
+
+	// Round-tripping through raw text is the contract: the screen re-reads the file.
+	const { draft: reread } = draftWith(edited.text);
+	assert.equal(draftSystemOneModel(reread), "jev-experimental");
+	assert.deepEqual(draftProfiles(reread), ["quick", "work"], "profiles disturbed by a root edit");
+});
+
 test("a document that parses but cannot hold an edit is refused, not thrown", () => {
 	// `jsonc-parser`'s `modify` throws when a path's parent is not an object, and a
 	// throw would come out of a keypress in the screen. Each of these parses as
@@ -220,6 +239,7 @@ test("a document that parses but cannot hold an edit is refused, not thrown", ()
 			setModel(draft, "work", "m"),
 			setThinking(draft, "work", "low"),
 			deleteProfile(draft, "work"),
+			setSystemOneModel(draft, "jev-experimental"),
 		]) {
 			assert.equal(unchanged.text, text, `${detail}: mutation changed the text`);
 		}
@@ -236,5 +256,6 @@ test("a document that parses but cannot hold an edit is refused, not thrown", ()
 		// Read-side helpers stay total on the same file.
 		assert.equal(draftEnableProfiles(draft), false);
 		assert.doesNotThrow(() => draftProfiles(draft));
+		assert.equal(draftSystemOneModel(draft), undefined, `${detail}: model read leaked a value`);
 	}
 });

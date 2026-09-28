@@ -23,20 +23,26 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 // strictness.
 import { parse as parseJsonc, printParseErrorCode, type ParseError } from "jsonc-parser";
 import { isThinkingLevel, type Profile } from "../types.ts";
-import { DEFAULT_SYSTEMONE_BASE_URL, normalizeBaseUrl } from "../systemone/client.ts";
+import { DEFAULT_SYSTEMONE_BASE_URL, SYSTEMONE_MODEL, normalizeBaseUrl } from "../systemone/client.ts";
 
 /** Re-exported so callers of the config need not know where the default lives. */
-export { DEFAULT_SYSTEMONE_BASE_URL };
+export { DEFAULT_SYSTEMONE_BASE_URL, SYSTEMONE_MODEL };
 
 /**
  * SystemOne profile routing, resolved from the override or global file only.
  * A repo-checked-in project file can never aim the routing key at a host of its
- * choosing, so project scope is inert for both keys.
+ * choosing, so project scope is inert for all three keys.
  */
 export interface SystemOneConfig {
 	apiKey: string;
 	/** Normalised: no trailing `/`, `/v1` or `/systemone`. */
 	baseUrl: string;
+	/**
+	 * Model asked for a decision. Rides with the key like the base URL, but is
+	 * never a reason to refuse: anything but a non-empty string is silently
+	 * {@link SYSTEMONE_MODEL}.
+	 */
+	model: string;
 	/** Absolute path of the file that supplied the key. */
 	file: string;
 }
@@ -336,13 +342,17 @@ function mergeEnv(
 /**
  * Resolve the SystemOne routing keys from the files that were successfully read,
  * highest precedence first. Only the override and global scopes carry weight:
- * a project file that mentions either key is inert and warned about, because a
- * repository must not be able to enable routing (and aim briefs at a host) or
- * redirect an inherited key.
+ * a project file that mentions either credential is inert and warned about, because
+ * a repository must not be able to enable routing (and aim briefs at a host) or
+ * redirect an inherited key. A project-scoped `systemOneModel` is inert too, but
+ * silent — it is the credential that matters, not the model.
  *
- * The `{key, baseUrl}` pair resolves together, from one file: the first file
- * supplying `systemOneAPIKey` decides on/off *and* supplies `systemOneBaseUrl`;
- * a URL anywhere else is ignored. Every refusal — a non-string, empty, or
+ * The `{key, baseUrl, model}` triple resolves together, from one file: the first
+ * file supplying `systemOneAPIKey` decides on/off *and* supplies `systemOneBaseUrl`
+ * and `systemOneModel`; a URL or a model anywhere else is ignored. `systemOneModel`
+ * is the one silent key — absent, project-scoped, keyless, blank, or non-string, it
+ * degrades to {@link SYSTEMONE_MODEL} without a warning, because a bad model is never
+ * a reason to turn routing off. Every credential refusal — a non-string, empty, or
  * null-clearing key, an unusable URL — turns routing off without falling
  * through to a lower file, and no warning ever names the key or the URL.
  */
@@ -388,9 +398,14 @@ function resolveSystemOne(
 			);
 			return null;
 		}
+		// The deciding file owns the model, but a bad one is never fatal: absent,
+		// blank, or non-string all fall back silently rather than turn routing off.
+		const rawModel = root.systemOneModel;
+		const model =
+			typeof rawModel === "string" && rawModel.trim() !== "" ? rawModel.trim() : SYSTEMONE_MODEL;
 		const rawUrl = root.systemOneBaseUrl;
 		if (rawUrl === undefined) {
-			return { apiKey, baseUrl: DEFAULT_SYSTEMONE_BASE_URL, file: source.file };
+			return { apiKey, baseUrl: DEFAULT_SYSTEMONE_BASE_URL, model, file: source.file };
 		}
 		if (typeof rawUrl !== "string") {
 			warnings.push(
@@ -406,7 +421,7 @@ function resolveSystemOne(
 			);
 			return null;
 		}
-		return { apiKey, baseUrl, file: source.file };
+		return { apiKey, baseUrl, model, file: source.file };
 	}
 	return null;
 }

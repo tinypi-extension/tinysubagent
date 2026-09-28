@@ -45,6 +45,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
 	JSONC_CONFIG_FILENAME,
+	SYSTEMONE_MODEL,
 	defaultTarget,
 	settingsTargets,
 	type SettingsTarget,
@@ -58,12 +59,14 @@ import {
 	draftProfiles,
 	draftSystemOneAPIKey,
 	draftSystemOneBaseUrl,
+	draftSystemOneModel,
 	readDraft,
 	renameProfile,
 	setEnableProfiles,
 	setModel,
 	setSystemOneAPIKey,
 	setSystemOneBaseUrl,
+	setSystemOneModel,
 	setThinking,
 	writeDraft,
 	type ConfigDraft,
@@ -83,6 +86,7 @@ const ENABLE_ROW = "enable-profiles";
 const ADD_ROW = "add-profile";
 const SYSTEMONE_KEY_ROW = "systemone-api-key";
 const SYSTEMONE_URL_ROW = "systemone-base-url";
+const SYSTEMONE_MODEL_ROW = "systemone-model";
 
 /** The profile submenu's model row: the one that opens the picker. */
 const MODEL_ROW = "model";
@@ -808,6 +812,20 @@ class SettingsScreen extends Container implements ScreenHost {
 				}),
 		});
 		items.push({
+			id: SYSTEMONE_MODEL_ROW,
+			label: "SystemOne model",
+			description: `systemOneModel in ${file}; defaults to ${SYSTEMONE_MODEL}`,
+			currentValue: draftSystemOneModel(this.draft) ?? "",
+			submenu: (current, done) =>
+				new NameSubmenu({
+					theme: this.theme,
+					title: "SystemOne model",
+					initial: current,
+					submit: (value) => this.setSystemOneModelRow(value, done),
+					done: () => done(),
+				}),
+		});
+		items.push({
 			id: ADD_ROW,
 			label: "+ Add profile…",
 			description: `add a profile to ${file}`,
@@ -849,22 +867,30 @@ class SettingsScreen extends Container implements ScreenHost {
 
 	private setSystemOneKey(value: string, done: SubmenuDone): void {
 		const next = setSystemOneAPIKey(this.draft, value);
-		this.commit(next, (written) => {
-			if (!written) {
-				this.list.updateValue(SYSTEMONE_KEY_ROW, draftSystemOneAPIKey(this.draft) ?? "");
-			}
-			done();
-		});
+		this.commit(next, () => this.syncRow(SYSTEMONE_KEY_ROW, draftSystemOneAPIKey(this.draft), done));
 	}
 
 	private setSystemOneUrl(value: string, done: SubmenuDone): void {
 		const next = setSystemOneBaseUrl(this.draft, value);
-		this.commit(next, (written) => {
-			if (!written) {
-				this.list.updateValue(SYSTEMONE_URL_ROW, draftSystemOneBaseUrl(this.draft) ?? "");
-			}
-			done();
-		});
+		this.commit(next, () => this.syncRow(SYSTEMONE_URL_ROW, draftSystemOneBaseUrl(this.draft), done));
+	}
+
+	private setSystemOneModelRow(value: string, done: SubmenuDone): void {
+		const next = setSystemOneModel(this.draft, value);
+		this.commit(next, () => this.syncRow(SYSTEMONE_MODEL_ROW, draftSystemOneModel(this.draft), done));
+	}
+
+	/**
+	 * Put a row back to what the file now says, then close the name field. These
+	 * rows write through the host instead of handing a value back to the list, so
+	 * `SettingsList` never refreshes them itself: without this the row keeps showing
+	 * the value it had when the submenu opened — empty under a key the file already
+	 * holds, or the old value under a new one. `draft` is read at call time, so a
+	 * refused write puts the old value back rather than the one that was typed.
+	 */
+	private syncRow(row: string, value: string | undefined, done: SubmenuDone): void {
+		this.list.updateValue(row, value ?? "");
+		done();
 	}
 
 	private onChange(id: string, value: string): void {

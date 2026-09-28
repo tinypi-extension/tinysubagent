@@ -110,6 +110,19 @@ test("success 200: parses choice + confidence, request is exactly the wire contr
 	});
 });
 
+test("a supplied model replaces the default on the wire", async () => {
+	const calls: { url: string; init: RequestInit }[] = [];
+	await routeOnce(
+		{ ...baseInput, model: "cc/acme/big" },
+		{ fetch: fakeFetch({ status: 200, body: JSON.stringify(validAnswer) }, calls) },
+	);
+	const call = calls[0];
+	assert.ok(call);
+	const body = JSON.parse(String(call.init.body)) as { model: string };
+	assert.equal(body.model, "cc/acme/big");
+	assert.notEqual(body.model, SYSTEMONE_MODEL);
+});
+
 test("every failure row maps to null", async () => {
 	const failureRows: { name: string; status?: number; body?: string }[] = [
 		{ name: "401", status: 401, body: '{"error":"bad key"}' },

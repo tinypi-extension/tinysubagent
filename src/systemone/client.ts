@@ -8,6 +8,7 @@
  * or returned string ever interpolates them.
  */
 
+/** The model asked for a decision when the config does not name one. */
 export const SYSTEMONE_MODEL = "jev-latest";
 export const DEFAULT_SYSTEMONE_BASE_URL = "https://api.typesafe.ai";
 export const SYSTEMONE_TIMEOUT_MS = 2000;
@@ -55,6 +56,8 @@ export function normalizeBaseUrl(raw: string): string | null {
 export interface RouteOnceInput {
 	apiKey: string;
 	baseUrl: string; // already normalised
+	/** Model to ask; {@link SYSTEMONE_MODEL} when omitted. */
+	model?: string;
 	task: string;
 	role: { name: string; description: string };
 	criteria: Record<string, string>;
@@ -95,7 +98,7 @@ export async function routeOnce(
 	}
 
 	const body = JSON.stringify({
-		model: SYSTEMONE_MODEL,
+		model: input.model ?? SYSTEMONE_MODEL,
 		state: {
 			role: { name: input.role.name, description: input.role.description },
 			task: input.task,

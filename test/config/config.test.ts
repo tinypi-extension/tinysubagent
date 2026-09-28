@@ -11,6 +11,7 @@ import {
 	CURRENT_PROFILE,
 	DEFAULT_SYSTEMONE_BASE_URL,
 	JSONC_CONFIG_FILENAME,
+	SYSTEMONE_MODEL,
 	configPath,
 	configSources,
 	defaultTarget,
@@ -751,6 +752,7 @@ test("the override file beats the global file for both routing keys", () => {
 		assert.deepEqual(config.systemOne, {
 			apiKey: "override-key",
 			baseUrl: "https://override.example",
+			model: SYSTEMONE_MODEL,
 			file: override,
 		});
 		assert.deepEqual(warnings, []);
@@ -815,6 +817,7 @@ test("routing keys are read from the override file when PI_TINYSUBAGENT_CONFIG i
 		assert.deepEqual(config.systemOne, {
 			apiKey: "override-key",
 			baseUrl: S1_URL,
+			model: SYSTEMONE_MODEL,
 			file: override,
 		});
 		assert.deepEqual(warnings, []);
@@ -880,4 +883,45 @@ test("the default base URL applies when the deciding file omits it", () => {
 	assert.ok(config.systemOne);
 	assert.equal(config.systemOne.baseUrl, DEFAULT_SYSTEMONE_BASE_URL);
 	assert.deepEqual(warnings, []);
+});
+
+test("systemOneModel rides with the key: honored when set, default when omitted", () => {
+	const omitted = read(writeConfig({ systemOneAPIKey: S1_KEY }));
+	assert.ok(omitted.config.systemOne);
+	assert.equal(omitted.config.systemOne.model, SYSTEMONE_MODEL);
+	assert.deepEqual(omitted.warnings, []);
+
+	const named = read(
+		writeConfig({ systemOneAPIKey: S1_KEY, systemOneModel: "  cc/acme/big  " }),
+	);
+	assert.ok(named.config.systemOne);
+	assert.equal(named.config.systemOne.model, "cc/acme/big");
+	assert.deepEqual(named.warnings, []);
+});
+
+test("a bad systemOneModel silently falls back to the default and never disables routing", () => {
+	for (const bad of ["", "   ", 42, null, {}, ["m"], true]) {
+		const { config, warnings } = read(
+			writeConfig({ systemOneAPIKey: S1_KEY, systemOneModel: bad }),
+		);
+		assert.ok(config.systemOne, JSON.stringify(bad));
+		assert.equal(config.systemOne.model, SYSTEMONE_MODEL, JSON.stringify(bad));
+		assert.deepEqual(warnings, [], JSON.stringify(bad));
+	}
+});
+
+test("systemOneModel outside the deciding file is inert and silent", () => {
+	// Project scope: a repo can no more aim the model than it can the key.
+	const { cwd, agentDir } = twoDirs();
+	writeProject(cwd, CONFIG_FILENAME, { systemOneModel: "cc/project/model" });
+	writeGlobal(agentDir, CONFIG_FILENAME, { systemOneAPIKey: "global-key" });
+	const project = loadConfig(cwd, agentDir);
+	assert.ok(project.config.systemOne);
+	assert.equal(project.config.systemOne.model, SYSTEMONE_MODEL);
+	assert.deepEqual(project.warnings, []);
+
+	// A file with a model but no key decides nothing and is not worth a warning.
+	const keyless = read(writeConfig({ systemOneModel: "cc/keyless/model" }));
+	assert.equal(keyless.config.systemOne, null);
+	assert.deepEqual(keyless.warnings, []);
 });

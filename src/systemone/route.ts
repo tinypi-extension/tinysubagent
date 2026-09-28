@@ -84,6 +84,7 @@ export function createRouteFn(config: TinysubagentConfig, deps?: RouteOnceDeps):
 				{
 					apiKey: systemOne.apiKey,
 					baseUrl: systemOne.baseUrl,
+					model: systemOne.model,
 					task: input.task,
 					role: input.agent,
 					criteria: input.criteria,

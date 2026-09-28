@@ -183,7 +183,8 @@ profile for each task instead of making the model choose `profile` itself:
   "enableProfiles": true,
   "profiles": { "light": { "model": "<small-model>", "thinking": "low" } },
   "systemOneAPIKey": "sk-…",                     // a secret API key
-  "systemOneBaseUrl": "https://api.typesafe.ai"  // optional; this is the default
+  "systemOneBaseUrl": "https://api.typesafe.ai", // optional; this is the default
+  "systemOneModel": "jev-latest"                 // optional; this is the default
 }
 ```
 
@@ -191,11 +192,14 @@ profile for each task instead of making the model choose `profile` itself:
   `enableProfiles` is `true`, and at least one named profile exists. Then the `profile`
   parameter disappears from the tool schema and SystemOne chooses the profile per task
   from the configured names.
-- **The pair resolves as one unit, from one file.** The first file supplying
-  `systemOneAPIKey` decides whether routing is on *and* supplies the `systemOneBaseUrl`;
-  a `systemOneBaseUrl` in any other file is ignored.
-- **Project scope is inert for both keys.** A checked-in project file can neither enable,
+- **The triple resolves as one unit, from one file.** The first file supplying
+  `systemOneAPIKey` decides whether routing is on *and* supplies the `systemOneBaseUrl`
+  and `systemOneModel`; either key in any other file is ignored.
+- **Project scope is inert for all three.** A checked-in project file can neither enable,
   disable, nor redirect routing — put them in the override or global file.
+- **`systemOneModel` is the one silent key.** Absent, blank, non-string, keyless, or
+  project-scoped, it degrades to `jev-latest` without a warning: a bad model is never a
+  reason to turn routing off.
 - `http:` base URLs are accepted only for loopback hosts (`localhost`, `127.0.0.1`,
   `::1`).
 - **Every failure falls back to `current`**, and never fails or delays a spawn beyond a
@@ -205,8 +209,9 @@ profile for each task instead of making the model choose `profile` itself:
   call produced **no decision** — `current` is never a routing outcome.
 - **Privacy cost:** enabling the key means **every task brief leaves the machine** and is
   readable by the provider at `systemOneBaseUrl`. Briefs contain code and file contents.
-- Hand-edit only: `/subagent-settings` edits `enableProfiles` and `profiles.<name>`, never
-  the routing keys.
+- The routing keys are also editable from `/subagent-settings`, as plain text fields: the
+  API key is shown on its row, and the screen may write a file that ends up committed, so a
+  real credential is safer in the override or global file.
 
 ## Environment variables
 
@@ -258,7 +263,7 @@ warnings also appear as a notification at session start.
 | `env` warning: `key "a b" … is not a valid shell identifier` | Key is not a shell name | Use letters, digits and `_`, not starting with a digit. |
 | Warning about an unmatched tool pattern | A `tools` entry matched no real tool | Fix the typo or wildcard in that role's frontmatter. |
 | "Nested delegation is not supported yet" | A role lists `subagent` in `tools` | Remove it from that role's frontmatter. |
-| Routing warning: `project-scoped, so its routing keys are ignored`, `"systemOneBaseUrl" … has no "systemOneAPIKey"`, `"systemOneAPIKey" … is not a string` / `is empty`, `"systemOneBaseUrl" … is not a usable http(s) URL` | A routing key is malformed, or sits in a file that has no effect — both keys must resolve from one file, and project scope is inert | Routing stays off until it is fixed. Put both keys in the same global or override file as a non-empty string and an `https:` URL (plain `http:` only for loopback), or remove them. |
+| Routing warning: `project-scoped, so its routing keys are ignored`, `"systemOneBaseUrl" … has no "systemOneAPIKey"`, `"systemOneAPIKey" … is not a string` / `is empty`, `"systemOneBaseUrl" … is not a usable http(s) URL` | A routing key is malformed, or sits in a file that has no effect — the credentials must resolve from one file, and project scope is inert. `systemOneModel` never appears here: a bad or misplaced model silently falls back to `jev-latest` | Routing stays off until it is fixed. Put both credentials in the same global or override file as a non-empty string and an `https:` URL (plain `http:` only for loopback), or remove them. |
 | A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion; a long child holds the batch — watch its pane. |
 | Spawn ack shows `[current]` while routing is on | The SystemOne call produced no decision (timeout, error, unusable answer) and the fallback applied | By design: `current` is never a routing outcome, and `[profile]` in an ack is always the *resolved* profile. |
 

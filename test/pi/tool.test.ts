@@ -43,7 +43,7 @@ function routingConfig(systemOne: TinysubagentConfig["systemOne"]): Tinysubagent
 	};
 }
 
-const systemOneOn = { apiKey: KEY, baseUrl: BASE_URL, file: "test" };
+const systemOneOn = { apiKey: KEY, baseUrl: BASE_URL, model: "jev-latest", file: "test" };
 
 /** The smallest `ExtensionAPI` the tool body touches. */
 function stubPi(): import("@earendil-works/pi-coding-agent").ExtensionAPI {
