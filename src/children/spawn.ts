@@ -13,7 +13,7 @@ import { buildLaunchPaths, buildLaunchScript, buildPiArgv, buildTaskMarkdown, re
 import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "../herdr/cli.ts";
-import { planPlacement, planResizes } from "../herdr/layout.ts";
+import { planPlacement, planResizes, type Placement } from "../herdr/layout.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { expandToolPatterns } from "../tool-patterns.ts";
 import { isThinkingLevel, REPORT_TOOL_NAME, type ThinkingLevel } from "../types.ts";
@@ -130,18 +130,11 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 	// Without a tracker this stays the original call: split right off the
 	// orchestrator. With one, the placement decides target and direction.
-	let targetPaneId = orchestratorPaneId;
-	let direction: "right" | "down" = "right";
-	if (columns && orchestratorPaneId) {
-		const layout = await herdrPaneLayout(orchestratorPaneId);
-		// A failed read must not prune the tracker, so the empty case skips
-		// `liveIn` (which forgets every id the tab does not report) and plans a
-		// birth instead.
-		const live = layout ? columns.liveIn(layout) : [];
-		const placement = planPlacement(layout ?? { tabId: null, panes: [] }, orchestratorPaneId, live);
-		targetPaneId = placement.targetPaneId;
-		direction = placement.direction;
-	}
+	const placement = columns && orchestratorPaneId
+		? await resolvePlacement(columns, orchestratorPaneId)
+		: null;
+	const targetPaneId = placement?.targetPaneId ?? orchestratorPaneId;
+	const direction = placement?.direction ?? "right";
 
 	let paneId: string;
 	try {
@@ -162,13 +155,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// Both the read and every resize are best-effort: a failed read means no
 	// pass, and a failed resize leaves the pane open and usable.
 	if (columns && orchestratorPaneId) {
-		columns.place(paneId);
-		const layout = await herdrPaneLayout(orchestratorPaneId);
-		if (layout) {
-			for (const op of planResizes(layout, orchestratorPaneId, columns.liveIn(layout), paneId)) {
-				await herdrPaneResize(op.paneId, op.direction, op.amount);
-			}
-		}
+		await applySpawnResizes(columns, orchestratorPaneId, paneId);
 	}
 
 	// Cosmetic: a rename failure must not fail the spawn.
@@ -190,6 +177,34 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			task: request.task,
 		},
 	};
+}
+
+/** Resolve where a new pane should be placed, using the current layout. */
+async function resolvePlacement(
+	columns: LiveSubPanes,
+	orchestratorPaneId: string,
+): Promise<Placement> {
+	const layout = await herdrPaneLayout(orchestratorPaneId);
+	// A failed read must not prune the tracker, so the empty case skips
+	// `liveIn` (which forgets every id the tab does not report) and plans a
+	// birth instead.
+	const live = layout ? columns.liveIn(layout) : [];
+	return planPlacement(layout ?? { tabId: null, panes: [] }, orchestratorPaneId, live);
+}
+
+/** Record the pane and apply the initial resize pass. */
+async function applySpawnResizes(
+	columns: LiveSubPanes,
+	orchestratorPaneId: string,
+	paneId: string,
+): Promise<void> {
+	columns.place(paneId);
+	const layout = await herdrPaneLayout(orchestratorPaneId);
+	if (layout) {
+		for (const op of planResizes(layout, orchestratorPaneId, columns.liveIn(layout), paneId)) {
+			await herdrPaneResize(op.paneId, op.direction, op.amount);
+		}
+	}
 }
 
 /** `provider/id`, the form `--model` matches against. */

@@ -403,27 +403,39 @@ function resolveSystemOne(
 		const rawModel = root.systemOneModel;
 		const model =
 			typeof rawModel === "string" && rawModel.trim() !== "" ? rawModel.trim() : SYSTEMONE_MODEL;
-		const rawUrl = root.systemOneBaseUrl;
-		if (rawUrl === undefined) {
-			return { apiKey, baseUrl: DEFAULT_SYSTEMONE_BASE_URL, model, file: source.file };
-		}
-		if (typeof rawUrl !== "string") {
-			warnings.push(
-				`tinysubagent: "systemOneBaseUrl" in ${source.file} is not a string; routing is off.`,
-			);
-			return null;
-		}
-		const baseUrl = normalizeBaseUrl(rawUrl);
-		if (baseUrl === null) {
-			warnings.push(
-				`tinysubagent: "systemOneBaseUrl" in ${source.file} is not a usable http(s) URL; ` +
-					`routing is off.`,
-			);
-			return null;
-		}
+		const baseUrl = resolveBaseUrl(root.systemOneBaseUrl, source.file, warnings);
+		if (baseUrl === null) return null;
 		return { apiKey, baseUrl, model, file: source.file };
 	}
 	return null;
+}
+
+/**
+ * Resolve the SystemOne base URL from one file's root object.
+ * Returns the default when the key is absent, null when the value
+ * is unusable (warning already emitted).
+ */
+function resolveBaseUrl(
+	rawUrl: unknown,
+	file: string,
+	warnings: string[],
+): string | null {
+	if (rawUrl === undefined) return DEFAULT_SYSTEMONE_BASE_URL;
+	if (typeof rawUrl !== "string") {
+		warnings.push(
+			`tinysubagent: "systemOneBaseUrl" in ${file} is not a string; routing is off.`,
+		);
+		return null;
+	}
+	const baseUrl = normalizeBaseUrl(rawUrl);
+	if (baseUrl === null) {
+		warnings.push(
+			`tinysubagent: "systemOneBaseUrl" in ${file} is not a usable http(s) URL; ` +
+				`routing is off.`,
+		);
+		return null;
+	}
+	return baseUrl;
 }
 
 /**

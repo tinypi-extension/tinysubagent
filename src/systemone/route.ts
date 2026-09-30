@@ -148,7 +148,7 @@ export async function routeProfiles(
 
 	outcomes.forEach((outcome, index) => {
 		const { request } = routable[index]!;
-		const choice = outcome === null ? null : outcome.choice;
+		const choice = outcome?.choice ?? null;
 		if (
 			typeof choice === "string" &&
 			choice !== CURRENT_PROFILE &&

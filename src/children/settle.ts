@@ -42,14 +42,10 @@ export type SettleVerdict = ChildSettle | "interrupted";
  * settle hook checks the run's own signal as well.
  */
 export function settleReason(messages: readonly TurnMessage[] | undefined): SettleVerdict {
-	const list = messages ?? [];
-	for (let i = list.length - 1; i >= 0; i -= 1) {
-		const message = list[i];
-		if (message?.role !== "assistant") continue;
-		if (message.stopReason === "aborted") return "interrupted";
-		return message.stopReason === "error" ? "failed" : "done";
-	}
-	return "failed";
+	const message = lastAssistantMessage(messages);
+	if (!message) return "failed";
+	if (message.stopReason === "aborted") return "interrupted";
+	return message.stopReason === "error" ? "failed" : "done";
 }
 
 /**
@@ -60,9 +56,16 @@ export function settleReason(messages: readonly TurnMessage[] | undefined): Sett
  * run that produced no assistant message to judge at all.
  */
 export function failureDetail(messages: readonly TurnMessage[] | undefined): string {
+	return lastAssistantMessage(messages) ? "error" : "no-output";
+}
+
+/** The last assistant message, or undefined when there is none. */
+function lastAssistantMessage(
+	messages: readonly TurnMessage[] | undefined,
+): TurnMessage | undefined {
 	const list = messages ?? [];
 	for (let i = list.length - 1; i >= 0; i -= 1) {
-		if (list[i]?.role === "assistant") return "error";
+		if (list[i]?.role === "assistant") return list[i];
 	}
-	return "no-output";
+	return undefined;
 }
