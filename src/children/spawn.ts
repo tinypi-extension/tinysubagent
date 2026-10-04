@@ -13,7 +13,7 @@ import { buildLaunchPaths, buildLaunchScript, buildPiArgv, buildTaskMarkdown, re
 import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "../herdr/cli.ts";
-import { planPlacement, planResizes, type Placement } from "../herdr/layout.ts";
+import { LiveSubPanes, planPlacement, planResizes, type Placement } from "../herdr/layout.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { expandToolPatterns } from "../tool-patterns.ts";
 import { isThinkingLevel, REPORT_TOOL_NAME, type ThinkingLevel } from "../types.ts";
