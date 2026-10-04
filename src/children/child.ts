@@ -71,6 +71,21 @@
  * into working. Silence here means the same thing it means for an interrupt —
  * the watcher keeps waiting, and the human resolves the pane.
  *
+ * ## The turn that ended without a report
+ *
+ * A `done` settle with no report behind it means the model answered in
+ * prose instead of calling `subagent_report`. The child was staying open
+ * anyway, so before it goes quiet it asks SystemOne — the same
+ * chooser routing uses, on the same credentials — whether that final
+ * message is a finished result. When it is, the child steers itself a
+ * reminder to make the call, which starts one more turn in which the
+ * model can still hand its result back. A model that keeps forgetting
+ * is reminded at most `MAX_REPORT_REMINDERS` times, and a model that was
+ * never finished (a question back, a request for input) is left alone:
+ * a reminder there would just spend a turn. No credentials, a failed
+ * decision, or an unknown answer all mean "leave it alone" too — the
+ * child then behaves exactly as it did before this check existed.
+ *
  * ## The run that never started
  *
  * One failure is not a settle, because no run happened: pi validates the selected
@@ -92,21 +107,53 @@
  * orchestrator from waiting on a child that cannot start.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { loadConfig, type SystemOneConfig } from "../config/config.ts";
+import { REPORT_TOOL_NAME } from "../types.ts";
+import { checkReport } from "./report-check.ts";
 import { writeReportFile, writeResultReport } from "./report.ts";
+import { readFinalMessage } from "./session.ts";
 import { failureDetail, settleReason } from "./settle.ts";
 import type { TurnMessage } from "./settle.ts";
 import { errorText, preflightFailure, preflightRefusal } from "./preflight.ts";
-import { REPORT_TOOL_NAME } from "../types.ts";
 
-export default function tinysubagentChild(pi: ExtensionAPI): void {
+/** How many times one child may be nudged to report before it is left alone. */
+export const MAX_REPORT_REMINDERS = 2;
+
+/** The nudge itself: a steer, so the model sees why it is being asked again. */
+const REPORT_REMINDER =
+	"Your last turn ended with what looks like a complete result, but you " +
+	"never called `" +
+	REPORT_TOOL_NAME +
+	"`. Call `" +
+	REPORT_TOOL_NAME +
+	"` now with your full result in the `result` argument — that call is " +
+	"what delivers it to the caller and closes this pane. Ending your turn " +
+	"without it sends nothing.";
+
+/**
+ * Overridable bits of the child, so tests can answer the two questions
+ * the reminder needs without a SystemOne endpoint or a session file.
+ */
+export interface ChildDeps {
+	/** The child's final assistant message, or null when it wrote none. */
+	readFinal?: () => string | null;
+	/** Whether that message is a finished result the model never reported. */
+	decidesReport?: (message: string) => Promise<boolean>;
+}
+
+export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}): void {
 	/** Messages from the most recent agent phase; the settle decides on these. */
 	let lastMessages: TurnMessage[] | undefined;
 	/** Set once the child has reported success and begun shutting down. */
 	let finished = false;
 	/** Abort signal of the run that just ended; see where it is captured and why. */
 	let runSignal: AbortSignal | undefined;
+	/** Reminders sent for unreported turn ends; capped by MAX_REPORT_REMINDERS. */
+	let remindersSent = 0;
+	/** The report-check decider, built once on the first unreported settle. */
+	let reportDecider: ((message: string) => Promise<boolean>) | undefined;
 
 	// The explicit hand-back: the model passes its result, this writes it, and
 	// the orchestrator delivers that exact text. This is the only path that
@@ -190,7 +237,7 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		writeReportFile("failed", "error", refusal);
 	});
 
-	pi.on("agent_settled", (_event, _ctx) => {
+	pi.on("agent_settled", async (_event, _ctx) => {
 		if (finished) return;
 
 		// An unreported turn end is not an ending: the child stays alive at its
@@ -199,7 +246,13 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		// the human was told to inspect. The batch holds until a human asks for
 		// the report, quits the child, or closes the pane.
 		const settle = settleReason(lastMessages);
-		if (settle === "done") return;
+		if (settle === "done") {
+			// The one thing worth doing with that wait: a model that finished its
+			// work in prose instead of making the call can still be nudged into
+			// it. The pane was staying open anyway.
+			await remindIfUnreported();
+			return;
+		}
 
 		// The user Esc'd this child to redirect it. The loop unwound, but the child did
 		// not finish — it is alive at its prompt, so there is no ending to report, and
@@ -223,4 +276,64 @@ export default function tinysubagentChild(pi: ExtensionAPI): void {
 		// at its prompt, and the user may want to read it, retry, or steer.
 		writeReportFile("failed", failureDetail(lastMessages));
 	});
+
+	/**
+	 * Nudge a finished result that was never reported. The turn has ended, so
+	 * the child is idle: a steer starts one more turn, in which the model can
+	 * make the call it skipped.
+	 */
+	async function remindIfUnreported(): Promise<void> {
+		if (remindersSent >= MAX_REPORT_REMINDERS) return;
+		const finalMessage = deps.readFinal ? deps.readFinal() : finalSessionMessage();
+		if (finalMessage === null) return;
+		if (reportDecider === undefined) {
+			reportDecider = deps.decidesReport ?? systemOneDecider();
+		}
+
+		let remind = false;
+		try {
+			remind = await reportDecider(finalMessage);
+		} catch {
+			// A broken decider must not break the settle; leave the child as it is.
+			remind = false;
+		}
+		if (!remind) return;
+
+		remindersSent += 1;
+		pi.sendMessage(
+			{
+				customType: "tinysubagent_report_reminder",
+				content: REPORT_REMINDER,
+				display: true,
+				details: {},
+			},
+			{ triggerTurn: true, deliverAs: "steer" },
+		);
+	}
+}
+
+/**
+ * The child's own final assistant message, read from the session file pi is
+ * already appending to — the same file the orchestrator later reads a
+ * result back from.
+ */
+function finalSessionMessage(): string | null {
+	const file = process.env.PI_TINYSUBAGENT_SESSION;
+	return file === undefined ? null : readFinalMessage(file);
+}
+
+/**
+ * The production decider: SystemOne judges the message, on the same
+ * credentials routing uses. Config is read once, on the first unreported
+ * settle — a child that always reports never pays for the lookup.
+ */
+function systemOneDecider(): (message: string) => Promise<boolean> {
+	let systemOne: SystemOneConfig | null | undefined;
+	return async (message: string): Promise<boolean> => {
+		if (systemOne === undefined) {
+			systemOne = loadConfig(process.cwd(), getAgentDir()).config.systemOne;
+		}
+		if (systemOne === null) return false;
+		return checkReport(message, systemOne);
+	};
 }

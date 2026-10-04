@@ -213,6 +213,15 @@ profile for each task instead of making the model choose `profile` itself:
   API key is shown on its row, and the screen may write a file that ends up committed, so a
   real credential is safer in the override or global file.
 
+A configured key also powers the **report check** inside each child. When a
+subagent's turn ends without a `subagent_report` call, the child sends its
+final message to the same service, which decides whether the work was finished
+and merely never reported. When it was, the child steers itself a reminder to
+make the call — at most twice. An unfinished message, a declined answer, or
+any transport failure means the child is left alone, exactly as before. This
+needs only the key (not `enableProfiles` or profiles), and carries the same
+privacy cost: the subagent's final message leaves the machine.
+
 ## Environment variables
 
 `env` hands each subagent a static variable without changing the environment of the session

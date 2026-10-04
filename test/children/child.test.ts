@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import tinysubagentChild from "../../src/children/child.ts";
+import tinysubagentChild, {
+	MAX_REPORT_REMINDERS,
+	type ChildDeps,
+} from "../../src/children/child.ts";
 import { preflightFailure } from "../../src/children/preflight.ts";
 import { settleReason } from "../../src/children/settle.ts";
 import { writeReportFile, writeResultReport } from "../../src/children/report.ts";
@@ -21,6 +24,14 @@ interface RegisteredTool {
 		onUpdate: unknown,
 		ctx: { shutdown: () => void },
 	) => Promise<{ content: { type: string; text: string }[] }>;
+}
+
+/** A message the child sent to its own session. */
+interface SentMessage {
+	customType: string;
+	content: string;
+	display: boolean;
+	details: unknown;
 }
 
 /** The smallest `ExtensionAPI` the child factory touches. */
@@ -59,6 +70,7 @@ function stubChildApi(
 	};
 	const tools: RegisteredTool[] = [];
 	const listeners = new Map<string, unknown>();
+	const sent: SentMessage[] = [];
 	let shutdowns = 0;
 	const ctx = {
 		shutdown() {
@@ -87,6 +99,7 @@ function stubChildApi(
 	return {
 		tools,
 		listeners,
+		sent,
 		ctx,
 		shutdowns: () => shutdowns,
 		api: {
@@ -95,6 +108,9 @@ function stubChildApi(
 			},
 			on(event: string, handler: unknown) {
 				listeners.set(event, handler);
+			},
+			sendMessage(message: SentMessage, _options?: unknown) {
+				sent.push(message);
 			},
 		},
 	};
@@ -449,6 +465,126 @@ test("a done settle writes nothing and keeps the pane open", async () => {
 		assert.equal(existsSync(report), false);
 		assert.equal(stub.shutdowns(), 0);
 	});
+});
+
+test("an unreported turn end with a finished result is reminded to report", async () => {
+	const stub = stubChildApi();
+	const deps: ChildDeps = {
+		readFinal: () => "All 12 tables migrated.",
+		decidesReport: async () => true,
+	};
+	tinysubagentChild(stub.api as never, deps);
+	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+	const settled = stub.listeners.get("agent_settled") as (
+		event: unknown,
+		ctx: { shutdown: () => void },
+	) => void;
+
+	await settled({}, stub.ctx);
+
+	assert.equal(stub.sent.length, 1);
+	assert.equal(stub.sent[0]!.customType, "tinysubagent_report_reminder");
+	assert.match(stub.sent[0]!.content, /subagent_report/);
+	assert.equal(stub.sent[0]!.display, true);
+});
+
+test("reminders are capped so a model that keeps forgetting cannot loop", async () => {
+	const stub = stubChildApi();
+	let asked = 0;
+	const deps: ChildDeps = {
+		readFinal: () => "Done.",
+		decidesReport: async () => {
+			asked += 1;
+			return true;
+		},
+	};
+	tinysubagentChild(stub.api as never, deps);
+	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+	const settled = stub.listeners.get("agent_settled") as (
+		event: unknown,
+		ctx: { shutdown: () => void },
+	) => void;
+
+	for (let i = 0; i < MAX_REPORT_REMINDERS + 2; i += 1) {
+		await settled({}, stub.ctx);
+	}
+
+	assert.equal(stub.sent.length, MAX_REPORT_REMINDERS);
+	// The cap is checked before asking, so a capped child stops spending decisions.
+	assert.equal(asked, MAX_REPORT_REMINDERS);
+});
+
+test("an unreported turn end judged unfinished is left alone", async () => {
+	const stub = stubChildApi();
+	let asked = 0;
+	const deps: ChildDeps = {
+		readFinal: () => "Which migration should I run next?",
+		decidesReport: async () => {
+			asked += 1;
+			return false;
+		},
+	};
+	tinysubagentChild(stub.api as never, deps);
+	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+	const settled = stub.listeners.get("agent_settled") as (
+		event: unknown,
+		ctx: { shutdown: () => void },
+	) => void;
+
+	await settled({}, stub.ctx);
+
+	// The verdict was asked for and lost: the message exists, the decider
+	// ran, and no reminder was sent.
+	assert.equal(asked, 1);
+	assert.equal(stub.sent.length, 0);
+});
+
+test("a turn with no final message is never checked", async () => {
+	const stub = stubChildApi();
+	let asked = 0;
+	const deps: ChildDeps = {
+		readFinal: () => null,
+		decidesReport: async () => {
+			asked += 1;
+			return true;
+		},
+	};
+	tinysubagentChild(stub.api as never, deps);
+	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+	const settled = stub.listeners.get("agent_settled") as (
+		event: unknown,
+		ctx: { shutdown: () => void },
+	) => void;
+
+	await settled({}, stub.ctx);
+
+	assert.equal(asked, 0);
+	assert.equal(stub.sent.length, 0);
+});
+
+test("a decider that throws leaves the child alone", async () => {
+	const stub = stubChildApi();
+	const deps: ChildDeps = {
+		readFinal: () => "Done.",
+		decidesReport: async () => {
+			throw new Error("SystemOne down");
+		},
+	};
+	tinysubagentChild(stub.api as never, deps);
+	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+	const settled = stub.listeners.get("agent_settled") as (
+		event: unknown,
+		ctx: { shutdown: () => void },
+	) => void;
+
+	await settled({}, stub.ctx);
+
+	assert.equal(stub.sent.length, 0);
 });
 
 test("a settle with no assistant message is silence too, not a failure", async () => {
