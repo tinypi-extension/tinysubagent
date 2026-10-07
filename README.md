@@ -5,7 +5,6 @@ markdown files and delegate to them — every subagent runs in a shared right-ha
 [herdr](https://herdr.dev/) column beside the orchestrator, each with an isolated context
 window, and reports back as a steer message.
 
-- **Markdown roles** in `~/.pi/agent/agents/*.md` and `<project>/.pi/agents/*.md`.
 - **Fire-and-forget** — the spawn returns immediately; results wake your session later.
 - **Single or parallel** — one task, or up to 4 reporting back in one message. The
   orchestrator keeps 3/5 of the split; every live sub shares one right-hand column, stacked
@@ -86,7 +85,7 @@ restarted inside a herdr pane lists a `subagent` tool with your roles. Otherwise
 
 ## Define a role
 
-A role is a markdown file with YAML frontmatter; the body is the child's system prompt.
+A role is a markdown file with YAML frontmatter; the body is the child's system prompt. See [`sample_agent/`](sample_agent/) for ready-made examples.
 
 ```markdown
 ---
