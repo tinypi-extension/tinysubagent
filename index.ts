@@ -33,7 +33,7 @@ import { registerLifecycle } from "./src/pi/lifecycle.ts";
 import { offerPluginFix, type PluginFixGuard } from "./src/pi/plugin-fix.ts";
 import { createTool } from "./src/pi/tool.ts";
 import { createSettingsScreen } from "./src/pi/settings-tui.ts";
-import { createRouteFn } from "./src/systemone/route.ts";
+import { createRouteFn, type ClassifierRegistry } from "./src/systemone/route.ts";
 
 export default function tinysubagent(pi: ExtensionAPI): void {
 	// Registered above the herdr guard: editing a config file needs no pane, so the
@@ -98,7 +98,10 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 			columns,
 			watchers,
 			isShuttingDown: () => shuttingDown,
-			route: createRouteFn(config),
+			// The pinned devDependency (pi-coding-agent@0.85.1) lags the runtime pi,
+			// whose registry has `findOfType`/`classify`; one cast at the seam.
+			route: (ctx) =>
+				createRouteFn(config, { registry: ctx.modelRegistry as unknown as ClassifierRegistry }),
 		}),
 	);
 }

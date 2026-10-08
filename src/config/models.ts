@@ -12,6 +12,12 @@
 export interface ModelRegistryLike {
 	/** Models whose provider has credentials — the same set `/model` offers. */
 	getAvailable(): readonly RegistryModel[];
+	/**
+	 * The models pi can run as classifiers. Optional on purpose: the pinned pi types
+	 * do not have it, and a runtime that lacks it must degrade to an empty list
+	 * rather than break the screen.
+	 */
+	getModelsOfType?(type: "classifier"): readonly RegistryModel[];
 	/** Provider id as the user should read it; falls back to the id itself. */
 	getProviderDisplayName?(provider: string): string;
 }
@@ -27,8 +33,10 @@ export interface RegistryModel {
 export interface ModelChoice {
 	/** `provider/id` — the canonical reference the config file holds. */
 	value: string;
+	/** What the row shows: the model id, or the whole `value` when it shows that alone. */
 	label: string;
-	description: string;
+	/** The row's second column, when it has one; absent when `label` is the whole row. */
+	description?: string;
 }
 
 /**
@@ -39,11 +47,42 @@ export interface ModelChoice {
  * opens. Duplicates by value are dropped — one model must not appear twice.
  */
 export function modelChoices(registry: ModelRegistryLike | undefined): ModelChoice[] {
+	return choicesFrom(registry, availableModels(registry));
+}
+
+/**
+ * The same rows, but over the models the registry can run as classifiers.
+ *
+ * Routing resolves the stored reference with `findOfType("classifier", ...)`, which
+ * only sees these — offering the chat list would be offering picks that later fail to
+ * resolve. Everything a registry cannot answer is an empty list: no member, no
+ * registry, or a throw, so the screen degrades to its own empty state instead of
+ * taking a keypress down with it.
+ *
+ * Each row is the `provider/id` value alone, with no second column: the classifier
+ * row is read back as a reference to be checked against the file, so the provider
+ * leads the row rather than sitting beside it.
+ */
+export function classifierChoices(registry: ModelRegistryLike | undefined): ModelChoice[] {
+	return choicesFrom(registry, classifierModels(registry), true);
+}
+
+/** One registry snapshot as picker rows, sorted by label then value, de-duplicated. */
+function choicesFrom(
+	registry: ModelRegistryLike | undefined,
+	models: readonly RegistryModel[],
+	/** True when a row shows only the `provider/id` value — the classifier list. */
+	valueOnly = false,
+): ModelChoice[] {
 	const found = new Map<string, ModelChoice>();
-	for (const model of availableModels(registry)) {
+	for (const model of models) {
 		if (!isUsable(model)) continue;
 		const value = `${model.provider}/${model.id}`;
 		if (found.has(value)) continue;
+		if (valueOnly) {
+			found.set(value, { value, label: value });
+			continue;
+		}
 		const provider = registry?.getProviderDisplayName?.(model.provider) ?? model.provider;
 		found.set(value, {
 			value,
@@ -61,6 +100,19 @@ export function modelChoices(registry: ModelRegistryLike | undefined): ModelChoi
 function availableModels(registry: ModelRegistryLike | undefined): readonly RegistryModel[] {
 	if (!registry || typeof registry.getAvailable !== "function") return [];
 	return registry.getAvailable();
+}
+
+/**
+ * The registry's classifier models, or nothing when it cannot name any. The throw
+ * cannot escape a keypress, and a non-list answer is not a list to build rows from.
+ */
+function classifierModels(registry: ModelRegistryLike | undefined): readonly RegistryModel[] {
+	try {
+		const models = registry?.getModelsOfType?.("classifier");
+		return Array.isArray(models) ? models : [];
+	} catch {
+		return [];
+	}
 }
 
 /** A malformed entry is skipped rather than rendered as a row that cannot be written. */

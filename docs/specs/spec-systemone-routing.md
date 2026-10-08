@@ -19,6 +19,11 @@ stub, and the only other outbound effects are `execFile` calls to `herdr`
 (`src/herdr/cli.ts`). The new call is also the first thing that sends task text to a third
 party.
 
+> **Superseded when `classifierModel` is set.** A configured `classifierModel` routes
+> profiles in process through pi's model registry instead of this HTTP call; the three
+> SystemOne keys are then ignored. See
+> [spec-classifier-model.md](./spec-classifier-model.md).
+
 ## Wire contract (verified, not assumed)
 
 The endpoint, auth, request and response shapes below come from TypeSafe's own OpenAPI 3.1
@@ -319,6 +324,15 @@ Routing never fails a spawn and never aborts a batch. Every row below resolves t
 
 Nothing is retried, nothing is queued, nothing is cached, nothing is written to disk.
 
+A failed call is not silent: `routeOnce` reports one fixed, redacted reason through its
+`onFailure` callback (`timeout`, `network error`, `HTTP <status>`, `the answer was too
+large`, `the answer was not JSON`, `the answer was not a profile choice`, `no fetch
+implementation is available`, `the request was cancelled before it was sent`), and
+`createRouteFn` turns it into the request's one warning:
+`tinysubagent: systemOne routing failed (HTTP 401); keeping "current".` The reason is
+chosen by the client, never quoted from a caught error or a response body, so it cannot
+carry the key, the URL, or a provider message. A success emits no warning at all.
+
 ## What the orchestrator sees
 
 `[profile]` in the spawn ack already carries the resolved name
@@ -340,8 +354,8 @@ The key is a credential and is never interpolated into anything a model or a use
 not `configWarnings` (surfaced through `ctx.ui.notify` at `src/pi/lifecycle.ts:27`), not
 the tool description, not a tool error, not the ack, not a result message. Caught errors
 are mapped to a fixed string — an exception message or a URL is never passed through, and
-the `401` row above degrades to `current` silently, which is also what keeps a bad key out
-of the transcript. Four tests assert this (see Tests).
+the `401` row above degrades to `current` with the fixed reason `HTTP 401`, which is also
+what keeps a bad key out of the transcript. Tests assert this.
 
 ## Out of scope
 

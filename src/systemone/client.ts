@@ -5,7 +5,9 @@
  *
  * Redaction rule: the API key, the base URL, and the word `Bearer` are
  * credentials-and-infrastructure, not diagnostics. No caught error, warning,
- * or returned string ever interpolates them.
+ * or returned string ever interpolates them. A caller that wants to know why
+ * an attempt produced nothing passes `onFailure`: it receives one short fixed
+ * reason, chosen here, never a caught message or a response body.
  */
 
 /** The model asked for a decision when the config does not name one. */
@@ -64,9 +66,15 @@ export interface RouteOnceInput {
 export interface RouteOnceDeps {
 	fetch?: typeof globalThis.fetch;
 	timeoutMs?: number;
+	/**
+	 * Called at most once per attempt, with a short redacted reason, whenever the
+	 * attempt yields no decision. Pure diagnostics: the return value stays `null`,
+	 * and a reporter that throws cannot change it.
+	 */
+	onFailure?: (reason: string) => void;
 }
 
-const CHOICE_INSTRUCTIONS =
+export const CHOICE_INSTRUCTIONS =
 	"Which model/thinking profile should run this task? Choose the cheapest profile that can do it well, weighing how much reasoning and tool use it needs.";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -77,11 +85,22 @@ export async function routeOnce(
 	input: RouteOnceInput,
 	deps?: RouteOnceDeps,
 ): Promise<{ choice: string; confidence: number } | null> {
+	// Diagnostics ride a callback so the return type stays the one thing routing
+	// branches on; a broken reporter is swallowed, not propagated.
+	const fail = (reason: string): null => {
+		try {
+			deps?.onFailure?.(reason);
+		} catch {
+			// Nothing a reporter does may change what routing decides.
+		}
+		return null;
+	};
+
 	// An already-cancelled caller means nobody wants the answer; do not even dial.
-	if (input.signal?.aborted) return null;
+	if (input.signal?.aborted) return fail("the request was cancelled before it was sent");
 
 	const doFetch = deps?.fetch ?? globalThis.fetch;
-	if (typeof doFetch !== "function") return null;
+	if (typeof doFetch !== "function") return fail("no fetch implementation is available");
 
 	const controller = new AbortController();
 	const timer = setTimeout(
@@ -120,30 +139,32 @@ export async function routeOnce(
 			redirect: "manual",
 			signal: controller.signal,
 		});
-		if (!res.ok) return null;
+		// The status is the whole diagnosis and carries no URL; the body is not read.
+		if (!res.ok) return fail(`HTTP ${res.status}`);
 
 		// Read the body under the same signal so the 2 s budget covers the
 		// whole exchange, not just the headers.
 		const buf = await res.arrayBuffer();
-		if (buf.byteLength > MAX_RESPONSE_BYTES) return null;
+		if (buf.byteLength > MAX_RESPONSE_BYTES) return fail("the answer was too large");
 
+		const unusable = "the answer was not a profile choice";
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(new TextDecoder().decode(buf));
 		} catch {
-			return null;
+			return fail("the answer was not JSON");
 		}
-		if (!isPlainObject(parsed)) return null;
+		if (!isPlainObject(parsed)) return fail(unusable);
 		const answers = parsed.answers;
-		if (!isPlainObject(answers)) return null;
+		if (!isPlainObject(answers)) return fail(unusable);
 		const profile = answers.profile;
-		if (!isPlainObject(profile)) return null;
-		if (profile.type !== "choice") return null;
-		if (typeof profile.choice !== "string" || profile.choice === "") return null;
+		if (!isPlainObject(profile)) return fail(unusable);
+		if (profile.type !== "choice") return fail(unusable);
+		if (typeof profile.choice !== "string" || profile.choice === "") return fail(unusable);
 		const probabilities = profile.probabilities;
-		if (!isPlainObject(probabilities)) return null;
+		if (!isPlainObject(probabilities)) return fail(unusable);
 		// An answer without its distribution is an incomplete answer; do not trust it.
-		if (!Object.hasOwn(probabilities, profile.choice)) return null;
+		if (!Object.hasOwn(probabilities, profile.choice)) return fail(unusable);
 
 		const rawConfidence = profile.confidence;
 		const confidence =
@@ -151,10 +172,11 @@ export async function routeOnce(
 				? rawConfidence
 				: 0;
 		return { choice: profile.choice, confidence };
-	} catch {
-		// Timeout, abort, DNS, TLS, a throwing fetch — all degrade to `current`
-		// silently. Error messages may carry URLs or headers, so they are never surfaced.
-		return null;
+	} catch (error) {
+		// Timeout, abort, DNS, TLS, a throwing fetch — all degrade to `current`.
+		// Error messages may carry URLs or headers, so only `name` is read.
+		const timedOut = error instanceof Error && error.name === "AbortError";
+		return fail(timedOut ? "timeout" : "network error");
 	} finally {
 		clearTimeout(timer);
 		input.signal?.removeEventListener("abort", onCallerAbort);

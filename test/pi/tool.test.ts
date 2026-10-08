@@ -16,9 +16,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type TinysubagentConfig } from "../../src/config/config.ts";
 import { LiveSubPanes } from "../../src/herdr/layout.ts";
-import { buildParameters } from "../../src/present/describe.ts";
+import { buildParameters, buildToolDescription } from "../../src/present/describe.ts";
 import { createTool } from "../../src/pi/tool.ts";
 import { createRouteFn, type RouteFn, type RouteInput } from "../../src/systemone/route.ts";
 import type { AgentDef } from "../../src/types.ts";
@@ -39,6 +40,7 @@ function routingConfig(systemOne: TinysubagentConfig["systemOne"]): Tinysubagent
 		},
 		env: {},
 		systemOne,
+		classifier: null,
 		sources: [],
 	};
 }
@@ -70,7 +72,7 @@ const workerAgent: AgentDef = {
  * context `execute` needs. `stop()` ends the completion watcher; `cleanup()`
  * restores everything else.
  */
-function harness(config: TinysubagentConfig, route: RouteFn) {
+function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => RouteFn) {
 	let shuttingDown = false;
 	const tool = createTool({
 		pi: stubPi(),
@@ -205,7 +207,7 @@ test("a batch's two requests are routed independently and each child launches on
 		calls.push(input);
 		return { choice: input.task.includes("heavy") ? "pro" : "light" };
 	};
-	const h = harness(routingConfig(systemOneOn), route);
+	const h = harness(routingConfig(systemOneOn), () => route);
 	try {
 		const result = await withSpawnHerdrStub(() =>
 			executeTool(h.tool, h.ctx, {
@@ -262,7 +264,7 @@ test("a routing failure still spawns, on the current profile, in both failure sh
 		["a route with no choice", async () => ({ choice: null })],
 	];
 	for (const [label, route] of cases) {
-		const h = harness(routingConfig(systemOneOn), route);
+		const h = harness(routingConfig(systemOneOn), () => route);
 		try {
 			const result = await withSpawnHerdrStub(() =>
 				executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }),
@@ -290,7 +292,7 @@ test("an unknown agent triggers no route call and still fails with the usual err
 		calls++;
 		return { choice: "light" };
 	};
-	const h = harness(routingConfig(systemOneOn), route);
+	const h = harness(routingConfig(systemOneOn), () => route);
 	try {
 		const result = await withSpawnHerdrStub(() =>
 			executeTool(h.tool, h.ctx, { agent: "nope", task: "a brief that must not travel" }),
@@ -311,7 +313,7 @@ test("with routing off the route function is never called", async () => {
 		calls++;
 		return { choice: "light" };
 	};
-	const h = harness(routingConfig(null), route);
+	const h = harness(routingConfig(null), () => route);
 	try {
 		const result = await withSpawnHerdrStub(() =>
 			executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }),
@@ -343,7 +345,7 @@ test("a never-resolving route does not block the spawn beyond the routing budget
 		});
 	}) as unknown as typeof fetch;
 	const route = createRouteFn(routingConfig(systemOneOn), { fetch: hangingFetch, timeoutMs: 20 });
-	const h = harness(routingConfig(systemOneOn), route);
+	const h = harness(routingConfig(systemOneOn), () => route);
 	try {
 		const started = Date.now();
 		const result = await withSpawnHerdrStub(() =>
@@ -367,7 +369,7 @@ test("a never-resolving route does not block the spawn beyond the routing budget
 test("the key and the endpoint appear in no description, schema, or result text", async () => {
 	const config = routingConfig(systemOneOn);
 	const route: RouteFn = async () => ({ choice: "light" });
-	const h = harness(config, route);
+	const h = harness(config, () => route);
 	try {
 		const description = h.tool.description;
 		const schema = JSON.stringify(h.tool.parameters);
@@ -411,7 +413,7 @@ test("a stale profile in the request is routed anyway, and routing's word is fin
 	];
 
 	for (const c of cases) {
-		const h = harness(routingConfig(systemOneOn), c.route);
+		const h = harness(routingConfig(systemOneOn), () => c.route);
 		try {
 			const result = await withSpawnHerdrStub(() =>
 				executeTool(h.tool, h.ctx, { agent: "worker", task: "one job", profile: "light" }),
@@ -440,4 +442,57 @@ test("a stale profile in the request is routed anyway, and routing's word is fin
 			h.cleanup();
 		}
 	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// The route factory is built lazily, only when routing is active
+// ────────────────────────────────────────────────────────────────────────────
+
+test("the route factory is never invoked when profiles are off", async () => {
+	let factoryCalls = 0;
+	let routeCalls = 0;
+	const config: TinysubagentConfig = { ...routingConfig(null), enableProfiles: false };
+	const h = harness(config, () => {
+		factoryCalls++;
+		return async () => {
+			routeCalls++;
+			return { choice: "light" };
+		};
+	});
+	try {
+		const result = await withSpawnHerdrStub(() =>
+			executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }),
+		);
+		assert.equal(factoryCalls, 0, "the route factory ran with routing off");
+		assert.equal(routeCalls, 0, "the route ran with routing off");
+		assert.match(contentText(result), /\[current\]/);
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// `classifierModel` alone hides the profile knob, with no `describe.ts` change
+// ────────────────────────────────────────────────────────────────────────────
+
+test("only classifierModel set drops the profile list and parameter", () => {
+	const routed: TinysubagentConfig = {
+		...routingConfig(null),
+		classifier: {
+			provider: "openrouter",
+			model: "typesafe/jev-latest",
+			raw: "openrouter/typesafe/jev-latest",
+		},
+	};
+	// Positive control: with no transport, routing is off and the knob survives.
+	const unrouted: TinysubagentConfig = { ...routed, classifier: null };
+	assert.match(buildToolDescription([workerAgent], unrouted), /Profiles:/);
+	assert.ok(JSON.stringify(buildParameters(unrouted)).includes('"profile"'));
+
+	assert.doesNotMatch(buildToolDescription([workerAgent], routed), /Profiles:/);
+	assert.ok(
+		!JSON.stringify(buildParameters(routed)).includes('"profile"'),
+		"the profile parameter survived routing",
+	);
 });

@@ -172,7 +172,65 @@ A profile is a `{ model, thinking }` pair a child is launched with, configured i
   scope applies.
 - Config with TUI via `/subagent-settings`
 
-### SystemOne profiles routing
+### Any classifier model (`classifierModel`)
+
+A `classifierModel` serves routing **in process** through pi's model registry instead of
+calling SystemOne, so routing works with any classifier pi already has credentials for:
+
+```jsonc
+{
+  "enableProfiles": true,
+  "profiles": { "light": { "model": "<small-model>", "thinking": "low" } },
+  "classifierModel": "typesafe/jev-latest"          // or "openrouter/typesafe/jev-latest"
+}
+```
+
+- **The value is a pi model reference**, `"<provider>/<model-id>"`, split on the **first**
+  `/`: `openrouter/typesafe/jev-latest` means provider `openrouter`, model
+  `typesafe/jev-latest`.
+- To set up classifier model, use built-in [model](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#use-classifier-models) or custom with [pi-classifier-provider](https://github.com/tinypi-extension/pi-classifier-provider)
+- **It is honored in every scope**, unlike the SystemOne credentials: override, project,
+  and global, with precedence override > project > global and `.jsonc` over `.json` in a
+  scope. It is a model reference, not a secret, so a project file is not restricted — there
+  is no project-scope warning.
+- **In `/subagent-settings` the row is a picker**, not a text field: Enter opens the models the
+  registry can run as classifiers, each row the one-column reference `<provider>/<model-id>`,
+  and writes the chosen reference into the current scope. Its first entry, `(none)`, removes
+  the key so the `systemOne*` keys
+  apply again; a trailing `Type a value…` row opens the one-line field for a reference the
+  registry does not list.
+- Routing is active when `enableProfiles` is `true`, at least one named profile exists, and
+  either `classifierModel` or a `systemOneAPIKey` is configured. Then the `profile`
+  parameter disappears from the schema, and the classifier — not the model — picks the
+  profile per task.
+- **Setting it makes the three `systemOne*` keys inert and silent.** They are never read —
+  no warning, no annotation on their settings rows — and `config.systemOne` is `null`.
+- **A malformed value warns once and is ignored:** a non-blank string with no `/`, an empty
+  provider, or an empty model id emits
+  `tinysubagent: "classifierModel" in <file> is not "<provider>/<model-id>"; ignoring it.`
+  and the `systemOne*` keys then apply as they do today. A blank or non-string value is
+  silently unset.
+- **Every failure keeps `current` and warns once per request; there is no SystemOne
+  fallback** (those keys were never read):
+  - model not in the registry:
+    `tinysubagent: classifier model "<raw>" is not available; keeping "${current}".`
+  - classify error or abort:
+    `tinysubagent: classifier model "<raw>" failed; keeping "${current}".`
+- The classifier only *names* a profile; `model` and `thinking` still come from the profile
+  that name resolves to.
+
+**Known limitation:** while `classifierModel` is set, `config.systemOne` is `null`, so the
+child-side **report check** above goes quiet and subagent turns are not reminded to end
+with a `subagent_report` call. The port of that decider to the classifier is a follow-up,
+not part of this change.
+
+### SystemOne profiles routing (Deprecated)
+
+> `classifierModel` is recommended and `systemOneAPIKey`, `systemOneBaseUrl`, `systemOneModel` will be removed in the future.
+
+> A configured `classifierModel` supersedes this section: routing is then served in process
+> and the three `systemOne*` keys are ignored. See **Any classifier model** below.
+
 
 When a SystemOne key is configured, the orchestrator asks a routing service to pick the
 profile for each task instead of making the model choose `profile` itself:
@@ -206,11 +264,6 @@ profile for each task instead of making the model choose `profile` itself:
   answer without `probabilities`, or a chosen name that is not a configured profile. The
   invariant: with routing on, `[current]` in a spawn acknowledgment means the SystemOne
   call produced **no decision** — `current` is never a routing outcome.
-- **Privacy cost:** enabling the key means **every task brief leaves the machine** and is
-  readable by the provider at `systemOneBaseUrl`. Briefs contain code and file contents.
-- The routing keys are also editable from `/subagent-settings`, as plain text fields: the
-  API key is shown on its row, and the screen may write a file that ends up committed, so a
-  real credential is safer in the override or global file.
 
 A configured key also powers the **report check** inside each child. When a
 subagent's turn ends without a `subagent_report` call, the child sends its
@@ -220,6 +273,7 @@ make the call — at most twice. An unfinished message, a declined answer, or
 any transport failure means the child is left alone, exactly as before. This
 needs only the key (not `enableProfiles` or profiles), and carries the same
 privacy cost: the subagent's final message leaves the machine.
+
 
 ## Environment variables
 
@@ -273,7 +327,7 @@ warnings also appear as a notification at session start.
 | "Nested delegation is not supported yet" | A role lists `subagent` in `tools` | Remove it from that role's frontmatter. |
 | Routing warning: `project-scoped, so its routing keys are ignored`, `"systemOneBaseUrl" … has no "systemOneAPIKey"`, `"systemOneAPIKey" … is not a string` / `is empty`, `"systemOneBaseUrl" … is not a usable http(s) URL` | A routing key is malformed, or sits in a file that has no effect — the credentials must resolve from one file, and project scope is inert. `systemOneModel` never appears here: a bad or misplaced model silently falls back to `jev-latest` | Routing stays off until it is fixed. Put both credentials in the same global or override file as a non-empty string and an `https:` URL (plain `http:` only for loopback), or remove them. |
 | A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion; a long child holds the batch — watch its pane. |
-| Spawn ack shows `[current]` while routing is on | The SystemOne call produced no decision (timeout, error, unusable answer) and the fallback applied | By design: `current` is never a routing outcome, and `[profile]` in an ack is always the *resolved* profile. |
+| Spawn ack shows `[current]` while routing is on | The SystemOne call produced no decision (timeout, error, unusable answer) and the fallback applied | By design: `current` is never a routing outcome, and `[profile]` in an ack is always the *resolved* profile. The same result names the reason on its own line — `tinysubagent: systemOne routing failed (HTTP 401); keeping "current".` |
 
 ## License
 

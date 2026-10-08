@@ -68,15 +68,16 @@ export interface ToolDeps {
 	/** Reads the caller's shutdown flag, so delivery stops after it. */
 	isShuttingDown: () => boolean;
 	/**
-	 * The routing seam: when a SystemOne key is configured, rewrites each
-	 * request's profile before the validation loop. Injectable so tests never
-	 * touch the network.
+	 * The routing seam: when a classifier or SystemOne key is configured,
+	 * rewrites each request's profile before the validation loop. Built per
+	 * execute from the call's `ExtensionContext` so the transport can reach
+	 * `ctx.modelRegistry`; injectable so tests never touch the network.
 	 */
-	route: RouteFn;
+	route: (ctx: ExtensionContext) => RouteFn;
 }
 
 export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> {
-	const { pi, config, parameters, advertisedAgents, capability, columns, watchers, isShuttingDown, route } = deps;
+	const { pi, config, parameters, advertisedAgents, capability, columns, watchers, isShuttingDown } = deps;
 
 	return {
 		name: TOOL_NAME,
@@ -114,7 +115,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			const routeWarnings: string[] = [];
 			if (routingActive(config)) {
 				await routeProfiles(mode.requests, config, {
-					route,
+					route: deps.route(ctx),
 					agents: discovered.agents,
 					warn: (message) => routeWarnings.push(message),
 				});

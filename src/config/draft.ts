@@ -242,6 +242,20 @@ export function setSystemOneModel(draft: ConfigDraft, value: string): ConfigDraf
 	return applyModify(draft, ["systemOneModel"], value);
 }
 
+/** The classifier model as stored in the file; absent means the SystemOne keys apply. */
+export function draftClassifierModel(draft: ConfigDraft): string | undefined {
+	return rootString(draft, "classifierModel");
+}
+
+/**
+ * Set or clear the classifier model. `undefined` removes the key — the same shape
+ * `setModel` uses — so the `systemOne*` keys apply again exactly as they do when the
+ * key was never there. Writing null instead would parse as a value and not inherit.
+ */
+export function setClassifierModel(draft: ConfigDraft, value: string | undefined): ConfigDraft {
+	return applyModify(draft, ["classifierModel"], value);
+}
+
 export function setModel(draft: ConfigDraft, name: string, model: string | undefined): ConfigDraft {
 	return applyModify(draft, ["profiles", name, "model"], model);
 }

@@ -47,6 +47,17 @@ export interface SystemOneConfig {
 	file: string;
 }
 
+/**
+ * The pi model that serves profile routing in-process instead of SystemOne.
+ * `raw` is the trimmed `"<provider>/<model-id>"` string as written; `provider`
+ * and `model` are its first-slash split, so `model` may itself contain `/`.
+ */
+export interface ClassifierConfig {
+	provider: string;
+	model: string;
+	raw: string;
+}
+
 /** Which scope a config file belongs to. Scope outranks the filename. */
 export type ConfigScope = "override" | "project" | "global";
 
@@ -66,6 +77,12 @@ export interface TinysubagentConfig {
 	 * or global file, `null` when routing is off. Project scope never decides it.
 	 */
 	systemOne: SystemOneConfig | null;
+	/**
+	 * The in-process classifier model that serves routing when set, `null` when
+	 * unset. Any scope may carry it. When it resolves, {@link systemOne} is `null`
+	 * and the three `systemOne*` keys are never read.
+	 */
+	classifier: ClassifierConfig | null;
 	/**
 	 * Every file that was read successfully, highest precedence first. It rides
 	 * along with the config so a message raised long after loading (a named profile
@@ -340,6 +357,47 @@ function mergeEnv(
 }
 
 /**
+ * Resolve `classifierModel` from the files that were successfully read, highest
+ * precedence first. The walk mirrors {@link resolveSystemOne}: a file without the
+ * key falls through. Unlike the SystemOne credentials this is a model reference,
+ * not a credential, so any scope may decide it.
+ *
+ * A blank or non-string value is unset and silent; a non-blank string that is not
+ * `"<provider>/<model-id>"` warns once and is likewise ignored, falling through to
+ * a lower scope. A usable value is split on the first `/` only.
+ */
+function resolveClassifier(
+	read: readonly { source: ConfigSource; root: Record<string, unknown> }[],
+	warnings: string[],
+): ClassifierConfig | null {
+	// At most one malformed-value warning per load, however many files carry a
+	// malformed value and however far resolution falls through.
+	let warnedMalformed = false;
+	for (let i = read.length - 1; i >= 0; i--) {
+		const { source, root } = read[i]!;
+		if (!Object.hasOwn(root, "classifierModel")) continue;
+		const raw = root.classifierModel;
+		if (typeof raw !== "string" || raw.trim() === "") continue;
+		const value = raw.trim();
+		const slash = value.indexOf("/");
+		// No `/`, an empty provider (`/model`), or an empty model id (`provider/`):
+		// malformed. Warn once and let a lower scope try.
+		if (slash <= 0 || slash === value.length - 1) {
+			if (!warnedMalformed) {
+				warnedMalformed = true;
+				warnings.push(
+					`tinysubagent: "classifierModel" in ${source.file} is not "<provider>/<model-id>"; ` +
+						`ignoring it.`,
+				);
+			}
+			continue;
+		}
+		return { provider: value.slice(0, slash), model: value.slice(slash + 1), raw: value };
+	}
+	return null;
+}
+
+/**
  * Resolve the SystemOne routing keys from the files that were successfully read,
  * highest precedence first. Only the override and global scopes carry weight:
  * a project file that mentions either credential is inert and warned about, because
@@ -485,7 +543,10 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 		read.push({ source, root });
 	}
 
-	const systemOne = resolveSystemOne(read, warnings);
+	const classifier = resolveClassifier(read, warnings);
+	// A resolved classifier makes the SystemOne keys inert data: never read them,
+	// so a project-scoped key or a keyless URL raises no warning.
+	const systemOne = classifier === null ? resolveSystemOne(read, warnings) : null;
 
 	if (enableProfiles && Object.keys(profiles).length === 0) {
 		const named = sources[0]?.file ?? CONFIG_FILENAME;
@@ -495,5 +556,5 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 		);
 	}
 
-	return { config: { enableProfiles, profiles, env, systemOne, sources }, warnings };
+	return { config: { enableProfiles, profiles, env, systemOne, classifier, sources }, warnings };
 }

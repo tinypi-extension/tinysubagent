@@ -261,3 +261,124 @@ test("redaction: the key and base URL appear in no failure row's returned string
 		assert.ok(!rendered.includes(baseUrl), `row ${row.name}: the base URL leaked into ${rendered}`);
 	}
 });
+
+test("failure reasons: one redacted reason per failed attempt, none on success", async () => {
+	// A body that never fulfills on its own — only the client's abort ends it.
+	const hangingBodyFetch = ((_url: unknown, init?: RequestInit) => {
+		const signal = (init as RequestInit & { signal: AbortSignal }).signal;
+		return {
+			ok: true,
+			status: 200,
+			arrayBuffer: () =>
+				new Promise<ArrayBuffer>((_, reject) => {
+					signal.addEventListener(
+						"abort",
+						() => reject(new DOMException("aborted", "AbortError")),
+						{ once: true },
+					);
+				}),
+		} as unknown as Response;
+	}) as unknown as typeof fetch;
+	// The thrown message carries the endpoint: the reason must not quote it.
+	const throwing: typeof fetch = (() => {
+		throw new Error(`network down for ${baseInput.baseUrl}`);
+	}) as unknown as typeof fetch;
+	const answered = (body: string) => fakeFetch({ status: 200, body }, []);
+
+	const rows: {
+		name: string;
+		expected: RegExp | null;
+		run: (onFailure: (reason: string) => void) => Promise<unknown>;
+	}[] = [
+		{
+			name: "success",
+			expected: null,
+			run: (onFailure) =>
+				routeOnce(baseInput, { fetch: answered(JSON.stringify(validAnswer)), onFailure }),
+		},
+		{
+			name: "401",
+			expected: /^HTTP 401$/,
+			run: (onFailure) =>
+				routeOnce(baseInput, { fetch: fakeFetch({ status: 401, body: '{"error":"bad key"}' }, []), onFailure }),
+		},
+		{
+			name: "302 redirect not followed",
+			expected: /^HTTP 302$/,
+			run: (onFailure) => routeOnce(baseInput, { fetch: fakeFetch({ status: 302, body: "" }, []), onFailure }),
+		},
+		{
+			name: "non-JSON body",
+			expected: /not JSON/,
+			run: (onFailure) => routeOnce(baseInput, { fetch: answered("<html>nope</html>"), onFailure }),
+		},
+		{
+			name: "answers.profile missing",
+			expected: /not a profile choice/,
+			run: (onFailure) =>
+				routeOnce(baseInput, { fetch: answered(JSON.stringify({ answers: {} })), onFailure }),
+		},
+		{
+			name: "body larger than 1 MB",
+			expected: /too large/,
+			run: (onFailure) =>
+				routeOnce(baseInput, {
+					fetch: answered(JSON.stringify({ ...validAnswer, pad: "x".repeat(MAX_RESPONSE_BYTES + 1) })),
+					onFailure,
+				}),
+		},
+		{
+			name: "throwing fetch",
+			expected: /^network error$/,
+			run: (onFailure) => routeOnce(baseInput, { fetch: throwing, onFailure }),
+		},
+		{
+			name: "never-resolving body",
+			expected: /^timeout$/,
+			run: (onFailure) => routeOnce(baseInput, { fetch: hangingBodyFetch, timeoutMs: 20, onFailure }),
+		},
+		{
+			name: "already-aborted signal",
+			expected: /cancelled/,
+			run: (onFailure) => {
+				const controller = new AbortController();
+				controller.abort();
+				return routeOnce({ ...baseInput, signal: controller.signal }, { fetch: throwing, onFailure });
+			},
+		},
+		{
+			name: "non-function fetch",
+			expected: /no fetch implementation/,
+			run: (onFailure) =>
+				routeOnce(baseInput, { fetch: 42 as unknown as typeof fetch, onFailure }),
+		},
+	];
+
+	for (const row of rows) {
+		const reasons: string[] = [];
+		const result = await row.run((reason) => reasons.push(reason));
+		if (row.expected === null) {
+			assert.notEqual(result, null, `${row.name}: a decision is not a failure`);
+			assert.deepEqual(reasons, [], `${row.name}: a success must report nothing`);
+			continue;
+		}
+		assert.equal(result, null, `${row.name}: a failed attempt must not decide`);
+		assert.equal(reasons.length, 1, `${row.name}: exactly one reason`);
+		assert.match(reasons[0] ?? "", row.expected, row.name);
+		assert.ok(!(reasons[0] ?? "").includes(baseInput.apiKey), `${row.name}: the key leaked into a reason`);
+		assert.ok(!(reasons[0] ?? "").includes(baseInput.baseUrl), `${row.name}: the base URL leaked into a reason`);
+	}
+});
+
+test("a reporter that throws cannot change the result", async () => {
+	const throwing: typeof fetch = (() => {
+		throw new Error("network down");
+	}) as unknown as typeof fetch;
+	const result = await routeOnce(baseInput, {
+		fetch: throwing,
+		onFailure: () => {
+			throw new Error("reporter is broken");
+		},
+	});
+	assert.equal(result, null);
+});

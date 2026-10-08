@@ -10,7 +10,7 @@
  */
 
 import { strict as assert } from "node:assert";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -166,8 +166,8 @@ test("opening the screen writes nothing, and Esc reaches done()", async () => {
 	});
 });
 
-/** Open a screen over a config file that does not exist yet. */
-async function openScreen(modelRegistry?: unknown): Promise<{
+/** Open a screen over a config file that does not exist yet. `cwd` picks the project scope. */
+async function openScreen(modelRegistry?: unknown, cwd: string = process.cwd()): Promise<{
 	send: (data: string) => void;
 	closed: Promise<void>;
 	component: () => ScreenComponent;
@@ -175,7 +175,7 @@ async function openScreen(modelRegistry?: unknown): Promise<{
 	const registered = command();
 	let component: ScreenComponent | undefined;
 	const ctx = {
-		cwd: process.cwd(),
+		cwd,
 		hasUI: true,
 		mode: "tui",
 		// Absent in most tests on purpose: the screen has to survive a context that
@@ -263,6 +263,15 @@ function fakeRegistry() {
 			{ provider: "oc-openai", id: "deepseek-flash", name: "DeepSeek Flash" },
 			{ provider: "cc", id: "shared-id" },
 		],
+		// The classifier picker reads this set, not the chat one above: `shared-id` is
+		// chat-only on purpose, so a picker showing it would be reaching for the wrong list.
+		getModelsOfType: (type: string) =>
+			type === "classifier"
+				? [
+						{ provider: "oc-openai", id: "glm-5.3-flash", name: "GLM 5.3 Flash" },
+						{ provider: "typesafe", id: "jev-latest", name: "Jev Latest" },
+					]
+				: [],
 		getProviderDisplayName: (provider: string) => (provider === "oc-openai" ? "OC OpenAI" : provider),
 	};
 }
@@ -472,9 +481,15 @@ test("without a registry the picker offers nothing but (inherit) and says so", a
  * shows the value that was just written rather than the one it opened with.
  */
 
-/** Down to the model row: three SystemOne rows below Enable profiles, and model last. */
+/** Down to the model row: the three SystemOne rows plus the classifier row above them. */
 function focusSystemOneModel(screen: { send: (data: string) => void }): void {
-	for (let i = 0; i < 4; i++) screen.send(DOWN);
+	for (let i = 0; i < 5; i++) screen.send(DOWN);
+}
+
+/** Down to the classifier row: it sits directly below Enable profiles. */
+function focusClassifierRow(screen: { send: (data: string) => void }): void {
+	screen.send(DOWN);
+	screen.send(DOWN);
 }
 
 /** The model row's name field: focused, then opened. */
@@ -545,8 +560,8 @@ test("a SystemOne row shows the value it just wrote, not the one it opened with"
 		writeFileSync(file, '{\n\t"systemOneModel": "jev-hand-written"\n}\n');
 		const screen = await openScreen();
 
-		// Down three times lands on the base URL, which is the row above the model.
-		for (let i = 0; i < 3; i++) screen.send(DOWN);
+		// Down four times lands on the base URL, which is the row above the model.
+		for (let i = 0; i < 4; i++) screen.send(DOWN);
 		screen.send(ENTER);
 		screen.send("http://example.test");
 		screen.send(ENTER);
@@ -559,4 +574,280 @@ test("a SystemOne row shows the value it just wrote, not the one it opened with"
 		await screen.closed;
 		cleanup();
 	});
+});
+
+test("the classifier row sits above the three SystemOne rows and names its shape", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"systemOneAPIKey": "sk-test"\n}\n');
+		const screen = await openScreen();
+
+		const rendered = screen.component().render(80).join("\n");
+		const classifier = rendered.indexOf("Classifier model");
+		assert.notEqual(classifier, -1, "no Classifier model row");
+		for (const label of ["SystemOne API key", "SystemOne base URL", "SystemOne model"]) {
+			assert.notEqual(rendered.indexOf(label), -1, `no ${label} row`);
+			assert.ok(classifier < rendered.indexOf(label), `${label} must come after Classifier model`);
+		}
+
+		// The description names the key, the value shape, and the file being edited.
+		focusClassifierRow(screen);
+		assert.match(
+			screen.component().render(200).join("\n"),
+			/classifierModel in .*;\s*"<provider>\/<model-id>"/,
+		);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+/** The `classifierModel` the file holds, or undefined when the key is not there at all. */
+function savedClassifier(file: string): string | undefined {
+	return (JSON.parse(readFileSync(file, "utf8")) as { classifierModel?: string }).classifierModel;
+}
+
+/**
+ * Open the classifier row's list and walk `steps` rows down from where it opens.
+ * The row starts on its own stored model, so a row with no key opens on `(none)`.
+ */
+function pickClassifier(screen: { send: (data: string) => void }, steps: number): void {
+	focusClassifierRow(screen);
+	screen.send(ENTER);
+	for (let i = 0; i < steps; i++) screen.send(DOWN);
+	screen.send(ENTER);
+}
+
+test("the classifier row opens the classifier list, not a text field", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"enableProfiles": true\n}\n');
+		const screen = await openScreen(fakeRegistry());
+
+		focusClassifierRow(screen);
+		screen.send(ENTER);
+
+		const rendered = screen.component().render(80).join("\n");
+		assert.match(rendered, /\(none\)/);
+		assert.match(rendered, /no classifier; the systemOne\* keys apply/);
+		// The classifier models, not the chat ones: `shared-id` is only in `getAvailable`.
+		assert.match(rendered, /oc-openai\/glm-5\.3-flash/);
+		assert.match(rendered, /typesafe\/jev-latest/);
+		// One column: the row is the `provider/id` value alone, not the id beside its
+		// display name.
+		assert.doesNotMatch(rendered, /GLM 5\.3 Flash · OC OpenAI/);
+		assert.doesNotMatch(rendered, /shared-id/);
+		// The list is the whole interaction, and the hint line says which keys work now.
+		assert.match(rendered, /↑↓ walk models/);
+		assert.doesNotMatch(rendered, /↑↓ pick a row/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("picking a classifier writes provider/id and updates the row", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"enableProfiles": true\n}\n');
+		const screen = await openScreen(fakeRegistry());
+
+		// The list is sorted by label, so one step past `(none)` is `glm-5.3-flash`.
+		pickClassifier(screen, 1);
+
+		assert.equal(savedClassifier(file), "oc-openai/glm-5.3-flash");
+		const rendered = screen.component().render(80).join("\n");
+		assert.match(rendered, /Classifier model\s+oc-openai\/glm-5\.3-flash/);
+		// The picker is gone and the screen's own bottom key line is back.
+		assert.doesNotMatch(rendered, /↑↓ walk models/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("Enter on an untouched classifier list keeps the model it opened with", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"classifierModel": "oc-openai/glm-5.3-flash"\n}\n');
+		const screen = await openScreen(fakeRegistry());
+
+		// The list opens on the stored model, so Enter with no walk at all must be a
+		// no-op rather than a save of whatever row happens to sit under the cursor.
+		focusClassifierRow(screen);
+		screen.send(ENTER);
+		screen.send(ENTER);
+
+		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+			classifierModel: "oc-openai/glm-5.3-flash",
+		});
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("a blank write-in submit writes nothing", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"enableProfiles": true\n}\n');
+		const screen = await openScreen(fakeRegistry());
+
+		// `(none)`, the two classifier models, then the write-in row.
+		focusClassifierRow(screen);
+		screen.send(ENTER);
+		for (let i = 0; i < 3; i++) screen.send(DOWN);
+		screen.send(ENTER);
+		// Enter on the empty field is not a clear — `(none)` is the only clear — so it
+		// closes having written nothing rather than removing the key behind the user.
+		screen.send(ENTER);
+
+		assert.equal(savedClassifier(file), undefined);
+		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { enableProfiles: true });
+		// The field really was submitted and closed, not ignored: the one-line field's
+		// own key line is gone and the screen's row hint is back.
+		assert.doesNotMatch(screen.component().render(80).join("\n"), /Enter to save/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("an off-list classifier value is shown and kept unless another is picked", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		const stored = '{\n\t"classifierModel": "hand/written"\n}\n';
+		writeFileSync(file, stored);
+		const screen = await openScreen(fakeRegistry());
+
+		// The row reads back the file's own string, exactly as stored.
+		assert.match(screen.component().render(80).join("\n"), /Classifier model\s+hand\/written/);
+
+		focusClassifierRow(screen);
+		screen.send(ENTER);
+		const rendered = screen.component().render(80).join("\n");
+		assert.match(rendered, /hand\/written/);
+		assert.match(rendered, /not in the model list/);
+
+		// Walking away is not choosing: Esc keeps the value the file already had.
+		screen.send(ESC);
+		assert.equal(readFileSync(file, "utf8"), stored, "Esc must not write");
+		assert.match(screen.component().render(80).join("\n"), /Classifier model\s+hand\/written/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("the (none) entry removes the key so the SystemOne keys apply again", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"classifierModel": "oc-openai/glm-5.3-flash"\n}\n');
+		const screen = await openScreen(fakeRegistry());
+
+		// The picker opens on the stored model, so `(none)` is one row up — which is
+		// also what proves the clear entry is reachable without walking the list.
+		focusClassifierRow(screen);
+		screen.send(ENTER);
+		screen.send(UP);
+		screen.send(ENTER);
+
+		assert.equal(savedClassifier(file), undefined, "the key must be gone, not empty");
+		assert.doesNotMatch(readFileSync(file, "utf8"), /classifierModel/);
+		assert.doesNotMatch(screen.component().render(80).join("\n"), /glm-5\.3-flash/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("a registry with no classifier list renders the clear entry and nothing else", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"enableProfiles": true\n}\n');
+
+		// Both shapes have to survive: a chat-only registry, and the bare context the
+		// screen is already built for. Neither may crash, and neither invents a model.
+		for (const registry of [{ getAvailable: () => [] }, undefined]) {
+			const screen = await openScreen(registry);
+			focusClassifierRow(screen);
+			screen.send(ENTER);
+
+			const rendered = screen.component().render(80).join("\n");
+			assert.match(rendered, /\(none\)/);
+			assert.match(rendered, /Type a value…/);
+			assert.match(rendered, /no models available to pick/);
+			assert.doesNotMatch(rendered, /glm-5\.3-flash/);
+
+			escapeAll(screen);
+			await screen.closed;
+		}
+		cleanup();
+	});
+});
+
+test("the write-in row opens the text field and saves a typed reference", async () => {
+	await withScratchConfig(async (file, cleanup) => {
+		writeFileSync(file, '{\n\t"enableProfiles": true\n}\n');
+		const screen = await openScreen(fakeRegistry());
+
+		// `(none)`, the two classifier models, then the write-in row.
+		focusClassifierRow(screen);
+		screen.send(ENTER);
+		for (let i = 0; i < 3; i++) screen.send(DOWN);
+		screen.send(ENTER);
+
+		// The list is replaced by a one-line field, so a value the registry omits stays
+		// enterable — which is why the key is a plain string in the first place.
+		assert.match(screen.component().render(80).join("\n"), /Enter to save/);
+		screen.send("typesafe/jev-latest");
+		screen.send(ENTER);
+
+		assert.equal(savedClassifier(file), "typesafe/jev-latest");
+		assert.match(screen.component().render(80).join("\n"), /Classifier model\s+typesafe\/jev-latest/);
+
+		escapeAll(screen);
+		await screen.closed;
+		cleanup();
+	});
+});
+
+test("the classifier row round-trips in the project and root scopes", async () => {
+	const savedOverride = process.env.PI_TINYSUBAGENT_CONFIG;
+	const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const cwd = mkdtempSync(join(tmpdir(), "tinysubagent-classifier-project-"));
+	const agentDir = mkdtempSync(join(tmpdir(), "tinysubagent-classifier-root-"));
+	const projectFile = join(cwd, ".pi", "tinysubagent.jsonc");
+	const rootFile = join(agentDir, "tinysubagent.jsonc");
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	writeFileSync(projectFile, '{\n\t"enableProfiles": true\n}\n');
+	writeFileSync(rootFile, '{\n\t"enableProfiles": true\n}\n');
+	delete process.env.PI_TINYSUBAGENT_CONFIG;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		const screen = await openScreen(fakeRegistry(), cwd);
+
+		// Project is the default target (highest precedence): write it there first.
+		// The list is sorted by label, so one step past `(none)` is `glm-5.3-flash`.
+		pickClassifier(screen, 1);
+		assert.match(readFileSync(projectFile, "utf8"), /"classifierModel": "oc-openai\/glm-5\.3-flash"/);
+
+		// Cycle the Scope row to root, then write the same value into that file.
+		screen.send(UP);
+		screen.send(UP);
+		screen.send(ENTER);
+		pickClassifier(screen, 1);
+
+		assert.match(readFileSync(rootFile, "utf8"), /"classifierModel": "oc-openai\/glm-5\.3-flash"/);
+		assert.match(readFileSync(projectFile, "utf8"), /"classifierModel": "oc-openai\/glm-5\.3-flash"/);
+
+		escapeAll(screen);
+		await screen.closed;
+	} finally {
+		if (savedOverride === undefined) delete process.env.PI_TINYSUBAGENT_CONFIG;
+		else process.env.PI_TINYSUBAGENT_CONFIG = savedOverride;
+		if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+	}
 });

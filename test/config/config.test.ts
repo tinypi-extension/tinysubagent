@@ -925,3 +925,125 @@ test("systemOneModel outside the deciding file is inert and silent", () => {
 	assert.equal(keyless.config.systemOne, null);
 	assert.deepEqual(keyless.warnings, []);
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// classifierModel: the in-process classifier transport
+// ────────────────────────────────────────────────────────────────────────────
+
+const CLASSIFIER = "openrouter/typesafe/jev-latest";
+
+test("classifierModel resolves from the override, project, and global scopes", () => {
+	{
+		const { cwd, agentDir } = twoDirs();
+		writeGlobal(agentDir, CONFIG_FILENAME, { classifierModel: "global/model" });
+		const { config, warnings } = loadConfig(cwd, agentDir);
+		assert.deepEqual(config.classifier, { provider: "global", model: "model", raw: "global/model" });
+		assert.deepEqual(warnings, []);
+	}
+	{
+		const { cwd, agentDir } = twoDirs();
+		writeProject(cwd, CONFIG_FILENAME, { classifierModel: "project/model" });
+		const { config, warnings } = loadConfig(cwd, agentDir);
+		assert.deepEqual(config.classifier, { provider: "project", model: "model", raw: "project/model" });
+		assert.deepEqual(warnings, []);
+	}
+	{
+		const override = writeConfig({ classifierModel: "override/model" });
+		const { cwd, agentDir } = twoDirs();
+		withEnv(override, () => {
+			const { config, warnings } = loadConfig(cwd, agentDir);
+			assert.deepEqual(config.classifier, { provider: "override", model: "model", raw: "override/model" });
+			assert.deepEqual(warnings, []);
+		});
+	}
+});
+
+test("classifierModel precedence is override > project > global", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, { classifierModel: "global/model" });
+	writeProject(cwd, CONFIG_FILENAME, { classifierModel: "project/model" });
+	assert.equal(loadConfig(cwd, agentDir).config.classifier?.provider, "project");
+
+	const override = writeConfig({ classifierModel: "override/model" });
+	withEnv(override, () => {
+		assert.equal(loadConfig(cwd, agentDir).config.classifier?.provider, "override");
+	});
+});
+
+test("a classifierModel in .jsonc beats one in .json within the same scope", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, { classifierModel: "json/model" });
+	writeGlobal(agentDir, JSONC_CONFIG_FILENAME, { classifierModel: "jsonc/model" });
+	const { config, warnings } = loadConfig(cwd, agentDir);
+	assert.equal(config.classifier?.provider, "jsonc");
+	assert.deepEqual(warnings, []);
+});
+
+test("a blank, non-string, or null classifierModel resolves to null silently", () => {
+	for (const value of ["", "   ", 42, {}, null, ["m"], true]) {
+		const { config, warnings } = read(writeConfig({ classifierModel: value }));
+		assert.equal(config.classifier, null, JSON.stringify(value));
+		assert.deepEqual(warnings, [], JSON.stringify(value));
+	}
+});
+
+test("a malformed classifierModel warns exactly once and resolves to null", () => {
+	for (const value of ["justamodel", "/model", "provider/"]) {
+		const file = writeConfig({ classifierModel: value });
+		const { config, warnings } = read(file);
+		assert.equal(config.classifier, null, value);
+		assert.equal(warnings.length, 1, value);
+		assert.equal(
+			warnings[0],
+			`tinysubagent: "classifierModel" in ${file} is not "<provider>/<model-id>"; ignoring it.`,
+			value,
+		);
+	}
+});
+
+test("a malformed classifierModel warns at most once per load", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeProject(cwd, CONFIG_FILENAME, { classifierModel: "malformed-project" });
+	writeGlobal(agentDir, CONFIG_FILENAME, { classifierModel: "malformed-global" });
+	const { config, warnings } = loadConfig(cwd, agentDir);
+	assert.equal(config.classifier, null);
+	assert.equal(warnings.length, 1);
+	assert.ok((warnings[0] ?? "").includes(path.join(cwd, CONFIG_DIR_NAME, CONFIG_FILENAME)));
+});
+
+test("classifierModel splits on the first slash only", () => {
+	const { config, warnings } = read(writeConfig({ classifierModel: CLASSIFIER }));
+	assert.deepEqual(config.classifier, {
+		provider: "openrouter",
+		model: "typesafe/jev-latest",
+		raw: CLASSIFIER,
+	});
+	assert.deepEqual(warnings, []);
+});
+
+test("classifierModel makes the systemOne keys inert in both directions", () => {
+	const { cwd, agentDir } = twoDirs();
+	// The project file carries a routing key (inert today, warned) and the
+	// classifier; the global file carries a URL without a key (also warned today).
+	writeProject(cwd, CONFIG_FILENAME, {
+		systemOneAPIKey: S1_KEY,
+		systemOneBaseUrl: S1_URL,
+		classifierModel: "project/model",
+	});
+	writeGlobal(agentDir, CONFIG_FILENAME, { systemOneBaseUrl: S1_URL });
+
+	const resolved = loadConfig(cwd, agentDir);
+	assert.deepEqual(resolved.warnings, []);
+	assert.equal(resolved.config.systemOne, null);
+	assert.equal(resolved.config.classifier?.provider, "project");
+
+	// Remove only the classifier key from the same fixture: today's warnings return.
+	writeProject(cwd, CONFIG_FILENAME, { systemOneAPIKey: S1_KEY, systemOneBaseUrl: S1_URL });
+	const legacy = loadConfig(cwd, agentDir);
+	assert.equal(legacy.config.classifier, null);
+	assert.equal(legacy.config.systemOne, null);
+	assert.equal(legacy.warnings.length, 2);
+	assert.match(legacy.warnings[0] ?? "", /project-scoped/);
+	assert.match(legacy.warnings[1] ?? "", /has no "systemOneAPIKey"/);
+	assertRedacted(legacy.warnings, S1_KEY, S1_URL);
+});

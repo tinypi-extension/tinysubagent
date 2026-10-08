@@ -7,6 +7,7 @@ import { test } from "node:test";
 import {
 	addProfile,
 	deleteProfile,
+	draftClassifierModel,
 	draftEnableProfiles,
 	draftError,
 	draftProfile,
@@ -14,6 +15,7 @@ import {
 	draftSystemOneModel,
 	readDraft,
 	renameProfile,
+	setClassifierModel,
 	setEnableProfiles,
 	setModel,
 	setSystemOneModel,
@@ -168,6 +170,7 @@ test("an unparseable file surfaces unparseable and no edit or write changes it",
 		setThinking(draft, "work", "low"),
 		deleteProfile(draft, "work"),
 		setSystemOneModel(draft, "jev-experimental"),
+		setClassifierModel(draft, "openrouter/typesafe/jev-latest"),
 	]) {
 		assert.equal(unchanged.text, broken);
 	}
@@ -215,6 +218,33 @@ test("setSystemOneModel writes the root key and preserves comments elsewhere", (
 	assert.deepEqual(draftProfiles(reread), ["quick", "work"], "profiles disturbed by a root edit");
 });
 
+test("classifierModel draft get/set round-trip the root key", () => {
+	const { draft } = draftWith(DOC);
+	assert.equal(draftClassifierModel(draft), undefined, "absent key read as a value");
+
+	const edited = setClassifierModel(draft, "openrouter/typesafe/jev-latest");
+	assert.equal(draftClassifierModel(edited), "openrouter/typesafe/jev-latest");
+	assert.ok(edited.text.includes('"openrouter/typesafe/jev-latest"'));
+
+	// Round-tripping through raw text is the contract: the screen re-reads the file.
+	const { draft: reread } = draftWith(edited.text);
+	assert.equal(draftClassifierModel(reread), "openrouter/typesafe/jev-latest");
+	assert.deepEqual(draftProfiles(reread), ["quick", "work"], "profiles disturbed by a root edit");
+});
+
+test("setClassifierModel with undefined removes the key again", () => {
+	const { draft } = draftWith(DOC);
+	const set = setClassifierModel(draft, "openrouter/typesafe/jev-latest");
+	assert.equal(draftClassifierModel(set), "openrouter/typesafe/jev-latest");
+
+	// Clearing is a removal, not a null: an absent key is what makes the
+	// `systemOne*` keys apply, and a null would parse as a value and not.
+	const cleared = setClassifierModel(set, undefined);
+	assert.equal(draftClassifierModel(cleared), undefined, "the key survived the clear");
+	assert.doesNotMatch(cleared.text, /classifierModel/, "the key text survived the clear");
+	assert.deepEqual(draftProfiles(cleared), ["quick", "work"], "profiles disturbed by the clear");
+});
+
 test("a document that parses but cannot hold an edit is refused, not thrown", () => {
 	// `jsonc-parser`'s `modify` throws when a path's parent is not an object, and a
 	// throw would come out of a keypress in the screen. Each of these parses as
@@ -240,6 +270,7 @@ test("a document that parses but cannot hold an edit is refused, not thrown", ()
 			setThinking(draft, "work", "low"),
 			deleteProfile(draft, "work"),
 			setSystemOneModel(draft, "jev-experimental"),
+			setClassifierModel(draft, "openrouter/typesafe/jev-latest"),
 		]) {
 			assert.equal(unchanged.text, text, `${detail}: mutation changed the text`);
 		}

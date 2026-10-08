@@ -54,6 +54,7 @@ import {
 import {
 	addProfile,
 	deleteProfile,
+	draftClassifierModel,
 	draftEnableProfiles,
 	draftError,
 	draftProfile,
@@ -63,6 +64,7 @@ import {
 	draftSystemOneModel,
 	readDraft,
 	renameProfile,
+	setClassifierModel,
 	setEnableProfiles,
 	setModel,
 	setSystemOneAPIKey,
@@ -73,7 +75,7 @@ import {
 	type ConfigDraft,
 	type DraftError,
 } from "../config/draft.ts";
-import { modelChoices, type ModelChoice } from "../config/models.ts";
+import { classifierChoices, modelChoices, type ModelChoice } from "../config/models.ts";
 import { THINKING_LEVELS, isThinkingLevel, type ThinkingLevel } from "../types.ts";
 
 /** Rows the list shows at once. The screen lives in the editor's place, so short. */
@@ -85,17 +87,19 @@ const PICKER_MAX_VISIBLE = 8;
 const SCOPE_ROW = "scope";
 const ENABLE_ROW = "enable-profiles";
 const ADD_ROW = "add-profile";
+const CLASSIFIER_ROW = "classifierModel";
 const SYSTEMONE_KEY_ROW = "systemone-api-key";
 const SYSTEMONE_URL_ROW = "systemone-base-url";
 const SYSTEMONE_MODEL_ROW = "systemone-model";
 
 /**
- * One SystemOne string row. The three keys are read, shown, and written alike,
- * so a row spells out only what differs: its config key, the draft's own
- * accessors for it, and the `defaultHint` the row says the key falls back to
- * (the API key has no default, so it has none).
+ * One root-object string row. The classifier and the three SystemOne keys are
+ * read, shown, and written alike, so a row spells out only what differs: its
+ * config key, the draft's own accessors for it, and the `defaultHint` the row
+ * says the key falls back to (the API key has no default, so it has none). A row
+ * with a bespoke description supplies `describe` instead.
  */
-interface SystemOneStringRow {
+interface RootStringRow {
 	id: string;
 	label: string;
 	/** The config key named in the row's description. */
@@ -103,6 +107,26 @@ interface SystemOneStringRow {
 	get: (draft: ConfigDraft) => string | undefined;
 	set: (draft: ConfigDraft, value: string) => ConfigDraft;
 	defaultHint?: string;
+	/** Replaces the default `<key> in <file>[; defaults to <hint>]` line. */
+	describe?: (file: string) => string;
+	/** Opens a model list in place of the one-line field. */
+	picker?: RootPickerRow;
+}
+
+/**
+ * The list behind a `picker` row. It carries the two things a text row's `set`
+ * cannot say: how the key is removed again, and what the list's two extra rows are
+ * called.
+ */
+interface RootPickerRow {
+	/** The list's title line. */
+	title: string;
+	/** The first row: choosing it removes the key. */
+	empty: { label: string; description: string };
+	/** Remove the key — `set` is typed for the text rows, which only ever write one. */
+	clear: (draft: ConfigDraft) => ConfigDraft;
+	/** A trailing row that swaps the list for the one-line field. */
+	writeIn?: { label: string; description: string };
 }
 
 /** The profile submenu's model row: the one that opens the picker. */
@@ -113,6 +137,9 @@ const ROWS_HINT = "↑↓ pick a row · Enter opens · Esc closes";
 
 /** The picker's key line: the list is the whole interaction, so nothing is typed. */
 const PICKER_HINT = "↑↓ walk models · Enter saves · Esc closes";
+
+/** The write-in row's value: never a model reference, so no pick can collide with it. */
+const WRITE_IN = "\u0000type-a-value";
 
 /** Row id of one profile: names are dynamic, so the id carries the name. */
 function profileRow(name: string): string {
@@ -275,46 +302,67 @@ class NameSubmenu extends Container {
  * The model list for one profile, opened from its `Model` row and rendered in that
  * row's place for as long as it is up.
  *
- * The list is the whole interaction: `(inherit)` first, then every model the registry
- * offers, walked with the arrows and saved with Enter. Nothing is typed, which is the
- * cost of dropping the filter field — a model the registry does not offer has no row to
- * write it into — and it is paid back in the one place it has to be: the value the file
- * already holds gets a row of its own when the registry does not offer it, so a
- * hand-written id stays visible and an Enter on an untouched picker cannot drop it.
- * Nothing is written here: what the user chose goes back through `done`, and the row
- * that owns it does the writing, so the write path — validation, the create confirm,
- * the error status — stays where every other edit already goes through it.
+ * The list is the whole interaction: the row's empty entry first, then every model the
+ * registry offers, walked with the arrows and saved with Enter. A model the registry
+ * does not offer has no row to write it into, so the value the file already holds gets a
+ * row of its own — and a row that allows it gets a trailing write-in row, which swaps
+ * the list for the one-line field and covers everything else. Nothing is written here:
+ * what the user chose goes back through `done`, and the row that owns it does the
+ * writing, so the write path — validation, the create confirm, the error status — stays
+ * where every other edit already goes through it.
  */
 class ModelPicker extends Container {
 	private readonly done: SubmenuDone;
 	private readonly picker: SelectList;
+	private readonly theme: Theme;
+	private readonly title: string;
+	private readonly current: string;
+	private readonly empty: { label: string; description: string };
+	private readonly writeIn: { label: string; description: string } | undefined;
+	/** The one-line field the write-in row swapped in, for as long as it is up. */
+	private field: Component | undefined;
 	/** One line when the registry offered nothing, so the short list explains itself. */
 	private readonly note: Text;
 
 	constructor(options: {
 		theme: Theme;
-		name: string;
-		/** The row's value: the model as the file has it, or `(inherit)`. */
+		title: string;
+		/** The row's value: the model as the file has it, or `""` when there is none. */
 		current: string;
 		choices: readonly ModelChoice[];
+		/** The first row: what "no model" is called here, and how it is explained. */
+		empty: { label: string; description: string };
+		/** A trailing row that swaps the list for a one-line field, when the row allows one. */
+		writeIn?: { label: string; description: string };
 		done: SubmenuDone;
 	}) {
 		super();
-		const { theme, name, current, choices, done } = options;
+		const { theme, title, current, choices, empty, writeIn, done } = options;
 		this.done = done;
-		this.picker = this.buildPicker(theme, choices, current === INHERIT ? "" : current);
+		this.theme = theme;
+		this.title = title;
+		this.current = current;
+		this.empty = empty;
+		this.writeIn = writeIn;
+		this.picker = this.buildPicker(choices, current === INHERIT ? "" : current);
 		this.note = new Text(
 			choices.length === 0 ? theme.fg("dim", "  no models available to pick") : "",
 			1,
 			0,
 		);
 
-		this.addChild(new Text(theme.bold(`Model for "${name}"`), 1, 0));
+		this.addChild(new Text(theme.bold(title), 1, 0));
 		this.addChild(this.picker);
 		this.addChild(this.note);
 	}
 
 	handleInput(data: string): void {
+		// While the write-in field is up it owns every key, Esc included: the field's own
+		// cancel closes the picker, exactly as the list's Esc does.
+		if (this.field) {
+			this.field.handleInput?.(data);
+			return;
+		}
 		// Esc closes the picker: it replaced the rows and there is nothing under it to
 		// step back to, so it is a screen of its own.
 		if (matchesKey(data, Key.escape)) {
@@ -325,16 +373,16 @@ class ModelPicker extends Container {
 	}
 
 	/**
-	 * The list itself: `(inherit)` first, then every model the registry offers, sorted
-	 * by id. `value` is the `provider/id` string the file holds, so the row under the
-	 * cursor is always something the file could actually mean. A model the registry does
-	 * not offer is appended when it is this profile's current model: the list is the only
+	 * The list itself: the row's empty entry first, then every model the registry offers,
+	 * sorted by id. `value` is the `provider/id` string the file holds, so the row under
+	 * the cursor is always something the file could actually mean. A model the registry
+	 * does not offer is appended when it is this row's current value: the list is the only
 	 * way to write a model now, so the one value that already exists has to be on it, or
 	 * Enter would quietly drop it.
 	 */
-	private buildPicker(theme: Theme, choices: readonly ModelChoice[], model: string): SelectList {
+	private buildPicker(choices: readonly ModelChoice[], model: string): SelectList {
 		const items: SelectItem[] = [
-			{ value: "", label: INHERIT, description: "this session's model" },
+			{ value: "", label: this.empty.label, description: this.empty.description },
 			...choices.map((choice) => ({
 				value: choice.value,
 				label: choice.label,
@@ -344,20 +392,61 @@ class ModelPicker extends Container {
 		if (model !== "" && !choices.some((choice) => choice.value === model)) {
 			items.push({ value: model, label: model, description: "not in the model list" });
 		}
-		const picker = new SelectList(items, PICKER_MAX_VISIBLE, selectListTheme(theme));
-		// Opens on the profile's own model, so Enter on an untouched picker is a no-op
-		// rather than a clear. Every value the row can hold is a row here — `(inherit)`
+		// Held by identity, not by value: the sentinel is the row, so a stored model
+		// that happened to equal it could still not be mistaken for the write-in row.
+		let writeIn: SelectItem | undefined;
+		if (this.writeIn) {
+			// Last on purpose: it is the escape hatch, not a model to walk past.
+			writeIn = {
+				value: WRITE_IN,
+				label: this.writeIn.label,
+				description: this.writeIn.description,
+			};
+			items.push(writeIn);
+		}
+		const picker = new SelectList(items, PICKER_MAX_VISIBLE, selectListTheme(this.theme));
+		// Opens on the row's own model, so Enter on an untouched picker is a no-op rather
+		// than a clear. Every value the row can hold is a row here — the empty entry
 		// included — so the cursor always has something to land on.
 		const index = items.findIndex((item) => item.value === model);
 		picker.setSelectedIndex(index === -1 ? 0 : index);
-		picker.onSelect = (item) => this.save(item.value);
+		picker.onSelect = (item) => {
+			if (item === writeIn) this.openWriteIn();
+			else this.save(item.value);
+		};
 		picker.onCancel = () => this.done();
 		return picker;
 	}
 
-	/** The highlighted row is the answer: `(inherit)` removes the key, nothing else. */
+	/**
+	 * Swap the list for the one-line field the write-in row promised. The field is the
+	 * picker's own child for as long as it is up and reports back through the same `done`
+	 * the list does, so the row that owns this picker writes either way.
+	 */
+	private openWriteIn(): void {
+		const field = new NameSubmenu({
+			theme: this.theme,
+			title: this.title,
+			initial: this.current,
+			submit: (value) => {
+				// A blank submit is not a clear — the first entry is the only way to clear —
+				// so it closes the field having written nothing.
+				if (value === "") this.done();
+				else this.save(value);
+			},
+			done: () => this.done(),
+		});
+		this.field = field;
+		this.clear();
+		this.addChild(field);
+	}
+
+	/**
+	 * The highlighted row is the answer: the empty entry reports `""` (the row that owns
+	 * the picker decides what that means), and Esc reports nothing at all.
+	 */
 	private save(value: string): void {
-		this.done(value === "" ? INHERIT : value);
+		this.done(value);
 	}
 }
 
@@ -472,12 +561,15 @@ class ProfileSubmenu extends Container {
 		this.hintLine.setText(this.theme.fg("dim", PICKER_HINT));
 		return new ModelPicker({
 			theme: this.theme,
-			name: this.name,
+			title: `Model for "${this.name}"`,
 			current,
 			choices: this.choices,
+			empty: { label: INHERIT, description: "this session's model" },
 			done: (value) => {
 				this.hintLine.setText(this.theme.fg("dim", ROWS_HINT));
-				submenuDone(value);
+				// The empty entry arrives as `""` and Esc as nothing at all; `(inherit)` is
+				// this row's own word for "no key", and `undefined` still means "cancel".
+				submenuDone(value === "" ? INHERIT : value);
 			},
 		});
 	}
@@ -612,8 +704,12 @@ class SettingsScreen extends Container implements ScreenHost {
 	private pending: PendingCreate | null = null;
 	/** The registry snapshot the profile submenus offer; read once, never refreshed. */
 	private readonly models: readonly ModelChoice[];
+	/** The registry's classifier models, for the list a `picker` row opens. */
+	private readonly classifiers: readonly ModelChoice[];
 	private readonly header: Text;
 	private readonly statusLine: Text;
+	/** The bottom key line, which a picker swaps for its own while it is up. */
+	private readonly hintLine: Text;
 	private list: SettingsList;
 
 	constructor(options: SettingsScreenOptions) {
@@ -624,8 +720,10 @@ class SettingsScreen extends Container implements ScreenHost {
 		this.target = defaultTarget(options.ctx.cwd, getAgentDir());
 		this.draft = readDraft(this.target.file);
 		this.models = modelChoices(options.ctx.modelRegistry);
+		this.classifiers = classifierChoices(options.ctx.modelRegistry);
 		this.header = new Text("", 1, 0);
 		this.statusLine = new Text("", 1, 0);
+		this.hintLine = new Text(this.theme.fg("dim", HINT), 1, 0);
 		// An unparseable file still opens and still renders; the status line is where
 		// it says why nothing can be changed.
 		const broken = draftError(this.draft);
@@ -669,7 +767,10 @@ class SettingsScreen extends Container implements ScreenHost {
 		this.addChild(new Spacer(1));
 		this.addChild(this.list);
 		this.addChild(this.statusLine);
-		this.addChild(new Text(this.theme.fg("dim", HINT), 1, 0));
+		// The picker swaps this line for its own while it is up, so it is kept rather
+		// than rebuilt: the submenu has to reach the same instance the screen shows.
+		this.hintLine.setText(this.theme.fg("dim", HINT));
+		this.addChild(this.hintLine);
 		if (selectId) this.list.selectItem(selectId);
 		// Only a row that is actually in the list may be activated: `selectItem` is a
 		// no-op for an unknown id, and the Enter would then open whatever row the
@@ -801,7 +902,21 @@ class SettingsScreen extends Container implements ScreenHost {
 					new ProfileSubmenu({ theme: this.theme, host: this, name, done }),
 			});
 		}
-		const systemOneRows: readonly SystemOneStringRow[] = [
+		const rootStringRows: readonly RootStringRow[] = [
+			{
+				id: CLASSIFIER_ROW,
+				label: "Classifier model",
+				key: "classifierModel",
+				get: draftClassifierModel,
+				set: setClassifierModel,
+				describe: (file) => `classifierModel in ${file}; "<provider>/<model-id>"`,
+				picker: {
+					title: "Classifier model",
+					empty: { label: "(none)", description: "no classifier; the systemOne* keys apply" },
+					clear: (draft) => setClassifierModel(draft, undefined),
+					writeIn: { label: "Type a value…", description: "enter a <provider>/<model-id> by hand" },
+				},
+			},
 			{
 				id: SYSTEMONE_KEY_ROW,
 				label: "SystemOne API key",
@@ -827,22 +942,28 @@ class SettingsScreen extends Container implements ScreenHost {
 				defaultHint: SYSTEMONE_MODEL,
 			},
 		];
-		for (const row of systemOneRows) {
+		for (const row of rootStringRows) {
+			const picker = row.picker;
 			items.push({
 				id: row.id,
 				label: row.label,
-				description: row.defaultHint
-					? `${row.key} in ${file}; defaults to ${row.defaultHint}`
-					: `${row.key} in ${file}`,
+				description:
+					row.describe?.(file) ??
+					(row.defaultHint
+						? `${row.key} in ${file}; defaults to ${row.defaultHint}`
+						: `${row.key} in ${file}`),
 				currentValue: row.get(this.draft) ?? "",
-				submenu: (current, done) =>
-					new NameSubmenu({
-						theme: this.theme,
-						title: row.label,
-						initial: current,
-						submit: (value) => this.setSystemOneString(row, value, done),
-						done: () => done(),
-					}),
+				// A `picker` row opens the list; every other root string row keeps the field.
+				submenu: picker
+					? (current, done) => this.openRowPicker(row, picker, current, done)
+					: (current, done) =>
+							new NameSubmenu({
+								theme: this.theme,
+								title: row.label,
+								initial: current,
+								submit: (value) => this.setRootString(row, value, done),
+								done: () => done(),
+							}),
 			});
 		}
 		items.push({
@@ -886,10 +1007,59 @@ class SettingsScreen extends Container implements ScreenHost {
 	}
 
 	/**
-	 * Write one SystemOne string, then put its row back to what the file says —
+	 * The list behind a `picker` root row: the same picker the profile's `Model` row
+	 * opens, with this row's own title, first entry and write-in row. The hint line is
+	 * swapped for as long as it is up, because the keys that work change with the screen.
+	 */
+	private openRowPicker(
+		row: RootStringRow,
+		picker: RootPickerRow,
+		current: string,
+		done: SubmenuDone,
+	): ModelPicker {
+		this.hintLine.setText(this.theme.fg("dim", PICKER_HINT));
+		// The key line belongs to this screen, so it goes back only when the submenu
+		// really closes: `setRootString` may still stop to ask whether a file that does
+		// not exist may be created, and the picker stays on screen for that question.
+		const close = this.restoreHint(done);
+		return new ModelPicker({
+			theme: this.theme,
+			title: picker.title,
+			current,
+			choices: this.classifiers,
+			empty: picker.empty,
+			writeIn: picker.writeIn,
+			done: (value) => {
+				// Esc: the picker was closed without a choice, so nothing is written.
+				if (value === undefined) {
+					close();
+					return;
+				}
+				// The first entry clears: the key is removed, not written as "".
+				if (value === "") this.clearRootString(row, picker, close);
+				else this.setRootString(row, value, close);
+			},
+		});
+	}
+
+	/** The submenu's own close, with the screen's key line put back first. */
+	private restoreHint(done: SubmenuDone): SubmenuDone {
+		return (value) => {
+			this.hintLine.setText(this.theme.fg("dim", HINT));
+			done(value);
+		};
+	}
+
+	/** Remove the key a `picker` row holds, then put the row back to what the file says. */
+	private clearRootString(row: RootStringRow, picker: RootPickerRow, done: SubmenuDone): void {
+		this.commit(picker.clear(this.draft), () => this.syncRow(row.id, row.get(this.draft), done));
+	}
+
+	/**
+	 * Write one root-object string, then put its row back to what the file says —
 	 * `get` runs after the write, so a refused one puts the old value back.
 	 */
-	private setSystemOneString(row: SystemOneStringRow, value: string, done: SubmenuDone): void {
+	private setRootString(row: RootStringRow, value: string, done: SubmenuDone): void {
 		this.commit(row.set(this.draft, value), () => this.syncRow(row.id, row.get(this.draft), done));
 	}
 
