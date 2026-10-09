@@ -5,19 +5,15 @@ delegate to them. Each subagent runs in a shared right-hand [herdr](https://herd
 with its own context window, and reports back as a steer message.
 
 - **Fire-and-forget:** spawns return immediately; results wake your session later.
-- **Single or parallel:** one task, or up to 4 reporting in one message. The orchestrator keeps
-  3/5 of the split; live subagents share one stacked, equal-height column.
+- **Single or parallel:** one task, or up to 4 reporting in one message. 
 - **Model profiles:** optional named `{ model, thinking }` pairs (`light`, `core`, `pro`, or any names).
 - **Per-child `env`:** static variables for subagents, without touching the orchestrator's env.
 
 The tool is registered **only inside herdr**. Outside it there is no pane to split, so it is not offered.
 
 ## Requirements
-
-| Requirement | Details |
-| --- | --- |
-| pi | The pi coding agent. |
-| herdr | **0.8.2 or newer** |
+- Pi coding agent.
+- herdr version 0.8.2 or newer
 
 ## Install
 
@@ -92,8 +88,7 @@ Notes on `tools`:
 - Without `tools`, the child has **no allowlist** and inherits pi's normal tool set.
 - A literal name is kept even if nothing matches, so a renamed tool warns instead of silently
   narrowing the list. Unmatched wildcards also warn on the spawn acknowledgment.
-- **Nested delegation is unsupported.** Listing `subagent` fails the spawn. A grandchild's result
-  lands in the subagent's own session and never reaches the orchestrator.
+- Nested delegation is unsupported.
 
 ## Profiles
 
@@ -113,8 +108,7 @@ A profile is a `{ model, thinking }` pair a child launches with. Configure it in
 
 - `current` is built in. It means "inherit this session" and **cannot be redefined** (a config
   that tries is ignored with a warning).
-- Named profiles are refused unless `enableProfiles` is literally `true`. When profiles are off,
-  or SystemOne routing is active, the `profile` parameter is removed from the schema.
+- Named profiles are refused unless `enableProfiles` is literally `true`. 
 - `model` and `thinking` are each optional and fall back to the session's value.
 - `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Unknown values warn and are ignored.
 
@@ -128,13 +122,7 @@ A profile is a `{ model, thinking }` pair a child launches with. Configure it in
 | 4 | `~/.pi/agent/tinysubagent.jsonc` |
 | 5 | `~/.pi/agent/tinysubagent.json` |
 
-- **Scope beats filename:** a project `.json` outranks a global `.jsonc`.
 - **Within one directory**, `.jsonc` wins and the sibling `.json` is silently ignored.
-- Files **layer**: `profiles` merge by name and `env` merges per key, higher scope winning. A project
-  file can add one profile or one variable and inherit the rest. `enableProfiles` comes from the
-  highest-precedence file that sets it.
-- Both formats allow comments and trailing commas.
-- An unreadable or unparseable file is skipped with a warning naming it; the next scope applies.
 - Edit config in the TUI with `/subagent-settings`.
 
 ### Profile routing via classifier model (`classifierModel`)
@@ -181,17 +169,10 @@ instead of the model choosing `profile` itself:
   redirect routing. Put them in the override or global file.
 - **`systemOneModel` fails silently.** If it is absent, blank, non-string, keyless, or project-scoped,
   it falls back to `jev-latest`.
-- **Every failure falls back to `current`**, never delaying a spawn beyond a 2 s budget. Failures
-  include: no key, timeout, non-2xx/3xx status, unparseable body, no `probabilities`, or a chosen name
-  that is not a configured profile. With routing on, `[current]` in a spawn ack means the SystemOne
-  call produced **no decision**; `current` is never a routing outcome.
+- **Every failure falls back to `current`**, never delaying a spawn beyond a 2 s budget.
 
 A configured key also powers the **report check** in each child. When a subagent's turn ends without
-a `subagent_report` call, the child sends its final message to the same service. If the service says
-the work was finished but never reported, the child steers itself a reminder to call it, at most twice.
-An unfinished message, a declined answer, or a transport failure leaves the child alone. This needs
-only the key (not `enableProfiles` or profiles) and has the same privacy cost: the final message leaves
-the machine.
+a `subagent_report` call, the child sends its final message to the same service. 
 
 ## Environment variables
 
@@ -209,33 +190,10 @@ the machine.
 - **Values must be strings.** Numbers, booleans, `null`, arrays, and objects are skipped with a warning,
   not coerced. `{"DEBUG": false}` would export `"false"`, which shell tests read as *true*. A JSON number
   also loses precision: `1.0` becomes `"1"`, and long ids lose digits.
-- **Keys must be shell identifiers** (`[A-Za-z_][A-Za-z0-9_]*`). `"a b"` is skipped with a warning, since
-  `export a b=x` breaks the whole launch script.
 - `"FOO": ""` exports `FOO` as set but empty. Omit the key to leave it unset.
 - **Merged per key**, project over global, like `profiles`. A `$PI_TINYSUBAGENT_CONFIG` override replaces both.
 - **Collisions go to the launcher.** `PATH`, `PI_CODING_AGENT_DIR`, and the `PI_TINYSUBAGENT_*` variables
   children use to report back are written after `env`, so a config value with the same name is overwritten.
-
-## Troubleshooting
-
-Most failures are one of three kinds: pi is not inside a herdr pane, the `tinysubagent-panes` plugin is
-missing or stale, or a config value was rejected. Config warnings also appear as a notification at session start.
-
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| No `subagent` tool | pi is not inside herdr | Start pi from a herdr pane (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_SOCKET_PATH`). |
-| Plugin "is not installed" / "is disabled" | Entrypoint never linked, or the offer was declined | Confirm the prompt, or run the `herdr plugin link <repo>/herdr-plugin --enabled` command from the error, then check `herdr plugin list`. |
-| Reinstall had no effect / old panes still run | herdr kept the old absolute path; the fixed plugin id matches the stale link | `herdr plugin unlink tinysubagent-panes`, start pi inside a herdr pane, confirm the link prompt, then check `herdr plugin list` for the new `[local:...]` path. See [Reinstall over an existing install](#reinstall-over-an-existing-install). |
-| "no agent definitions found" | No role files | Add a markdown file with `name`, `description`, `tools` frontmatter. |
-| `profile "x" cannot be used: profiles are disabled` | `enableProfiles` is not `true` | Set it in the highest-precedence file named in the error. |
-| `unknown profile "x"` | Typo, or the profile lives in a lower-precedence file | Check the names in the error and that profile's config file. |
-| `env` warning: `… is not a string` | A non-string `env` value | Quote it: `"DEBUG": "0"`. Booleans and numbers are skipped, not converted. |
-| `env` warning: `key "a b" … is not a valid shell identifier` | Key is not a shell name | Use letters, digits, and `_`, not starting with a digit. |
-| Warning about an unmatched tool pattern | A `tools` entry matched no real tool | Fix the typo or wildcard in that role's frontmatter. |
-| "Nested delegation is not supported yet" | A role lists `subagent` in `tools` | Remove it from that role's frontmatter. |
-| Routing warning: `project-scoped, so its routing keys are ignored`, `"systemOneBaseUrl" … has no "systemOneAPIKey"`, `"systemOneAPIKey" … is not a string` / `is empty`, `"systemOneBaseUrl" … is not a usable http(s) URL` | A routing key is malformed, or sits in a file with no effect. Credentials must resolve from one file, and project scope is inert. `systemOneModel` never warns: a bad or misplaced value silently falls back to `jev-latest`. | Routing stays off until fixed. Put both credentials in the same global or override file: a non-empty string key and an `https:` URL (plain `http:` only for loopback). Or remove them. |
-| A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion. A long child holds the batch; watch its pane. |
-| Spawn ack shows `[current]` while routing is on | The SystemOne call produced no decision (timeout, error, unusable answer), so the fallback applied | By design. `current` is never a routing outcome, and `[profile]` in an ack is always the *resolved* profile. The same result names the reason on its own line, e.g. `tinysubagent: systemOne routing failed (HTTP 401); keeping "current".` |
 
 ## License
 

@@ -1,6 +1,7 @@
 # Spec: the report check on `classifierModel`, and a deprecation warning for `systemOne*`
 
-Status: **draft — awaiting approval.** Nothing here is built yet.
+Status: **implemented** (`warnSystemOneDeprecated` and the classifier report check are in the
+working tree). Originally drafted as "awaiting approval".
 
 ## Objective
 
@@ -16,7 +17,7 @@ Two changes, one migration.
    are not removed in this change. A config with only `systemOne*` behaves exactly as it
    does today, plus one deprecation warning.
 
-`docs/specs/spec-classifier-model.md` shipped (1) as a documented follow-up; this spec is
+The `classifierModel` routing spec, now Part A of [spec-remove-systemone-tui-rows.md](./spec-remove-systemone-tui-rows.md), shipped (1) as a documented follow-up; this spec is
 that follow-up. `README.md:196-198` says "The port of that decider to the classifier is a
 follow-up, not part of this change" — that sentence is what this change deletes.
 
@@ -51,7 +52,7 @@ follow-up, not part of this change" — that sentence is what this change delete
   `:546 const classifier = resolveClassifier(read, warnings);`
   `:549 const systemOne = classifier === null ? resolveSystemOne(read, warnings) : null;`
   With a classifier set, `resolveSystemOne` never runs, so project-scoped keys, a keyless
-  URL, and a bad `systemOneModel` all go unmentioned — by design, per `spec-classifier-model.md`.
+  URL, and a bad `systemOneModel` all go unmentioned — by design, per Part A of [spec-remove-systemone-tui-rows.md](./spec-remove-systemone-tui-rows.md).
 - `src/systemone/route.ts:23-27` — `RouteInput { agent: {name, description}, task, criteria }`.
 - `src/systemone/route.ts:141-200` — `classifierRouteFn` resolves the model via
   `registry.findOfType("classifier", provider, modelId)`, calls
@@ -212,7 +213,7 @@ to beat: run `npm test` before the first edit and record the count.
   text or `MAX_REPORT_REMINDERS`; adding a new config key (e.g. a `reportCheck` toggle).
 - **Never:** let the report check fail, throw, or delay a settle; add a network call for a
   config with no transport; make the classifier a fallback *behind* SystemOne (classifier
-  wins whenever it is set); edit `docs/specs/spec-classifier-model.md`'s approved decisions.
+  wins whenever it is set); edit the approved decisions in Part A of [spec-remove-systemone-tui-rows.md](./spec-remove-systemone-tui-rows.md).
 
 ## Success criteria
 

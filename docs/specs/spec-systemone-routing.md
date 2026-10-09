@@ -22,7 +22,7 @@ party.
 > **Superseded when `classifierModel` is set.** A configured `classifierModel` routes
 > profiles in process through pi's model registry instead of this HTTP call; the three
 > SystemOne keys are then ignored. See
-> [spec-classifier-model.md](./spec-classifier-model.md).
+> [spec-remove-systemone-tui-rows.md](./spec-remove-systemone-tui-rows.md) (Part A).
 
 ## Wire contract (verified, not assumed)
 
