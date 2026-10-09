@@ -45,8 +45,6 @@ import {
 } from "@earendil-works/pi-tui";
 import {
 	JSONC_CONFIG_FILENAME,
-	DEFAULT_SYSTEMONE_BASE_URL,
-	SYSTEMONE_MODEL,
 	defaultTarget,
 	settingsTargets,
 	type SettingsTarget,
@@ -59,17 +57,11 @@ import {
 	draftError,
 	draftProfile,
 	draftProfiles,
-	draftSystemOneAPIKey,
-	draftSystemOneBaseUrl,
-	draftSystemOneModel,
 	readDraft,
 	renameProfile,
 	setClassifierModel,
 	setEnableProfiles,
 	setModel,
-	setSystemOneAPIKey,
-	setSystemOneBaseUrl,
-	setSystemOneModel,
 	setThinking,
 	writeDraft,
 	type ConfigDraft,
@@ -88,13 +80,10 @@ const SCOPE_ROW = "scope";
 const ENABLE_ROW = "enable-profiles";
 const ADD_ROW = "add-profile";
 const CLASSIFIER_ROW = "classifierModel";
-const SYSTEMONE_KEY_ROW = "systemone-api-key";
-const SYSTEMONE_URL_ROW = "systemone-base-url";
-const SYSTEMONE_MODEL_ROW = "systemone-model";
 
 /**
- * One root-object string row. The classifier and the three SystemOne keys are
- * read, shown, and written alike, so a row spells out only what differs: its
+ * One root-object string row. Every row in the array is read, shown, and written
+ * alike, so a row spells out only what differs: its
  * config key, the draft's own accessors for it, and the `defaultHint` the row
  * says the key falls back to (the API key has no default, so it has none). A row
  * with a bespoke description supplies `describe` instead.
@@ -912,34 +901,10 @@ class SettingsScreen extends Container implements ScreenHost {
 				describe: (file) => `classifierModel in ${file}; "<provider>/<model-id>"`,
 				picker: {
 					title: "Classifier model",
-					empty: { label: "(none)", description: "no classifier; the systemOne* keys apply" },
+					empty: { label: "(none)", description: "no classifier configured" },
 					clear: (draft) => setClassifierModel(draft, undefined),
 					writeIn: { label: "Type a value…", description: "enter a <provider>/<model-id> by hand" },
 				},
-			},
-			{
-				id: SYSTEMONE_KEY_ROW,
-				label: "SystemOne API key",
-				key: "systemOneAPIKey",
-				get: draftSystemOneAPIKey,
-				set: setSystemOneAPIKey,
-			},
-			{
-				id: SYSTEMONE_URL_ROW,
-				label: "SystemOne base URL",
-				key: "systemOneBaseUrl",
-				get: draftSystemOneBaseUrl,
-				set: setSystemOneBaseUrl,
-				// `.href` keeps the trailing slash this row has always rendered.
-				defaultHint: new URL(DEFAULT_SYSTEMONE_BASE_URL).href,
-			},
-			{
-				id: SYSTEMONE_MODEL_ROW,
-				label: "SystemOne model",
-				key: "systemOneModel",
-				get: draftSystemOneModel,
-				set: setSystemOneModel,
-				defaultHint: SYSTEMONE_MODEL,
 			},
 		];
 		for (const row of rootStringRows) {

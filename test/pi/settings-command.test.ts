@@ -474,109 +474,13 @@ test("without a registry the picker offers nothing but (inherit) and says so", a
 	});
 });
 
-/*
- * The SystemOne rows. They sit under the enable row — API key, base URL, model —
- * and each opens the same one-line name field. What is pinned here is that the
- * model row is wired to `systemOneModel`, names the default it falls back to, and
- * shows the value that was just written rather than the one it opened with.
- */
-
-/** Down to the model row: the three SystemOne rows plus the classifier row above them. */
-function focusSystemOneModel(screen: { send: (data: string) => void }): void {
-	for (let i = 0; i < 5; i++) screen.send(DOWN);
-}
-
 /** Down to the classifier row: it sits directly below Enable profiles. */
 function focusClassifierRow(screen: { send: (data: string) => void }): void {
 	screen.send(DOWN);
 	screen.send(DOWN);
 }
 
-/** The model row's name field: focused, then opened. */
-function openSystemOneModel(screen: { send: (data: string) => void }): void {
-	focusSystemOneModel(screen);
-	screen.send(ENTER);
-}
-
-/** The `systemOneModel` the file holds, or undefined when the key is not there. */
-function savedSystemOneModel(file: string): string | undefined {
-	return (JSON.parse(readFileSync(file, "utf8")) as { systemOneModel?: string }).systemOneModel;
-}
-
-test("the SystemOne model row names the default and writes the typed model", async () => {
-	await withScratchConfig(async (file, cleanup) => {
-		writeFileSync(file, '{\n\t"systemOneAPIKey": "sk-test"\n}\n');
-		const screen = await openScreen();
-
-		// The row exists and is empty: no key in the file, so nothing is invented for it.
-		assert.match(screen.component().render(80).join("\n"), /SystemOne model/);
-
-		// Focus alone shows the row's own line: the description is where the default is
-		// named, so an empty row still tells the user what an omitted key does.
-		focusSystemOneModel(screen);
-		assert.match(screen.component().render(80).join("\n"), /systemOneModel in[\s\S]*defaults to\s*jev-latest/);
-
-		screen.send(ENTER);
-		screen.send("jev-typed");
-		screen.send(ENTER);
-
-		assert.equal(savedSystemOneModel(file), "jev-typed");
-		assert.match(readFileSync(file, "utf8"), /"systemOneAPIKey": "sk-test"/, "the key was lost");
-		// The row is refreshed from the draft after the write, so it shows what the
-		// file says rather than the empty value it had when the field opened.
-		assert.match(screen.component().render(80).join("\n"), /SystemOne model\s+jev-typed/);
-
-		escapeAll(screen);
-		await screen.closed;
-		cleanup();
-	});
-});
-
-test("the SystemOne model row shows the stored model and Esc writes nothing", async () => {
-	await withScratchConfig(async (file, cleanup) => {
-		const stored = '{\n\t"systemOneModel": "jev-hand-written"\n}\n';
-		writeFileSync(file, stored);
-		const screen = await openScreen();
-
-		// Read back exactly as stored — the screen does not prettify or validate it.
-		assert.match(screen.component().render(80).join("\n"), /SystemOne model\s+jev-hand-written/);
-
-		openSystemOneModel(screen);
-		screen.send(ESC);
-
-		assert.equal(readFileSync(file, "utf8"), stored, "Esc must not write");
-		assert.match(screen.component().render(80).join("\n"), /jev-hand-written/);
-
-		escapeAll(screen);
-		await screen.closed;
-		cleanup();
-	});
-});
-
-test("a SystemOne row shows the value it just wrote, not the one it opened with", async () => {
-	await withScratchConfig(async (file, cleanup) => {
-		// An empty base URL and a stored model: two rows, two different starting points,
-		// both of which used to keep showing the value they opened with after a write.
-		writeFileSync(file, '{\n\t"systemOneModel": "jev-hand-written"\n}\n');
-		const screen = await openScreen();
-
-		// Down four times lands on the base URL, which is the row above the model.
-		for (let i = 0; i < 4; i++) screen.send(DOWN);
-		screen.send(ENTER);
-		screen.send("http://example.test");
-		screen.send(ENTER);
-
-		const rendered = screen.component().render(80).join("\n");
-		assert.match(readFileSync(file, "utf8"), /"systemOneBaseUrl": "http:\/\/example\.test"/);
-		assert.match(rendered, /SystemOne base URL\s+http:\/\/example\.test/);
-
-		escapeAll(screen);
-		await screen.closed;
-		cleanup();
-	});
-});
-
-test("the classifier row sits above the three SystemOne rows and names its shape", async () => {
+test("the screen shows no SystemOne rows and Classifier model follows Enable profiles", async () => {
 	await withScratchConfig(async (file, cleanup) => {
 		writeFileSync(file, '{\n\t"systemOneAPIKey": "sk-test"\n}\n');
 		const screen = await openScreen();
@@ -585,9 +489,11 @@ test("the classifier row sits above the three SystemOne rows and names its shape
 		const classifier = rendered.indexOf("Classifier model");
 		assert.notEqual(classifier, -1, "no Classifier model row");
 		for (const label of ["SystemOne API key", "SystemOne base URL", "SystemOne model"]) {
-			assert.notEqual(rendered.indexOf(label), -1, `no ${label} row`);
-			assert.ok(classifier < rendered.indexOf(label), `${label} must come after Classifier model`);
+			assert.equal(rendered.indexOf(label), -1, `${label} must not render`);
 		}
+		const enable = rendered.indexOf("Enable profiles");
+		assert.notEqual(enable, -1, "no Enable profiles row");
+		assert.ok(classifier > enable, "Classifier model must come after Enable profiles");
 
 		// The description names the key, the value shape, and the file being edited.
 		focusClassifierRow(screen);
@@ -628,7 +534,7 @@ test("the classifier row opens the classifier list, not a text field", async () 
 
 		const rendered = screen.component().render(80).join("\n");
 		assert.match(rendered, /\(none\)/);
-		assert.match(rendered, /no classifier; the systemOne\* keys apply/);
+		assert.match(rendered, /no classifier configured/);
 		// The classifier models, not the chat ones: `shared-id` is only in `getAvailable`.
 		assert.match(rendered, /oc-openai\/glm-5\.3-flash/);
 		assert.match(rendered, /typesafe\/jev-latest/);
@@ -739,7 +645,7 @@ test("an off-list classifier value is shown and kept unless another is picked", 
 	});
 });
 
-test("the (none) entry removes the key so the SystemOne keys apply again", async () => {
+test("the (none) entry removes the classifier key", async () => {
 	await withScratchConfig(async (file, cleanup) => {
 		writeFileSync(file, '{\n\t"classifierModel": "oc-openai/glm-5.3-flash"\n}\n');
 		const screen = await openScreen(fakeRegistry());
