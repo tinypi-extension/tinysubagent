@@ -1,7 +1,7 @@
 {
   "name": "tinysubagent",
-  "version": "0.1.0",
-  "description": "Minimal herdr-native subagent spawning for pi — markdown agent roles, model profiles, single or parallel panes",
+  "version": "0.3.4",
+  "description": "Minimal herdr-native subagent spawning for pi — markdown agent roles, model profiles with classifier routing",
   "keywords": [
     "pi-package"
   ],
@@ -22,9 +22,6 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ],
-    "prompts": [
-      "./prompts/"
     ]
   },
   "peerDependencies": {
