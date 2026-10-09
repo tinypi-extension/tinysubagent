@@ -241,4 +241,4 @@ missing or stale, or a config value was rejected. Config warnings also appear as
 
 ## License
 
-MIT. See the `license` field in [package.json](package.json). Author: Ironman.
+MIT. See the `license` field in [LICENSE](LICENSE). 
