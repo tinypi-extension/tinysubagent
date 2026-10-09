@@ -17,13 +17,13 @@ The tool is registered **only inside herdr**. Outside it there is no pane to spl
 | Requirement | Details |
 | --- | --- |
 | pi | The pi coding agent. |
-| herdr | **0.8.2 or newer** (`herdr --version`). |
+| herdr | **0.8.2 or newer** |
 
 ## Install
 
 ```bash
-pi install git:github.com/tinypi-extension/tinysubagent   # or git@github.com:...
-pi update --extensions     # update; `pi list` to inspect
+pi install git:github.com/tinypi-extension/tinysubagent  
+pi update --extensions  
 ```
 
 Install **without a ref** so updates keep working. Pinned refs are checkout targets; to upgrade,
@@ -224,8 +224,6 @@ missing or stale, or a config value was rejected. Config warnings also appear as
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | No `subagent` tool | pi is not inside herdr | Start pi from a herdr pane (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_SOCKET_PATH`). |
-| "herdr is not reachable from this pane" | herdr server stopped | `herdr status server --json`; restart herdr. |
-| "herdr >= 0.8.2 is required" | Old herdr | Update herdr, then restart the herdr session. |
 | Plugin "is not installed" / "is disabled" | Entrypoint never linked, or the offer was declined | Confirm the prompt, or run the `herdr plugin link <repo>/herdr-plugin --enabled` command from the error, then check `herdr plugin list`. |
 | Reinstall had no effect / old panes still run | herdr kept the old absolute path; the fixed plugin id matches the stale link | `herdr plugin unlink tinysubagent-panes`, start pi inside a herdr pane, confirm the link prompt, then check `herdr plugin list` for the new `[local:...]` path. See [Reinstall over an existing install](#reinstall-over-an-existing-install). |
 | "no agent definitions found" | No role files | Add a markdown file with `name`, `description`, `tools` frontmatter. |
