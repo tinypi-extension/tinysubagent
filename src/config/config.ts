@@ -397,6 +397,35 @@ function resolveClassifier(
 	return null;
 }
 
+/** The three legacy SystemOne keys, in the canonical order a warning names them. */
+const SYSTEM_ONE_KEYS = ["systemOneAPIKey", "systemOneBaseUrl", "systemOneModel"] as const;
+
+/**
+ * Warn once per config file that still carries any legacy `systemOne*` key. The keys
+ * keep working ({@link resolveSystemOne}); `classifierModel` is the transport going
+ * forward. Presence is all that matters — a blank, non-string, or null-cleared value
+ * is still a key the user should remove. The wording follows the resolved classifier:
+ * with one set the keys are ignored, without one they merely have a shelf life.
+ */
+function warnSystemOneDeprecated(
+	read: readonly { source: ConfigSource; root: Record<string, unknown> }[],
+	classifier: ClassifierConfig | null,
+	warnings: string[],
+): void {
+	for (const { source, root } of read) {
+		const present = SYSTEM_ONE_KEYS.filter((key) => Object.hasOwn(root, key));
+		if (present.length === 0) continue;
+		const keys = present.map((key) => `"${key}"`).join(", ");
+		warnings.push(
+			classifier !== null
+				? `tinysubagent: ${keys} is deprecated and ignored while "classifierModel" is set; ` +
+						`remove it from ${source.file}.`
+				: `tinysubagent: ${keys} is deprecated and will be removed; set "classifierModel" ` +
+						`instead (from ${source.file}).`,
+		);
+	}
+}
+
 /**
  * Resolve the SystemOne routing keys from the files that were successfully read,
  * highest precedence first. Only the override and global scopes carry weight:
@@ -544,8 +573,9 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	}
 
 	const classifier = resolveClassifier(read, warnings);
-	// A resolved classifier makes the SystemOne keys inert data: never read them,
-	// so a project-scoped key or a keyless URL raises no warning.
+	warnSystemOneDeprecated(read, classifier, warnings);
+	// A resolved classifier makes the SystemOne keys inert data: the transport is
+	// never read, so a project-scoped key or a keyless URL raises no further warning.
 	const systemOne = classifier === null ? resolveSystemOne(read, warnings) : null;
 
 	if (enableProfiles && Object.keys(profiles).length === 0) {

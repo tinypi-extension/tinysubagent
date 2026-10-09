@@ -10,17 +10,18 @@
  * just another turn for a model that has nothing to report.
  *
  * Telling those apart is a judgment about prose — exactly the kind of
- * choice SystemOne already makes for routing — so the same transport
- * and the same credentials make the call here: the final message goes
- * in as the task, the two verdicts go in as the criteria, and the
- * choice the chooser returns is the verdict. A decision that cannot be
- * made (no credentials, a transport failure, an answer this code does
- * not know) means "leave it alone": the child then behaves exactly as
- * it did before this check existed.
+ * choice routing already makes — so the configured routing transport
+ * makes the call here. That is the in-process classifier when
+ * `classifierModel` is set, otherwise the legacy SystemOne endpoint.
+ * The final message goes in as the task, the two verdicts go in as the
+ * criteria, and the choice that comes back is the verdict. A decision
+ * that cannot be made (no transport configured, a transport failure, an
+ * answer this code does not know) means "leave it alone": the child then
+ * behaves exactly as it did before this check existed.
  */
 
-import type { SystemOneConfig } from "../config/config.ts";
-import { routeOnce, type RouteOnceDeps } from "../systemone/client.ts";
+import type { TinysubagentConfig } from "../config/config.ts";
+import { createRouteFn, type ClassifierRegistry, type RouteFn } from "../systemone/route.ts";
 
 /** Identity the chooser sees for this decision. */
 export const REPORT_CHECK_ROLE = {
@@ -37,6 +38,12 @@ export const REPORT_CHECK_CRITERIA: Record<string, string> = {
 		"The subagent is not finished: it asked a question, needs input, hit a limit, or is still working. It should be left alone.",
 };
 
+/** The question the classifier answers for this decision. */
+export const REPORT_CHECK_INSTRUCTIONS =
+	"Decide whether the subagent's final message is a finished result it never handed " +
+	"back over `subagent_report`, or whether it is not finished. Answer with exactly one " +
+	"of the criterion keys.";
+
 /** The verdict that means "remind the model to report". */
 export const FORGOTTEN = "forgotten";
 
@@ -51,27 +58,31 @@ export function clipMessage(message: string): string {
 }
 
 /**
+ * The production decider: builds the routing transport once from the loaded
+ * config, then asks it for each unreported settle. The registry is the child's
+ * own pi model registry, which the in-process classifier needs.
+ */
+export function createReportDecider(
+	config: TinysubagentConfig,
+	registry?: ClassifierRegistry,
+): (message: string) => Promise<boolean> {
+	const route = createRouteFn(config, { registry });
+	return (message: string) => checkReport(message, route);
+}
+
+/**
  * True when the final message is a finished result the model never
  * reported. Never throws: every failure lands on `false`, the verdict
  * that changes nothing.
  */
-export async function checkReport(
-	message: string,
-	systemOne: SystemOneConfig,
-	deps: RouteOnceDeps = {},
-): Promise<boolean> {
+export async function checkReport(message: string, route: RouteFn): Promise<boolean> {
 	try {
-		const outcome = await routeOnce(
-			{
-				apiKey: systemOne.apiKey,
-				baseUrl: systemOne.baseUrl,
-				model: systemOne.model,
-				task: clipMessage(message),
-				role: REPORT_CHECK_ROLE,
-				criteria: REPORT_CHECK_CRITERIA,
-			},
-			deps,
-		);
+		const outcome = await route({
+			agent: REPORT_CHECK_ROLE,
+			task: clipMessage(message),
+			criteria: REPORT_CHECK_CRITERIA,
+			instructions: REPORT_CHECK_INSTRUCTIONS,
+		});
 		return outcome?.choice === FORGOTTEN;
 	} catch {
 		// The transport promises not to throw; this backstop makes the

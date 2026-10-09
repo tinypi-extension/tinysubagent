@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,6 +11,7 @@ import tinysubagentChild, {
 import { preflightFailure } from "../../src/children/preflight.ts";
 import { settleReason } from "../../src/children/settle.ts";
 import { writeReportFile, writeResultReport } from "../../src/children/report.ts";
+import { REPORT_CHECK_INSTRUCTIONS } from "../../src/children/report-check.ts";
 import { REPORT_TOOL_NAME } from "../../src/types.ts";
 
 interface RegisteredTool {
@@ -54,6 +55,8 @@ function stubChildApi(
 		/** Whether asking about OAuth throws. */
 		isUsingOAuthThrows?: boolean;
 		oauth?: boolean;
+		/** A classifier registry whose classify answers the report-check question with `choice`. */
+		classifier?: { choice: string | null };
 	} = {},
 ) {
 	const opts = {
@@ -66,8 +69,10 @@ function stubChildApi(
 		hasConfiguredAuthThrows: false,
 		isUsingOAuthThrows: false,
 		oauth: false,
+		classifier: undefined as { choice: string | null } | undefined,
 		...overrides,
 	};
+	const classifyContexts: { questions: { profile: { instructions: string } } }[] = [];
 	const tools: RegisteredTool[] = [];
 	const listeners = new Map<string, unknown>();
 	const sent: SentMessage[] = [];
@@ -94,6 +99,15 @@ function stubChildApi(
 				if (opts.isUsingOAuthThrows) throw new Error("cannot say");
 				return opts.oauth;
 			},
+			findOfType: (_type: string, provider: string, modelId: string) =>
+				opts.classifier ? { provider, id: modelId } : undefined,
+			classify: async (_model: unknown, context: (typeof classifyContexts)[number]) => {
+				classifyContexts.push(context);
+				return {
+					stopReason: "stop",
+					answers: { profile: { type: "choice", choice: opts.classifier?.choice ?? null } },
+				};
+			},
 		},
 	};
 	return {
@@ -102,6 +116,8 @@ function stubChildApi(
 		sent,
 		ctx,
 		shutdowns: () => shutdowns,
+		/** The contexts the classifier was asked with, one per classify call. */
+		classifyContexts: () => classifyContexts,
 		api: {
 			registerTool(tool: RegisteredTool) {
 				tools.push(tool);
@@ -585,6 +601,103 @@ test("a decider that throws leaves the child alone", async () => {
 	await settled({}, stub.ctx);
 
 	assert.equal(stub.sent.length, 0);
+});
+
+/** Point the child's config at one file, for the duration of `run`. */
+async function withConfigFile(body: unknown, run: () => Promise<void>): Promise<void> {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-child-config-"));
+	const file = join(dir, "tinysubagent.json");
+	writeFileSync(file, JSON.stringify(body));
+	const saved = process.env.PI_TINYSUBAGENT_CONFIG;
+	process.env.PI_TINYSUBAGENT_CONFIG = file;
+	try {
+		await run();
+	} finally {
+		if (saved === undefined) delete process.env.PI_TINYSUBAGENT_CONFIG;
+		else process.env.PI_TINYSUBAGENT_CONFIG = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+test("a classifier-only child is reminded when the classifier says forgotten", async () => {
+	await withConfigFile({ classifierModel: "openrouter/typesafe/jev-latest" }, async () => {
+		const stub = stubChildApi({ classifier: { choice: "forgotten" } });
+		tinysubagentChild(stub.api as never, { readFinal: () => "All 12 tables migrated." });
+		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+		const settled = stub.listeners.get("agent_settled") as (
+			event: unknown,
+			ctx: { shutdown: () => void },
+		) => void;
+
+		await settled({}, stub.ctx);
+
+		assert.equal(stub.classifyContexts().length, 1);
+		assert.equal(
+			stub.classifyContexts()[0]?.questions.profile.instructions,
+			REPORT_CHECK_INSTRUCTIONS,
+		);
+		assert.equal(stub.sent.length, 1);
+		assert.equal(stub.sent[0]!.customType, "tinysubagent_report_reminder");
+	});
+});
+
+test("a classifier-only child judged not-finished is left alone", async () => {
+	await withConfigFile({ classifierModel: "openrouter/typesafe/jev-latest" }, async () => {
+		const stub = stubChildApi({ classifier: { choice: "not-finished" } });
+		tinysubagentChild(stub.api as never, { readFinal: () => "Which migration next?" });
+		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+		const settled = stub.listeners.get("agent_settled") as (
+			event: unknown,
+			ctx: { shutdown: () => void },
+		) => void;
+
+		await settled({}, stub.ctx);
+
+		assert.equal(stub.classifyContexts().length, 1);
+		assert.equal(stub.sent.length, 0);
+	});
+});
+
+test("deps.decidesReport still overrides a configured classifier", async () => {
+	await withConfigFile({ classifierModel: "openrouter/typesafe/jev-latest" }, async () => {
+		const stub = stubChildApi({ classifier: { choice: "forgotten" } });
+		tinysubagentChild(stub.api as never, {
+			readFinal: () => "All 12 tables migrated.",
+			decidesReport: async () => false,
+		});
+		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+		const settled = stub.listeners.get("agent_settled") as (
+			event: unknown,
+			ctx: { shutdown: () => void },
+		) => void;
+
+		await settled({}, stub.ctx);
+
+		assert.equal(stub.classifyContexts().length, 0);
+		assert.equal(stub.sent.length, 0);
+	});
+});
+
+test("a child with no transport at all settles cleanly and silently", async () => {
+	await withConfigFile({}, async () => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never, { readFinal: () => "All 12 tables migrated." });
+		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+		const settled = stub.listeners.get("agent_settled") as (
+			event: unknown,
+			ctx: { shutdown: () => void },
+		) => void;
+
+		await settled({}, stub.ctx);
+
+		assert.equal(stub.classifyContexts().length, 0);
+		assert.equal(stub.sent.length, 0);
+		assert.equal(stub.shutdowns(), 0);
+	});
 });
 
 test("a settle with no assistant message is silence too, not a failure", async () => {

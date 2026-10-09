@@ -24,6 +24,12 @@ export interface RouteInput {
 	agent: { name: string; description: string };
 	task: string;
 	criteria: Record<string, string>;
+	/**
+	 * The question the in-process classifier is asked. Absent means the routing
+	 * question (`CHOICE_INSTRUCTIONS`). The legacy SystemOne transport builds its own
+	 * prompt from `criteria` and ignores this.
+	 */
+	instructions?: string;
 }
 
 export interface RouteOutcome {
@@ -171,7 +177,7 @@ function classifierRouteFn(
 					questions: {
 						profile: {
 							type: "choice",
-							instructions: CHOICE_INSTRUCTIONS,
+							instructions: input.instructions ?? CHOICE_INSTRUCTIONS,
 							criteria: input.criteria,
 						},
 					},

@@ -75,8 +75,8 @@
  *
  * A `done` settle with no report behind it means the model answered in
  * prose instead of calling `subagent_report`. The child was staying open
- * anyway, so before it goes quiet it asks SystemOne — the same
- * chooser routing uses, on the same credentials — whether that final
+ * anyway, so before it goes quiet it asks the configured routing
+ * transport — the same chooser routing uses — whether that final
  * message is a finished result. When it is, the child steers itself a
  * reminder to make the call, which starts one more turn in which the
  * model can still hand its result back. A model that keeps forgetting
@@ -107,11 +107,12 @@
  * orchestrator from waiting on a child that cannot start.
  */
 
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { loadConfig, type SystemOneConfig } from "../config/config.ts";
+import { loadConfig } from "../config/config.ts";
+import type { ClassifierRegistry } from "../systemone/route.ts";
 import { REPORT_TOOL_NAME } from "../types.ts";
-import { checkReport } from "./report-check.ts";
+import { createReportDecider } from "./report-check.ts";
 import { writeReportFile, writeResultReport } from "./report.ts";
 import { readFinalMessage } from "./session.ts";
 import { failureDetail, settleReason } from "./settle.ts";
@@ -237,7 +238,7 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 		writeReportFile("failed", "error", refusal);
 	});
 
-	pi.on("agent_settled", async (_event, _ctx) => {
+	pi.on("agent_settled", async (_event, ctx) => {
 		if (finished) return;
 
 		// An unreported turn end is not an ending: the child stays alive at its
@@ -250,7 +251,7 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 			// The one thing worth doing with that wait: a model that finished its
 			// work in prose instead of making the call can still be nudged into
 			// it. The pane was staying open anyway.
-			await remindIfUnreported();
+			await remindIfUnreported(ctx);
 			return;
 		}
 
@@ -282,12 +283,14 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 	 * the child is idle: a steer starts one more turn, in which the model can
 	 * make the call it skipped.
 	 */
-	async function remindIfUnreported(): Promise<void> {
+	async function remindIfUnreported(ctx: ExtensionContext): Promise<void> {
 		if (remindersSent >= MAX_REPORT_REMINDERS) return;
 		const finalMessage = deps.readFinal ? deps.readFinal() : finalSessionMessage();
 		if (finalMessage === null) return;
 		if (reportDecider === undefined) {
-			reportDecider = deps.decidesReport ?? systemOneDecider();
+			reportDecider =
+				deps.decidesReport ??
+				productionDecider(ctx.modelRegistry as unknown as ClassifierRegistry);
 		}
 
 		let remind = false;
@@ -323,17 +326,15 @@ function finalSessionMessage(): string | null {
 }
 
 /**
- * The production decider: SystemOne judges the message, on the same
- * credentials routing uses. Config is read once, on the first unreported
- * settle — a child that always reports never pays for the lookup.
+ * The production decider: the configured routing transport judges the message,
+ * the same one routing uses. Config is read and the decider built on
+ * the first unreported settle — a child that always reports never pays for the
+ * lookup. The registry is the child's own, which the in-process classifier needs.
  */
-function systemOneDecider(): (message: string) => Promise<boolean> {
-	let systemOne: SystemOneConfig | null | undefined;
+function productionDecider(registry: ClassifierRegistry): (message: string) => Promise<boolean> {
+	let decide: ((message: string) => Promise<boolean>) | undefined;
 	return async (message: string): Promise<boolean> => {
-		if (systemOne === undefined) {
-			systemOne = loadConfig(process.cwd(), getAgentDir()).config.systemOne;
-		}
-		if (systemOne === null) return false;
-		return checkReport(message, systemOne);
+		decide ??= createReportDecider(loadConfig(process.cwd(), getAgentDir()).config, registry);
+		return decide(message);
 	};
 }

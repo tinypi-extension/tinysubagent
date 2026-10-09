@@ -15,7 +15,7 @@ import {
 	configPath,
 	configSources,
 	defaultTarget,
-	loadConfig,
+	loadConfig as loadConfigRaw,
 	type LoadedConfig,
 	settingsTargets,
 } from "../../src/config/config.ts";
@@ -47,6 +47,28 @@ function configDir(): string {
  */
 function read(file: string): LoadedConfig {
 	return loadConfig(path.dirname(file), path.dirname(file));
+}
+
+/**
+ * Drop the `systemOne*` deprecation notices. The resolution tests below predate
+ * them and assert exact resolution warnings, so `read`/`loadConfig` hide the
+ * notices; the deprecation suite uses `readRaw`/`loadConfigRaw` directly.
+ */
+function withoutDeprecations(loaded: LoadedConfig): LoadedConfig {
+	return {
+		...loaded,
+		warnings: loaded.warnings.filter((warning) => !warning.includes(" is deprecated and ")),
+	};
+}
+
+/** `loadConfig` without the `systemOne*` deprecation notices. */
+function loadConfig(cwd: string, agentDir: string): LoadedConfig {
+	return withoutDeprecations(loadConfigRaw(cwd, agentDir));
+}
+
+/** Read one file with every warning, including the `systemOne*` deprecations. */
+function readRaw(file: string): LoadedConfig {
+	return loadConfigRaw(path.dirname(file), path.dirname(file));
 }
 
 /** Two fresh, distinct temp dirs: the project cwd and the agent dir. */
@@ -1019,6 +1041,72 @@ test("classifierModel splits on the first slash only", () => {
 		raw: CLASSIFIER,
 	});
 	assert.deepEqual(warnings, []);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// systemOne* deprecation: one warning per file that still carries any key
+// ────────────────────────────────────────────────────────────────────────────
+
+test("no systemOne key anywhere means no deprecation warning", () => {
+	const { warnings } = readRaw(writeConfig({ classifierModel: CLASSIFIER }));
+	assert.deepEqual(warnings, []);
+});
+
+test("a systemOne key beside classifierModel warns that the key is ignored", () => {
+	const file = writeConfig({ classifierModel: CLASSIFIER, systemOneAPIKey: S1_KEY });
+	const { warnings } = readRaw(file);
+	assert.deepEqual(warnings, [
+		`tinysubagent: "systemOneAPIKey" is deprecated and ignored while "classifierModel" is set; remove it from ${file}.`,
+	]);
+});
+
+test("every systemOne key present in one file is named once, in canonical order", () => {
+	// Written out of order so the canonical order is what the assertion proves.
+	const file = writeConfig({
+		classifierModel: CLASSIFIER,
+		systemOneModel: "cc/acme/m",
+		systemOneAPIKey: S1_KEY,
+		systemOneBaseUrl: S1_URL,
+	});
+	const { warnings } = readRaw(file);
+	assert.deepEqual(warnings, [
+		`tinysubagent: "systemOneAPIKey", "systemOneBaseUrl", "systemOneModel" is deprecated and ignored while "classifierModel" is set; remove it from ${file}.`,
+	]);
+});
+
+test("systemOne keys without classifierModel warn that the key will be removed", () => {
+	const file = writeConfig({ systemOneAPIKey: S1_KEY, systemOneModel: "cc/acme/m" });
+	const { warnings, config } = readRaw(file);
+	assert.deepEqual(warnings, [
+		`tinysubagent: "systemOneAPIKey", "systemOneModel" is deprecated and will be removed; set "classifierModel" instead (from ${file}).`,
+	]);
+	// D7: the keys still resolve exactly as before.
+	assert.ok(config.systemOne);
+	assert.equal(config.systemOne.model, "cc/acme/m");
+});
+
+test("a project-scoped systemOne key is reported by the deprecation warning too", () => {
+	const { cwd, agentDir } = twoDirs();
+	const file = writeProject(cwd, CONFIG_FILENAME, { systemOneAPIKey: S1_KEY });
+	const { warnings } = loadConfigRaw(cwd, agentDir);
+	assert.equal(
+		warnings.filter((warning) =>
+			warning.includes(
+				`"systemOneAPIKey" is deprecated and will be removed; set "classifierModel" instead (from ${file}).`,
+			),
+		).length,
+		1,
+	);
+});
+
+test("a presence-only systemOne key is deprecated even when its value is inert", () => {
+	// `null` is an explicit clear to resolveSystemOne, but the key itself is still
+	// one the user should remove, so presence is what the deprecation reports.
+	const file = writeConfig({ systemOneAPIKey: null });
+	const { warnings } = readRaw(file);
+	assert.deepEqual(warnings, [
+		`tinysubagent: "systemOneAPIKey" is deprecated and will be removed; set "classifierModel" instead (from ${file}).`,
+	]);
 });
 
 test("classifierModel makes the systemOne keys inert in both directions", () => {

@@ -26,9 +26,6 @@ to split, so it is not offered at all.
 
 ```bash
 pi install git:github.com/tinypi-extension/tinysubagent   # or git@github.com:...
-pi install -l ...          # into project settings (.pi/settings.json)
-pi -e ...                  # temporary, current run only
-pi install ...@v0.1.0      # pin a tag: update --extensions keeps it on that tag
 pi update --extensions     # update (reconciles git refs); pi list to inspect
 ```
 
@@ -39,20 +36,7 @@ upgrade, install the newer tag explicitly.
 
 The pane entrypoint ships with the package in `herdr-plugin/` (plugin id
 `tinysubagent-panes`, entrypoint `subagent`). herdr stores the absolute path and copies
-nothing.
-
-You do not have to do this by hand: in an interactive or RPC session pi asks
-*"Link the tinysubagent herdr plugin?"* before your first prompt and runs the link on
-confirmation. Otherwise, or to link manually:
-
-```bash
-herdr plugin link /path/to/tinysubagent/herdr-plugin --enabled   # or: npm run link-plugin
-herdr plugin list                                                # verify: enabled
-herdr plugin enable tinysubagent-panes                           # if disabled
-```
-
-In print/JSON mode there is no dialog and nothing is linked — trigger the `subagent` tool
-and the "not installed" error prints the exact path to link.
+nothing. Pi asks before your first prompt
 
 ### Reinstall over an existing install
 
@@ -172,7 +156,7 @@ A profile is a `{ model, thinking }` pair a child is launched with, configured i
   scope applies.
 - Config with TUI via `/subagent-settings`
 
-### Any classifier model (`classifierModel`)
+### Profile routing via classifier model (`classifierModel`)
 
 A `classifierModel` serves routing **in process** through pi's model registry instead of
 calling SystemOne, so routing works with any classifier pi already has credentials for:
@@ -185,51 +169,20 @@ calling SystemOne, so routing works with any classifier pi already has credentia
 }
 ```
 
-- **The value is a pi model reference**, `"<provider>/<model-id>"`, split on the **first**
-  `/`: `openrouter/typesafe/jev-latest` means provider `openrouter`, model
-  `typesafe/jev-latest`.
+- **The value is a pi model reference**, `"<provider>/<model-id>"`
 - To set up classifier model, use built-in [model](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#use-classifier-models) or custom with [pi-classifier-provider](https://github.com/tinypi-extension/pi-classifier-provider)
-- **It is honored in every scope**, unlike the SystemOne credentials: override, project,
-  and global, with precedence override > project > global and `.jsonc` over `.json` in a
-  scope. It is a model reference, not a secret, so a project file is not restricted — there
-  is no project-scope warning.
-- **In `/subagent-settings` the row is a picker**, not a text field: Enter opens the models the
-  registry can run as classifiers, each row the one-column reference `<provider>/<model-id>`,
-  and writes the chosen reference into the current scope. Its first entry, `(none)`, removes
-  the key so the `systemOne*` keys
-  apply again; a trailing `Type a value…` row opens the one-line field for a reference the
-  registry does not list.
+- In `/subagent-settings` the row is a picker
 - Routing is active when `enableProfiles` is `true`, at least one named profile exists, and
-  either `classifierModel` or a `systemOneAPIKey` is configured. Then the `profile`
-  parameter disappears from the schema, and the classifier — not the model — picks the
-  profile per task.
-- **Setting it makes the three `systemOne*` keys inert and silent.** They are never read —
-  no warning, no annotation on their settings rows — and `config.systemOne` is `null`.
-- **A malformed value warns once and is ignored:** a non-blank string with no `/`, an empty
-  provider, or an empty model id emits
-  `tinysubagent: "classifierModel" in <file> is not "<provider>/<model-id>"; ignoring it.`
-  and the `systemOne*` keys then apply as they do today. A blank or non-string value is
-  silently unset.
-- **Every failure keeps `current` and warns once per request; there is no SystemOne
-  fallback** (those keys were never read):
-  - model not in the registry:
-    `tinysubagent: classifier model "<raw>" is not available; keeping "${current}".`
-  - classify error or abort:
-    `tinysubagent: classifier model "<raw>" failed; keeping "${current}".`
-- The classifier only *names* a profile; `model` and `thinking` still come from the profile
-  that name resolves to.
-
-**Known limitation:** while `classifierModel` is set, `config.systemOne` is `null`, so the
-child-side **report check** above goes quiet and subagent turns are not reminded to end
-with a `subagent_report` call. The port of that decider to the classifier is a follow-up,
-not part of this change.
+  either `classifierModel` or a `systemOneAPIKey` is configured. 
+- **Setting it makes the three `systemOne*` keys inert**: they are ignored while
+  `classifierModel` is set, and every config file that still lists them logs a deprecation
+  warning naming that file.
 
 ### SystemOne profiles routing (Deprecated)
 
-> `classifierModel` is recommended and `systemOneAPIKey`, `systemOneBaseUrl`, `systemOneModel` will be removed in the future.
-
 > A configured `classifierModel` supersedes this section: routing is then served in process
-> and the three `systemOne*` keys are ignored. See **Any classifier model** below.
+> and the three `systemOne*` keys are ignored. `systemOne*` keys are deprecated, so every
+> config file that still lists them logs a warning naming the file to clean up. 
 
 
 When a SystemOne key is configured, the orchestrator asks a routing service to pick the
@@ -245,20 +198,10 @@ profile for each task instead of making the model choose `profile` itself:
 }
 ```
 
-- Routing is active when **all three** hold: a `systemOneAPIKey` is configured,
-  `enableProfiles` is `true`, and at least one named profile exists. Then the `profile`
-  parameter disappears from the tool schema and SystemOne chooses the profile per task
-  from the configured names.
-- **The triple resolves as one unit, from one file.** The first file supplying
-  `systemOneAPIKey` decides whether routing is on *and* supplies the `systemOneBaseUrl`
-  and `systemOneModel`; either key in any other file is ignored.
-- **Project scope is inert for all three.** A checked-in project file can neither enable,
+- Project scope is inert for all three. A checked-in project file can neither enable,
   disable, nor redirect routing — put them in the override or global file.
 - **`systemOneModel` is the one silent key.** Absent, blank, non-string, keyless, or
-  project-scoped, it degrades to `jev-latest` without a warning: a bad model is never a
-  reason to turn routing off.
-- `http:` base URLs are accepted only for loopback hosts (`localhost`, `127.0.0.1`,
-  `::1`).
+  project-scoped, it degrades to `jev-latest` 
 - **Every failure falls back to `current`**, and never fails or delays a spawn beyond a
   2 s budget: no key configured, a timeout, a non-2xx/3xx status, an unparseable body, an
   answer without `probabilities`, or a chosen name that is not a configured profile. The
@@ -277,8 +220,7 @@ privacy cost: the subagent's final message leaves the machine.
 
 ## Environment variables
 
-`env` hands each subagent a static variable without changing the environment of the session
-that spawned it — nothing is exported into the orchestrator:
+`env` hands each subagent a static variable without changing the environment of the main session
 
 ```jsonc
 {
@@ -301,9 +243,6 @@ that spawned it — nothing is exported into the orchestrator:
 - **A collision goes to the launcher.** `PATH`, `PI_CODING_AGENT_DIR` and the
   `PI_TINYSUBAGENT_*` variables a child uses to report back are written after `env`, so a
   config value of the same name is overwritten.
-
-A bad entry never blocks a spawn: the key is dropped, the warning joins the other config
-warnings at session start, and the child launches with everything that was valid.
 
 ## Troubleshooting
 

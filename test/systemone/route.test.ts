@@ -409,6 +409,28 @@ test("the classify context carries task, role, choice instructions, and criteria
 	assert.ok(call.options?.signal);
 });
 
+test("a route input with no instructions reaches the classifier as CHOICE_INSTRUCTIONS verbatim", async () => {
+	const registry = fakeRegistry();
+	const route = createRouteFn(classifierConfig(), { registry });
+	await route({ agent: { name: "worker", description: "d" }, task: "t", criteria: { light: "cheap" } });
+	const call = registry.classifyCalls[0];
+	assert.equal(call?.context.questions.profile.instructions, CHOICE_INSTRUCTIONS);
+});
+
+test("caller-supplied instructions reach the classifier verbatim", async () => {
+	const registry = fakeRegistry();
+	const route = createRouteFn(classifierConfig(), { registry });
+	const instructions = "Answer with exactly one of the criterion keys.";
+	await route({
+		agent: { name: "worker", description: "d" },
+		task: "t",
+		criteria: { light: "cheap" },
+		instructions,
+	});
+	const call = registry.classifyCalls[0];
+	assert.equal(call?.context.questions.profile.instructions, instructions);
+});
+
 test("a classifier model the registry cannot find warns `is not available` once", async () => {
 	const registry = fakeRegistry({ hit: false });
 	const { requests, warnings } = await routeWithClassifier(registry);
