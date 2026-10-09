@@ -1,19 +1,16 @@
 # tinysubagent
 
-Minimal, herdr-native subagent spawning for [pi](https://pi.dev). Define roles as
-markdown files and delegate to them — every subagent runs in a shared right-hand
-[herdr](https://herdr.dev/) column beside the orchestrator, each with an isolated context
-window, and reports back as a steer message.
+Herdr-native subagent spawning for [pi](https://pi.dev). Define roles as markdown files and
+delegate to them. Each subagent runs in a shared right-hand [herdr](https://herdr.dev/) column
+with its own context window, and reports back as a steer message.
 
-- **Fire-and-forget** — the spawn returns immediately; results wake your session later.
-- **Single or parallel** — one task, or up to 4 reporting back in one message. The
-  orchestrator keeps 3/5 of the split; every live sub shares one right-hand column, stacked
-  and equal in height.
-- **Model profiles** — optional `light` / `core` / `pro`-style (or whatever) with `{ model, thinking }` pairs.
-- **Per-child `env`** — hand a subagent static variables without changing the orchestrator's own environment.
+- **Fire-and-forget:** spawns return immediately; results wake your session later.
+- **Single or parallel:** one task, or up to 4 reporting in one message. The orchestrator keeps
+  3/5 of the split; live subagents share one stacked, equal-height column.
+- **Model profiles:** optional named `{ model, thinking }` pairs (`light`, `core`, `pro`, or any names).
+- **Per-child `env`:** static variables for subagents, without touching the orchestrator's env.
 
-The tool is registered **only when pi runs inside herdr**. Outside herdr there is no pane
-to split, so it is not offered at all.
+The tool is registered **only inside herdr**. Outside it there is no pane to split, so it is not offered.
 
 ## Requirements
 
@@ -26,27 +23,24 @@ to split, so it is not offered at all.
 
 ```bash
 pi install git:github.com/tinypi-extension/tinysubagent   # or git@github.com:...
-pi update --extensions     # update (reconciles git refs); pi list to inspect
+pi update --extensions     # update; `pi list` to inspect
 ```
 
-Install **without a ref** so updates keep working. Pinned refs are checkout targets — to
-upgrade, install the newer tag explicitly.
+Install **without a ref** so updates keep working. Pinned refs are checkout targets; to upgrade,
+install the newer tag explicitly.
 
 ### Link the herdr plugin
 
-The pane entrypoint ships with the package in `herdr-plugin/` (plugin id
-`tinysubagent-panes`, entrypoint `subagent`). herdr stores the absolute path and copies
-nothing. Pi asks before your first prompt
+The pane entrypoint ships in `herdr-plugin/` (plugin id `tinysubagent-panes`, entrypoint
+`subagent`). herdr stores the absolute path and copies nothing. Pi asks before your first prompt.
 
 ### Reinstall over an existing install
 
-herdr stores the **absolute path** of the linked plugin, and the plugin id
-(`tinysubagent-panes`) never changes. So reinstalling tinysubagent — a new checkout, a
-moved repo, or switching from a local path to `git:...` — leaves the old link in place.
-The plugin id now matches the stale path, and the reinstall looks like it did nothing:
-herdr still runs the old plugin directory, and the new package conflicts with it.
+herdr stores the **absolute path** of the linked plugin, and the plugin id never changes. Reinstalling
+from a new checkout, a moved repo, or a switch from a local path to `git:...` leaves the old link in
+place, so the reinstall appears to do nothing and herdr keeps running the old directory.
 
-Remove the old link, then let pi link the new one:
+Remove the stale link, then let pi link the new one:
 
 ```bash
 herdr plugin unlink tinysubagent-panes   # drop the stale, path-pinned link
@@ -56,20 +50,15 @@ pi                                       # start pi inside a herdr pane
 herdr plugin list                        # verify: enabled  [local:/path/to/new/herdr-plugin]
 ```
 
-Start pi from inside a herdr pane so the prompt appears; confirming it re-links the path
-the new install ships from. If the prompt does not appear, link the new path directly
-(`herdr plugin link /path/to/new/herdr-plugin --enabled`) and re-check with
-`herdr plugin list` that the `[local:...]` path is the new checkout.
-
 ### Verify
 
-`pi list` shows tinysubagent, `herdr plugin list` shows the plugin enabled, and a pi
-restarted inside a herdr pane lists a `subagent` tool with your roles. Otherwise see
-[Troubleshooting](#troubleshooting).
+`pi list` shows tinysubagent, `herdr plugin list` shows the plugin enabled, and pi restarted inside
+a herdr pane lists a `subagent` tool with your roles. Otherwise see [Troubleshooting](#troubleshooting).
 
 ## Define a role
 
-A role is a markdown file with YAML frontmatter; the body is the child's system prompt. See [`sample_agent/`](sample_agent/) for ready-made examples.
+A role is a markdown file with YAML frontmatter. The body is the child's system prompt.
+See [`sample_agent/`](sample_agent/) for examples.
 
 ```markdown
 ---
@@ -85,81 +74,73 @@ You explore a codebase and report findings for another agent to act on.
 - Do not propose a plan. Do not edit anything. Your output is the context itself.
 ```
 
-Save as `~/.pi/agent/agents/scout.md` (everywhere) or `<project>/.pi/agents/scout.md`
-(that project).
+Save as `~/.pi/agent/agents/scout.md` (all projects) or `<project>/.pi/agents/scout.md` (one project).
 
-Load order: user roles (`<agentDir>/agents/*.md` — `~/.pi/agent/agents/`, or
-`$PI_CODING_AGENT_DIR/agents/` when set), then project roles. On a name clash the
-**project definition wins**. Files are read in name order.
+Load order: user roles (`<agentDir>/agents/*.md`, i.e. `~/.pi/agent/agents/` or
+`$PI_CODING_AGENT_DIR/agents/`), then project roles. On a name clash the **project definition wins**.
+Files load in name order.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `name` | No | Defaults to the filename. Used to select the role. |
-| `description` | Recommended | Advertised in the tool description. Missing → warning, role still usable. |
-| `tools` | No | Child allowlist: comma/whitespace-separated string or YAML list. `*` matches any run of characters (`codegraph_*`, `mcp__*`). |
+| `name` | No | Defaults to the filename. Selects the role. |
+| `description` | Recommended | Shown in the tool description. Missing → warning; role still works. |
+| `tools` | No | Child allowlist: comma/space-separated string or YAML list. `*` matches any run of characters (`codegraph_*`, `mcp__*`). |
 
 Notes on `tools`:
 
-- `subagent_report` (the child-side hand-back tool) is always added, so a role can return
-  its result.
-- Without `tools` the child gets **no allowlist** and inherits pi's normal tool set.
-- A literal name is kept even if nothing matches, so a renamed tool warns instead of
-  silently narrowing the allowlist; unmatched wildcards also warn on the spawn
-  acknowledgment.
-- **Nested delegation is unsupported.** Listing `subagent` fails the spawn with an
-  explanation: a grandchild's result lands in the subagent's own session, and nothing
-  carries it up to the orchestrator.
+- `subagent_report` (the child's hand-back tool) is always added.
+- Without `tools`, the child has **no allowlist** and inherits pi's normal tool set.
+- A literal name is kept even if nothing matches, so a renamed tool warns instead of silently
+  narrowing the list. Unmatched wildcards also warn on the spawn acknowledgment.
+- **Nested delegation is unsupported.** Listing `subagent` fails the spawn. A grandchild's result
+  lands in the subagent's own session and never reaches the orchestrator.
 
 ## Profiles
 
-A profile is a `{ model, thinking }` pair a child is launched with, configured in
+A profile is a `{ model, thinking }` pair a child launches with. Configure it in
 `~/.pi/agent/tinysubagent.jsonc`:
 
 ```jsonc
 {
   "enableProfiles": true,
   "profiles": {
-    "light": { "model": "<provider>/<small-model>",  "thinking": "low" },
+    "light": { "model": "<provider>/<small-model>",   "thinking": "low" },
     "core":  { "model": "<provider>/<default-model>", "thinking": "medium" },
-    "pro":   { "model": "<provider>/<large-model>", "thinking": "high" }
+    "pro":   { "model": "<provider>/<large-model>",   "thinking": "high" }
   }
 }
 ```
 
-- `current` is built in, means "inherit this session", and **cannot be redefined** (a
-  config that tries is ignored with a warning).
-- A named profile is refused unless `enableProfiles` is literally `true`. When profiles are
-  off — or SystemOne routing is active — the `profile` parameter is removed from the schema
-  entirely.
-- `model` and `thinking` are each optional and fall back to your session's value.
-- `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Unknown values
-  warn and are ignored.
-- A missing config file is the default state, equivalent to `enableProfiles: false`.
+- `current` is built in. It means "inherit this session" and **cannot be redefined** (a config
+  that tries is ignored with a warning).
+- Named profiles are refused unless `enableProfiles` is literally `true`. When profiles are off,
+  or SystemOne routing is active, the `profile` parameter is removed from the schema.
+- `model` and `thinking` are each optional and fall back to the session's value.
+- `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Unknown values warn and are ignored.
 
 ### Config resolution
 
 | Precedence | File |
 | --- | --- |
-| 1 | `$PI_TINYSUBAGENT_CONFIG` — the only file read |
+| 1 | `$PI_TINYSUBAGENT_CONFIG` (the only file read when set) |
 | 2 | `<project>/.pi/tinysubagent.jsonc` |
 | 3 | `<project>/.pi/tinysubagent.json` |
 | 4 | `~/.pi/agent/tinysubagent.jsonc` |
 | 5 | `~/.pi/agent/tinysubagent.json` |
 
 - **Scope beats filename:** a project `.json` outranks a global `.jsonc`.
-- **Within one directory** `.jsonc` wins and the sibling `.json` is silently ignored.
-- Files **layer**: `profiles` merge by name and `env` merges per key, higher scope winning,
-  so a project file can add one profile or one variable and inherit the rest.
-  `enableProfiles` comes from the highest-precedence file specifying it.
+- **Within one directory**, `.jsonc` wins and the sibling `.json` is silently ignored.
+- Files **layer**: `profiles` merge by name and `env` merges per key, higher scope winning. A project
+  file can add one profile or one variable and inherit the rest. `enableProfiles` comes from the
+  highest-precedence file that sets it.
 - Both formats allow comments and trailing commas.
-- An unreadable or unparseable file is skipped with a warning naming it, and the next
-  scope applies.
-- Config with TUI via `/subagent-settings`
+- An unreadable or unparseable file is skipped with a warning naming it; the next scope applies.
+- Edit config in the TUI with `/subagent-settings`.
 
 ### Profile routing via classifier model (`classifierModel`)
 
-A `classifierModel` serves routing **in process** through pi's model registry instead of
-calling SystemOne, so routing works with any classifier pi already has credentials for:
+A `classifierModel` routes **in process** through pi's model registry instead of SystemOne, so
+routing works with any classifier pi has credentials for:
 
 ```jsonc
 {
@@ -169,58 +150,52 @@ calling SystemOne, so routing works with any classifier pi already has credentia
 }
 ```
 
-- **The value is a pi model reference**, `"<provider>/<model-id>"`
-- To set up classifier model, use built-in [model](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#use-classifier-models) or custom with [pi-classifier-provider](https://github.com/tinypi-extension/pi-classifier-provider)
-- In `/subagent-settings` the row is a picker
-- Routing is active when `enableProfiles` is `true`, at least one named profile exists, and
-  either `classifierModel` or a `systemOneAPIKey` is configured. 
-- **Setting it makes the three `systemOne*` keys inert**: they are ignored while
-  `classifierModel` is set, and every config file that still lists them logs a deprecation
-  warning naming that file.
+- The value is a pi model reference, `"<provider>/<model-id>"`.
+- Set one up with pi's built-in [models](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#use-classifier-models)
+  or a custom one via [pi-classifier-provider](https://github.com/tinypi-extension/pi-classifier-provider).
+- In `/subagent-settings`, the row is a picker.
+- Routing is active when `enableProfiles` is `true`, at least one named profile exists, and either
+  `classifierModel` or a `systemOneAPIKey` is set.
+- **Setting `classifierModel` makes the three `systemOne*` keys inert.** Every config file still
+  listing them logs a deprecation warning naming that file.
 
-### SystemOne profiles routing (Deprecated)
+### SystemOne profile routing (deprecated)
 
-> A configured `classifierModel` supersedes this section: routing is then served in process
-> and the three `systemOne*` keys are ignored. `systemOne*` keys are deprecated, so every
-> config file that still lists them logs a warning naming the file to clean up. 
+> A configured `classifierModel` supersedes this section. The `systemOne*` keys are then ignored, and
+> every config file that still lists them logs a warning naming the file to clean up.
 
-
-When a SystemOne key is configured, the orchestrator asks a routing service to pick the
-profile for each task instead of making the model choose `profile` itself:
+With a SystemOne key set, the orchestrator asks a routing service to pick the profile for each task,
+instead of the model choosing `profile` itself:
 
 ```jsonc
 {
   "enableProfiles": true,
   "profiles": { "light": { "model": "<small-model>", "thinking": "low" } },
-  "systemOneAPIKey": "sk-…",                     // a secret API key
-  "systemOneBaseUrl": "https://api.typesafe.ai", // optional; this is the default
-  "systemOneModel": "jev-latest"                 // optional; this is the default
+  "systemOneAPIKey": "sk-…",                     // secret API key
+  "systemOneBaseUrl": "https://api.typesafe.ai", // optional; default shown
+  "systemOneModel": "jev-latest"                 // optional; default shown
 }
 ```
 
-- Project scope is inert for all three. A checked-in project file can neither enable,
-  disable, nor redirect routing — put them in the override or global file.
-- **`systemOneModel` is the one silent key.** Absent, blank, non-string, keyless, or
-  project-scoped, it degrades to `jev-latest` 
-- **Every failure falls back to `current`**, and never fails or delays a spawn beyond a
-  2 s budget: no key configured, a timeout, a non-2xx/3xx status, an unparseable body, an
-  answer without `probabilities`, or a chosen name that is not a configured profile. The
-  invariant: with routing on, `[current]` in a spawn acknowledgment means the SystemOne
-  call produced **no decision** — `current` is never a routing outcome.
+- Project scope is inert for all three keys. A checked-in project file cannot enable, disable, or
+  redirect routing. Put them in the override or global file.
+- **`systemOneModel` fails silently.** If it is absent, blank, non-string, keyless, or project-scoped,
+  it falls back to `jev-latest`.
+- **Every failure falls back to `current`**, never delaying a spawn beyond a 2 s budget. Failures
+  include: no key, timeout, non-2xx/3xx status, unparseable body, no `probabilities`, or a chosen name
+  that is not a configured profile. With routing on, `[current]` in a spawn ack means the SystemOne
+  call produced **no decision**; `current` is never a routing outcome.
 
-A configured key also powers the **report check** inside each child. When a
-subagent's turn ends without a `subagent_report` call, the child sends its
-final message to the same service, which decides whether the work was finished
-and merely never reported. When it was, the child steers itself a reminder to
-make the call — at most twice. An unfinished message, a declined answer, or
-any transport failure means the child is left alone, exactly as before. This
-needs only the key (not `enableProfiles` or profiles), and carries the same
-privacy cost: the subagent's final message leaves the machine.
-
+A configured key also powers the **report check** in each child. When a subagent's turn ends without
+a `subagent_report` call, the child sends its final message to the same service. If the service says
+the work was finished but never reported, the child steers itself a reminder to call it, at most twice.
+An unfinished message, a declined answer, or a transport failure leaves the child alone. This needs
+only the key (not `enableProfiles` or profiles) and has the same privacy cost: the final message leaves
+the machine.
 
 ## Environment variables
 
-`env` hands each subagent a static variable without changing the environment of the main session
+`env` gives each subagent static variables without changing the main session's environment.
 
 ```jsonc
 {
@@ -231,43 +206,39 @@ privacy cost: the subagent's final message leaves the machine.
 }
 ```
 
-- **Values are strings, always.** A number, boolean, `null`, array or object is skipped with
-  a warning rather than coerced. `{"DEBUG": false}` would otherwise export the string
-  `"false"`, which every shell test reads as *true*; and a JSON number round-trips through
-  IEEE754, so `1.0` becomes `"1"` and a long numeric id loses its last digits.
-- **Keys must be shell identifiers** — `[A-Za-z_][A-Za-z0-9_]*`. `"a b"` is skipped with a
-  warning, because `export a b=x` breaks the whole launch script, not just one variable.
-- `"FOO": ""` exports `FOO` as set-but-empty. Omit the key to leave it unset.
-- **Merged per key**, project over global, exactly like `profiles`; a
-  `$PI_TINYSUBAGENT_CONFIG` override replaces both.
-- **A collision goes to the launcher.** `PATH`, `PI_CODING_AGENT_DIR` and the
-  `PI_TINYSUBAGENT_*` variables a child uses to report back are written after `env`, so a
-  config value of the same name is overwritten.
+- **Values must be strings.** Numbers, booleans, `null`, arrays, and objects are skipped with a warning,
+  not coerced. `{"DEBUG": false}` would export `"false"`, which shell tests read as *true*. A JSON number
+  also loses precision: `1.0` becomes `"1"`, and long ids lose digits.
+- **Keys must be shell identifiers** (`[A-Za-z_][A-Za-z0-9_]*`). `"a b"` is skipped with a warning, since
+  `export a b=x` breaks the whole launch script.
+- `"FOO": ""` exports `FOO` as set but empty. Omit the key to leave it unset.
+- **Merged per key**, project over global, like `profiles`. A `$PI_TINYSUBAGENT_CONFIG` override replaces both.
+- **Collisions go to the launcher.** `PATH`, `PI_CODING_AGENT_DIR`, and the `PI_TINYSUBAGENT_*` variables
+  children use to report back are written after `env`, so a config value with the same name is overwritten.
 
 ## Troubleshooting
 
-Most failures are one of three kinds: pi is not running inside a herdr pane, the
-`tinysubagent-panes` plugin is missing or stale, or a config value was rejected. Config
-warnings also appear as a notification at session start.
+Most failures are one of three kinds: pi is not inside a herdr pane, the `tinysubagent-panes` plugin is
+missing or stale, or a config value was rejected. Config warnings also appear as a notification at session start.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | No `subagent` tool | pi is not inside herdr | Start pi from a herdr pane (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_SOCKET_PATH`). |
 | "herdr is not reachable from this pane" | herdr server stopped | `herdr status server --json`; restart herdr. |
 | "herdr >= 0.8.2 is required" | Old herdr | Update herdr, then restart the herdr session. |
-| Plugin "is not installed" / "is disabled" | Entrypoint never linked, or the offer was declined | Confirm the prompt, or run the `herdr plugin link <repo>/herdr-plugin --enabled` command from the error, then `herdr plugin list`. |
-| Reinstall had no effect / old panes still run | herdr kept the old absolute path; the fixed plugin id now matches the stale link | `herdr plugin unlink tinysubagent-panes`, start pi inside a herdr pane, confirm the link prompt, then `herdr plugin list` shows the new `[local:...]` path. See [Reinstall over an existing install](#reinstall-over-an-existing-install). |
+| Plugin "is not installed" / "is disabled" | Entrypoint never linked, or the offer was declined | Confirm the prompt, or run the `herdr plugin link <repo>/herdr-plugin --enabled` command from the error, then check `herdr plugin list`. |
+| Reinstall had no effect / old panes still run | herdr kept the old absolute path; the fixed plugin id matches the stale link | `herdr plugin unlink tinysubagent-panes`, start pi inside a herdr pane, confirm the link prompt, then check `herdr plugin list` for the new `[local:...]` path. See [Reinstall over an existing install](#reinstall-over-an-existing-install). |
 | "no agent definitions found" | No role files | Add a markdown file with `name`, `description`, `tools` frontmatter. |
 | `profile "x" cannot be used: profiles are disabled` | `enableProfiles` is not `true` | Set it in the highest-precedence file named in the error. |
-| `unknown profile "x"` | Typo, or the profile is in a lower-precedence file | Check the names in the error and that profile's config file. |
+| `unknown profile "x"` | Typo, or the profile lives in a lower-precedence file | Check the names in the error and that profile's config file. |
 | `env` warning: `… is not a string` | A non-string `env` value | Quote it: `"DEBUG": "0"`. Booleans and numbers are skipped, not converted. |
-| `env` warning: `key "a b" … is not a valid shell identifier` | Key is not a shell name | Use letters, digits and `_`, not starting with a digit. |
+| `env` warning: `key "a b" … is not a valid shell identifier` | Key is not a shell name | Use letters, digits, and `_`, not starting with a digit. |
 | Warning about an unmatched tool pattern | A `tools` entry matched no real tool | Fix the typo or wildcard in that role's frontmatter. |
 | "Nested delegation is not supported yet" | A role lists `subagent` in `tools` | Remove it from that role's frontmatter. |
-| Routing warning: `project-scoped, so its routing keys are ignored`, `"systemOneBaseUrl" … has no "systemOneAPIKey"`, `"systemOneAPIKey" … is not a string` / `is empty`, `"systemOneBaseUrl" … is not a usable http(s) URL` | A routing key is malformed, or sits in a file that has no effect — the credentials must resolve from one file, and project scope is inert. `systemOneModel` never appears here: a bad or misplaced model silently falls back to `jev-latest` | Routing stays off until it is fixed. Put both credentials in the same global or override file as a non-empty string and an `https:` URL (plain `http:` only for loopback), or remove them. |
-| A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion; a long child holds the batch — watch its pane. |
-| Spawn ack shows `[current]` while routing is on | The SystemOne call produced no decision (timeout, error, unusable answer) and the fallback applied | By design: `current` is never a routing outcome, and `[profile]` in an ack is always the *resolved* profile. The same result names the reason on its own line — `tinysubagent: systemOne routing failed (HTTP 401); keeping "current".` |
+| Routing warning: `project-scoped, so its routing keys are ignored`, `"systemOneBaseUrl" … has no "systemOneAPIKey"`, `"systemOneAPIKey" … is not a string` / `is empty`, `"systemOneBaseUrl" … is not a usable http(s) URL` | A routing key is malformed, or sits in a file with no effect. Credentials must resolve from one file, and project scope is inert. `systemOneModel` never warns: a bad or misplaced value silently falls back to `jev-latest`. | Routing stays off until fixed. Put both credentials in the same global or override file: a non-empty string key and an `https:` URL (plain `http:` only for loopback). Or remove them. |
+| A spawn acknowledges but no result arrives | The child is still running | Results arrive only on completion. A long child holds the batch; watch its pane. |
+| Spawn ack shows `[current]` while routing is on | The SystemOne call produced no decision (timeout, error, unusable answer), so the fallback applied | By design. `current` is never a routing outcome, and `[profile]` in an ack is always the *resolved* profile. The same result names the reason on its own line, e.g. `tinysubagent: systemOne routing failed (HTTP 401); keeping "current".` |
 
 ## License
 
-MIT — see the `license` field in [package.json](package.json). Author: Ironman.
+MIT. See the `license` field in [package.json](package.json). Author: Ironman.
