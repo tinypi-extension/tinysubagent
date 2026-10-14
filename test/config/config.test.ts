@@ -170,6 +170,80 @@ test("an unknown thinking level is dropped with a warning but keeps the model", 
 	assert.match(warnings[0] ?? "", /unknown "thinking" value/);
 });
 
+test("agy profiles use thinking, and effort remains a silent alias", () => {
+	const file = writeConfig({
+		enableProfiles: true,
+		profiles: {
+			canonical: { harness: "agy", model: "m", thinking: "high" },
+			alias: { harness: "agy", model: "m", effort: "low" },
+			both: { harness: "agy", thinking: "medium", effort: "low" },
+		},
+	});
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.profiles.canonical, { harness: "agy", model: "m", thinking: "high" });
+	assert.deepEqual(config.profiles.alias, { harness: "agy", model: "m", thinking: "low" });
+	assert.deepEqual(config.profiles.both, { harness: "agy", thinking: "medium" });
+	assert.deepEqual(warnings, []);
+});
+
+test("a pi harness profile keeps its harness and thinking", () => {
+	const file = writeConfig({
+		enableProfiles: true,
+		profiles: { fast: { harness: "pi", model: "m", thinking: "low" } },
+	});
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.profiles.fast, { harness: "pi", model: "m", thinking: "low" });
+	assert.equal(warnings.length, 0);
+});
+
+test("a profile with no harness key means pi and has no harness field", () => {
+	const file = writeConfig({ enableProfiles: true, profiles: { plain: { model: "m" } } });
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.profiles.plain, { model: "m" });
+	assert.equal(warnings.length, 0);
+});
+
+test("an unknown harness value drops the profile with one warning", () => {
+	const file = writeConfig({
+		enableProfiles: true,
+		profiles: { odd: { harness: "codex", model: "m" }, good: { model: "m" } },
+	});
+	const { config, warnings } = read(file);
+	assert.deepEqual(Object.keys(config.profiles), ["good"]);
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0] ?? "", /unknown "harness" value/);
+	assert.match(warnings[0] ?? "", /odd/);
+});
+
+test("a non-string harness value drops the profile with one warning", () => {
+	const file = writeConfig({ enableProfiles: true, profiles: { odd: { harness: 42 } } });
+	const { config, warnings } = read(file);
+	assert.deepEqual(Object.keys(config.profiles), []);
+	assert.match(warnings[0] ?? "", /unknown "harness" value/);
+});
+
+test("effort remains a silent alias on pi profiles too", () => {
+	const file = writeConfig({
+		enableProfiles: true,
+		profiles: { odd: { model: "m", effort: "low" } },
+	});
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.profiles.odd, { model: "m", thinking: "low" });
+	assert.deepEqual(warnings, []);
+});
+
+test("an unknown effort alias is ignored with a warning", () => {
+	const file = writeConfig({
+		enableProfiles: true,
+		profiles: { odd: { harness: "agy", effort: "ludicrous" } },
+	});
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.profiles.odd, { harness: "agy" });
+	assert.match(warnings[0] ?? "", /unknown "effort" value/);
+});
+
+
+
 test("a profile with a non-string model drops only that field", () => {
 	const file = writeConfig({
 		enableProfiles: true,

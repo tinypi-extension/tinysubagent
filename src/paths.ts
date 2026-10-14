@@ -56,3 +56,9 @@ export function pluginDir(): string {
  * segment tracks the child entrypoint.
  */
 export const childExtensionPath: string = join(srcDir, "children", "child.ts");
+
+/** CLI entrypoint for managing agy's trusted workspace list in its settings file. */
+export const agyTrustCliPath: string = join(srcDir, "children", "agy-trust-cli.ts");
+
+/** CLI entrypoint invoked by agy's per-run Stop hook. */
+export const agyStopHookCliPath: string = join(srcDir, "children", "agy-stop-hook-cli.ts");

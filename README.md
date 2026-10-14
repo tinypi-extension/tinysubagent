@@ -6,7 +6,7 @@ with its own context window, and reports back as a steer message.
 
 - **Fire-and-forget:** spawns return immediately; results wake your session later.
 - **Single or parallel:** one task, or up to 4 reporting in one message. 
-- **Model profiles:** optional named `{ model, thinking }` pairs (`light`, `core`, `pro`, or any names).
+- **Model profiles:** optional named profiles with a shared `model` and `thinking` setting for pi or agy.
 - **Per-child `env`:** static variables for subagents, without touching the orchestrator's env.
 
 The tool is registered **only inside herdr**. Outside it there is no pane to split, so it is not offered.
@@ -92,16 +92,17 @@ Notes on `tools`:
 
 ## Profiles
 
-A profile is a `{ model, thinking }` pair a child launches with. Configure it in
+A profile selects the child CLI with `harness` (`pi`, the default, or `agy`) and supplies
+a shared model and thinking level, translated to the harness's supported setting. Configure profiles in
 `~/.pi/agent/tinysubagent.jsonc`:
 
 ```jsonc
 {
   "enableProfiles": true,
   "profiles": {
-    "light": { "model": "<provider>/<small-model>",   "thinking": "low" },
+    "light": { "model": "<provider>/<small-model>", "thinking": "low" },
     "core":  { "model": "<provider>/<default-model>", "thinking": "medium" },
-    "pro":   { "model": "<provider>/<large-model>",   "thinking": "high" }
+    "agy-medium": { "harness": "agy", "model": "gpt-oss-120b-medium", "thinking": "medium" }
   }
 }
 ```
@@ -109,8 +110,23 @@ A profile is a `{ model, thinking }` pair a child launches with. Configure it in
 - `current` is built in. It means "inherit this session" and **cannot be redefined** (a config
   that tries is ignored with a warning).
 - Named profiles are refused unless `enableProfiles` is literally `true`. 
-- `model` and `thinking` are each optional and fall back to the session's value.
-- `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Unknown values warn and are ignored.
+- `harness` defaults to `pi`. Valid values are `pi` and `agy`; an unknown harness drops that profile with a warning.
+- `model` is optional and falls back to the session's model for pi; agy profiles should specify a model.
+- `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` for either harness. 
+- The old `effort` key remains a silent alias for `thinking` at `low`/`medium`/`high`. If both are set, `thinking` wins.
+- Agy profiles do not support role `tools` allowlists. Such a spawn is refused; use a pi profile instead.
+- Set `TINYSUBAGENT_AGY_BIN` to override the `agy` executable path.
+
+### Using the agy harness
+
+Install and sign in to the `agy` CLI separately. Agy profiles launch interactively in their own
+herdr pane; the model may pause for approval, and you can review or steer it there. Agy does not
+enforce role `tools` allowlists, so tinysubagent refuses agy spawns for roles that declare one.
+
+Each run gets a temporary workspace containing its Stop hook. To let agy load the hook without a
+first-run trust prompt, tinysubagent temporarily adds that workspace to
+`~/.gemini/antigravity-cli/settings.json` `trustedWorkspaces`, then removes the entry when the run
+ends. Existing trust entries are preserved. The workspace and hook are removed after the child exits.
 
 ### Config resolution
 
@@ -197,4 +213,4 @@ a `subagent_report` call, the child sends its final message to the same service.
 
 ## License
 
-MIT. See the `license` field in [LICENSE](LICENSE). 
+MIT. See [LICENSE](LICENSE). 

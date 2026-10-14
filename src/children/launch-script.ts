@@ -12,6 +12,8 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 
+import { piHarness } from "./harness/index.ts";
+
 /** Single-quote a string for bash. The only quoting form used in generated scripts. */
 export function shellEscape(value: string): string {
 	return `'${value.replace(/'/g, "'\\''")}'`;
@@ -35,6 +37,11 @@ export interface LaunchScriptOptions {
 	holdOpenSecs?: number;
 	/** Plain NAME → value pairs from the settings file, exported before launch-owned vars. */
 	env?: Record<string, string>;
+	harness?: "pi" | "agy";
+	agyRunDir?: string;
+	agyTrustCliPath?: string;
+	agyStopHookCliPath?: string;
+	agyStopCounterDir?: string;
 }
 
 export const DEFAULT_HOLD_OPEN_SECS = 15;
@@ -94,12 +101,37 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
 		lines.push(`export PI_TINYSUBAGENT_AGENT=${shellEscape(opts.agent)}`);
 	}
 
+	if (opts.harness === "agy" && opts.agyRunDir && opts.agyTrustCliPath && opts.agyStopHookCliPath) {
+		const trustMarker = path.join(opts.agyRunDir, ".tinysubagent-trust-added");
+		const hookFile = path.join(opts.agyRunDir, ".agents", "hooks.json");
+		lines.push(
+			`mkdir -p ${shellEscape(path.dirname(hookFile))}`,
+			`node ${shellEscape(opts.agyTrustCliPath)} add ${shellEscape(opts.agyRunDir)} ${shellEscape(trustMarker)}`,
+			"trust_code=$?",
+			'if [ "$trust_code" -ne 0 ]; then echo "tinysubagent: could not trust agy run directory"; exit "$trust_code"; fi',
+			`cleanup_agy_trust() { if [ -f ${shellEscape(trustMarker)} ]; then node ${shellEscape(opts.agyTrustCliPath!)} remove ${shellEscape(opts.agyRunDir!)}; fi; rm -rf ${shellEscape(opts.agyRunDir!)}; }`,
+			"trap cleanup_agy_trust EXIT",
+			`printf '%s\\n' ${shellEscape(JSON.stringify({
+				"tinysubagent": {
+					Stop: [{ type: "command", command: `node ${shellEscape(opts.agyStopHookCliPath)} ${shellEscape(opts.reportFile)} ${shellEscape(opts.agyStopCounterDir ?? opts.agyRunDir)}`, timeout: 10 }],
+				},
+			}))} > ${shellEscape(hookFile)}`,
+			`cd ${shellEscape(opts.agyRunDir)}`,
+		);
+	} else {
+		lines.push(`cd ${shellEscape(opts.cwd)}`);
+	}
+
 	lines.push(
-		`cd ${shellEscape(opts.cwd)}`,
 		piCommand,
 		"code=$?",
-		`echo "$code $PI_TINYSUBAGENT_ID" > ${shellEscape(opts.exitCodeFile)}`,
 	);
+	if (opts.harness === "agy") {
+		lines.push(
+			`if [ "$code" -eq 0 ] && [ ! -f ${shellEscape(opts.reportFile)} ]; then printf '%s\\n' '{"type":"failed","reason":"no-output"}' > ${shellEscape(`${opts.reportFile}.tmp`)} && mv ${shellEscape(`${opts.reportFile}.tmp`)} ${shellEscape(opts.reportFile)}; fi`,
+		);
+	}
+	lines.push(`echo "$code $PI_TINYSUBAGENT_ID" > ${shellEscape(opts.exitCodeFile)}`);
 
 	const holdOpenSecs = opts.holdOpenSecs ?? DEFAULT_HOLD_OPEN_SECS;
 	if (holdOpenSecs > 0) {
@@ -128,23 +160,17 @@ export interface PiArgvOptions {
 }
 
 /**
- * Child argv. Model and thinking are two independent flags — the `model:thinking`
- * colon syntax is not used here. The task is delivered as a file reference so
- * the prompt never appears in `ps` output and never needs escaping.
+ * Child argv, as the pi harness builds it. Kept as a named export because both
+ * spawn.ts and the launch tests predate the harness split; the body lives in
+ * `harness/pi.ts` now.
  */
 export function buildPiArgv(opts: PiArgvOptions): string[] {
-	const argv = [opts.piBin, "--session", opts.childSessionFile, "-e", opts.childExtensionPath];
-	if (opts.name) argv.push("--name", opts.name);
-	if (opts.model) argv.push("--model", opts.model);
-	if (opts.thinking) argv.push("--thinking", opts.thinking);
-	if (opts.tools && opts.tools.length > 0) argv.push("--tools", opts.tools.join(","));
-	argv.push(`@${opts.taskFile}`);
-	return argv;
+	return piHarness.buildArgv({ ...opts, bin: opts.piBin });
 }
 
-/** Override, else the `pi` on PATH (the wrapper exports the parent's PATH). */
+/** Bin override from the env, resolved by the pi harness. */
 export function resolvePiBin(env: NodeJS.ProcessEnv = process.env): string {
-	return env.PI_HERDR_PI_BIN || "pi";
+	return piHarness.resolveBin(env);
 }
 
 /**

@@ -1,17 +1,18 @@
 # Spec: a profile can choose the child CLI (pi or agy)
 
-Status: **approved, Q1–Q4 decided (2026-10-14).** No code until the spike (Phase 0) is recorded in `docs/tasks/spec-agy-harness/spike.md`.
+Status: **approved project-directory amendment is blocked by the A1 hook-preservation spike.** agy 1.3.5 provides only a single project `.agents/hooks.json` and no per-run overlay; modifying and restoring that shared file cannot guarantee preservation under concurrent/external edits or uncatchable termination. The original isolated-workspace implementation was verified, including the manual real-agy/herdr end-to-end (C10/CP4), but does not satisfy the amendment's project-cwd requirement. See A1 in `docs/tasks/spec-agy-harness/spike.md`. Do not implement the amendment until a safe hook overlay or revised requirement is approved. Q1–Q4 decided (2026-10-14).
 
 Builds on `docs/specs/spec-report-required.md` (the report is the only clean ending) and
 `docs/specs/spec-child-preflight-failure.md`. Does not change the sidecar contract.
 
 ## Assumptions I'm making
 
-1. A profile names one harness (`pi` or `agy`) plus that harness's own model and effort/thinking keys. Harness absent means `pi`, so existing configs do not change.
-2. `agy` children run **interactively in a herdr pane** (no `-p`). The pane is the only place a human can see, approve, or steer the child.
+1. A profile names one harness (`pi` or `agy`) plus a shared model and `thinking` setting. Harness absent means `pi`, so existing configs do not change.
+2. `agy` children run **interactively in a herdr pane** (no `-p`) with the project directory as their working directory. The pane is the only place a human can see, approve, or steer the child.
 3. The child's report is written to the existing sidecar `$PI_TINYSUBAGENT_REPORT` with the existing JSON shape. No new keys.
 4. The orchestrator's own session stays pi. Only the child CLI changes.
 5. The watcher needs no new state. Its existing classification (report > settle > exit sidecar > pane liveness) covers agy.
+6. The agy child runs with `cwd` equal to the resolved project directory supplied for the spawn, not a per-run workspace. The per-run Stop hook must not overwrite, remove, or otherwise lose an existing `<project>/.agents/hooks.json` or its hooks. Any temporary hook setup must be cleaned up after the run while preserving the pre-existing project hook file and contents.
 
 ## Test model
 
@@ -31,7 +32,7 @@ boundary is the cheapest point to add a second CLI before more pi assumptions sp
 ```jsonc
 "profiles": {
   "fast-pi":   { "harness": "pi",  "model": "...", "thinking": "medium" },
-  "gemini":    { "harness": "agy", "model": "...", "effort": "low" }
+  "gemini":    { "harness": "agy", "model": "...", "thinking": "low" }
 }
 ```
 
@@ -39,14 +40,10 @@ boundary is the cheapest point to add a second CLI before more pi assumptions sp
 |---|---|---|
 | `harness` | all | `"pi"` (default) or `"agy"`. Any other value: profile dropped, warning at load (fail closed; never run an unknown CLI). |
 | `model` | all | Passed through to the harness. Not validated across harnesses. |
-| `thinking` | `pi` | As today. |
-| `effort` | `agy` | `low` / `medium` / `high`, passed as `--effort`. |
-| `thinking` on `agy` | — | Ignored with a warning, the same pattern as today's unknown-`thinking` warning (`config.ts:198`). |
-| `effort` on `pi` | — | Ignored with a warning. |
+| `thinking` | all | `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`; passed to pi as `--thinking`. For agy, mapped to `--effort`: `off` / `minimal` / `low` → `low`; `medium` → `medium`; `high` / `xhigh` / `max` → `high`. |
+| `effort` | legacy alias, any harness | Silently accepted as `thinking` for `low` / `medium` / `high`. `thinking` wins when both are present; an invalid `thinking` value does not fall back to `effort`. |
 
-Tool allowlist (decided, Q1): an allowlist is not a profile key. It comes from the agent role's `tools` frontmatter (`spawn.ts:72-88`). When the resolved harness is `agy` and the role has a non-empty `tools` list, `spawnOne` refuses the spawn with a clear error before the pane opens: agy has no flag that enforces the list, and a child must never run wider than its role says. A role with no `tools` frontmatter is allowed on agy, since it already means "no restriction" and that is unchanged.
-
-Spawn error: `agent "<name>" declares tools, which the agy harness cannot enforce. Remove the tools list or use a pi profile.`
+Tool allowlist (updated decision): an allowlist is not a profile key. It comes from the agent role's `tools` frontmatter (`spawn.ts`). When the resolved harness is `agy` and the role has a non-empty `tools` list, the spawn proceeds with the list ignored and adds a warning: `agent "<name>": tools list ignored because the agy harness cannot enforce it.` Agy has no flag that enforces the list. The ignored list does not trigger allowlist validation or the nested-delegation guard; agy children do not load the pi extension that provides the `subagent` tool. A role with no `tools` frontmatter is allowed on agy without a warning.
 
 Binary: `TINYSUBAGENT_AGY_BIN` env override, mirroring `PI_HERDR_PI_BIN`. Default `agy`.
 No binary key in config.
@@ -75,8 +72,7 @@ interface ChildHarness {
 
 ## agy child lifecycle
 
-1. Spawn: `launch-script.ts` writes the same wrapper as today. It exports `PI_TINYSUBAGENT_*`
-   and runs `agy --model <m> --effort <e> -i "<task file contents>"` (exact flags pinned in Phase 0).
+1. Spawn: `launch-script.ts` writes the same wrapper as today. It exports `PI_TINYSUBAGENT_*`, prepares the per-run Stop hook without overwriting or losing any existing project `.agents/hooks.json` or hooks, changes directory to the resolved project directory, and runs `agy --model <m> --effort <e> -i "<task file contents>"` (exact flags pinned in Phase 0).
 2. The task markdown tells the child to write its final report to `$PI_TINYSUBAGENT_REPORT`
    as `{"type":"done","result":"..."}` or `{"type":"failed","reason":"error","message":"..."}`,
    via a temp file then rename (atomic).
@@ -102,7 +98,7 @@ Outcome table, agy:
 ## Boundaries
 
 - **Always:** keep the sidecar byte-compatible. Write via temp + rename. The hook validates JSON before it allows a stop. Run `npm run typecheck` and `npm test`.
-- **Always:** the hook is scoped to the child run. The user's global agy config is not modified (checked by diff before and after a run).
+- **Always:** the hook is scoped to the child run. The user's global agy config is not modified (checked by diff before and after a run). The approved project-cwd amendment is currently blocked: project `.agents/hooks.json` is shared mutable state, and agy offers no per-run overlay that would permit safe injection and exact restoration across crashes and concurrent edits. The original verified implementation instead used an isolated cwd.
 - **Ask first:** any change to the pi path beyond moving it behind the interface; any new sidecar key; an unbounded nudge; a global hook install.
 - **Never:** pass the task prompt inline on argv or via env (it stays in a file, as today). Never let an unknown `harness` value fall back to pi silently. Never make the Stop hook block forever.
 
@@ -115,7 +111,7 @@ Each item must pass or the design changes. Results go to `docs/tasks/spec-agy-ha
 | S1 | Does `agy -i "<prompt>"` start an interactive session that stays at the prompt after the task? | Pane stays alive after the first turn. | Unverified. Headless `-p` exists; `-i` reported in docs. |
 | S2 | Stop hook payload: `conversationId`, `transcriptPath`, last message? | Hook can read `conversationId` and `transcriptPath` from stdin. | Verified in docs: common fields include `conversationId`, `transcriptPath`, `artifactDirectoryPath`. |
 | S3 | Can a Stop hook force one more turn? | `decision:"continue"` + `reason` re-enters the loop. | Documented: `continue` re-enters the execution loop; `reason` is injected as a system message. Needs a live test. |
-| S4 | Per-run hook scope: can the child load hooks without touching the user's global config? | A hook file passed by flag or env var, or a project-local file in the child's own cwd that we remove after the run. | **Unverified. Blocking.** |
+| S4 | Per-run hook scope: can the child load its Stop hook from the project cwd without touching global config or losing existing project hooks? | The per-run Stop hook loads from the project cwd; any existing `<project>/.agents/hooks.json` and its hooks remain intact and are preserved after the run. | **Blocked:** agy 1.3.5 documents one project hooks file and no overlay; safe injection/restoration cannot be guaranteed with concurrency, external edits, and uncatchable termination. Original isolated-cwd behavior was verified.
 | S5 | Is `transcriptPath` a readable format we can parse? | `readTurn` can extract last assistant text. If not, `readTurn` returns null and agy completes report-only. | Unverified. Not blocking. |
 
 If S3 or S4 fails, stop and return to the user before writing the plan. Do not fall back to
@@ -123,12 +119,12 @@ global hooks without approval.
 
 ## Success criteria
 
-1. A profile with no `harness` launches exactly the argv it launches today. Existing `test/children/*` and `test/config/*` pass without edits to their expectations.
-2. `harness: "agy"` builds argv with `--model`/`--effort`, the prompt as a file, and no `-p`. Unit-tested.
-3. Unknown harness value drops the profile with a warning. `thinking` on agy and `effort` on pi are ignored with a warning. Unit-tested.
+1. Pi remains the default when `harness` is absent, and pi's thinking argv is unchanged. Unit-tested.
+2. `harness: "agy"` maps the shared `thinking` value to supported `--effort` levels, passes the prompt as a file, and never uses `-p`. Unit-tested.
+3. Unknown harness value drops the profile with a warning. `thinking` is shared across harnesses; legacy `effort` is silently accepted as an alias on either harness and loses to `thinking` when both are present. Unit-tested.
 4. Unreported agy stop: hook nudges once, then allows the stop; no sidecar written; pane open. Tested with a stub agy that scripts the hook calls.
 5. A real agy child in a herdr pane calls the report: watcher emits `completed / report`, pane closes. Smoke test, run manually once.
-6. Global agy config (`~/.gemini/config/hooks.json` and `~/.agents/`) is byte-identical before and after an agy run.
+6. Global agy config (`~/.gemini/config/hooks.json` and `~/.agents/`) is byte-identical before and after an agy run. The agy child's cwd is the resolved project directory. Any pre-existing `<project>/.agents/hooks.json` and its hooks are preserved byte-for-byte after the run.
 7. Missing agy binary: failed with a message before the pane opens, following `spec-child-preflight-failure`.
 8. `npm run typecheck` and `npm test` pass.
 
@@ -143,8 +139,8 @@ global hooks without approval.
 
 | File | Change |
 |---|---|
-| `src/config/config.ts` | parse `harness`, `effort`; warnings for wrong-harness keys; drop unknown harness |
-| `src/config/profiles.ts` | `Profile` gains `harness`, `effort`; tool description text (`:54-61`) lists the harness |
+| `src/config/config.ts` | parse `harness` and shared `thinking`; silently normalize legacy `effort`; drop unknown harness |
+| `src/config/profiles.ts` | `Profile` gains `harness`; tool description lists harness and shared `thinking` |
 | `src/children/harness/types.ts` | new: `ChildHarness` |
 | `src/children/harness/pi.ts` | new: today's pi code moved here |
 | `src/children/harness/agy.ts` | new: agy argv, bin, session path, `readTurn` |
@@ -155,7 +151,7 @@ global hooks without approval.
 | `src/children/task-markdown.ts` | report instruction per harness (pi: tool; agy: sidecar write) |
 | `src/paths.ts` | path to the hook script |
 | `test/children/harness-*.test.ts` | new: argv, nudge logic, outcome table |
-| `test/config/*` | new cases for `harness`, `effort`, warnings |
+| `test/config/*` | cases for `harness`, shared `thinking`, legacy `effort`, and warnings |
 | `docs/tasks/spec-agy-harness/spike.md` | spike results (Phase 0) |
 | `AGENTS.md` | spec-memory index entry for this spec |
 

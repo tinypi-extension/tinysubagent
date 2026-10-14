@@ -141,8 +141,57 @@ test("the profile description degrades honestly when nothing is configured", () 
 	assert.equal(text.includes("Configured:"), false);
 });
 
+test("agy and pi profiles resolve through the single thinking field", () => {
+	const config = enabled({
+		agent: { harness: "agy", model: "gm", thinking: "low" },
+		piOne: { harness: "pi", model: "pm", thinking: "low" },
+		plain: { model: "pm" },
+	});
+	assert.deepEqual(resolveProfile(config, "agent", PARENT), {
+		ok: true,
+		name: "agent",
+		harness: "agy",
+		model: "gm",
+		thinking: "low",
+	});
+	assert.deepEqual(resolveProfile(config, "piOne", PARENT), {
+		ok: true,
+		name: "piOne",
+		harness: "pi",
+		model: "pm",
+		thinking: "low",
+	});
+	assert.deepEqual(resolveProfile(config, "plain", PARENT), {
+		ok: true,
+		name: "plain",
+		model: "pm",
+		thinking: PARENT.thinking,
+	});
+});
+
+test("the current profile never carries a harness", () => {
+	const config = enabled({ agent: { harness: "agy", model: "gm", thinking: "low" } });
+	const r = resolveProfile(config, CURRENT_PROFILE, PARENT);
+	assert.deepEqual(r, { ok: true, name: "current", model: PARENT.model, thinking: PARENT.thinking });
+});
+
+test("the profile tool description lists thinking for either harness", () => {
+	const config = enabled({
+		light: { model: "oc-openai/deepseek-flash", thinking: "low" },
+		gemini: { harness: "agy", model: "gm", thinking: "medium" },
+	});
+	const text = profileParamDescription(config);
+	assert.match(text, /`gemini` \(agy, gm, medium\)/);
+	assert.match(text, /`light` \(oc-openai\/deepseek-flash, low\)/);
+});
+
 test("resolvedProfileLabel omits absent fields", () => {
 	assert.equal(resolvedProfileLabel({ name: "pro", model: "m", thinking: "high" }), "pro (m, high)");
 	assert.equal(resolvedProfileLabel({ name: "current" }), "current");
 	assert.equal(resolvedProfileLabel({ name: "current", thinking: "high" }), "current (high)");
+});
+
+test("resolvedProfileLabel includes the agy harness and thinking", () => {
+	assert.equal(resolvedProfileLabel({ name: "gemini", harness: "agy", model: "gm", thinking: "low" }), "gemini (agy, gm, low)");
+	assert.equal(resolvedProfileLabel({ name: "fast", harness: "pi", model: "m" }), "fast (m)");
 });

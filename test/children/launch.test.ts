@@ -1,5 +1,8 @@
 import { strict as assert } from "node:assert";
-import { rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
 
 import {
@@ -62,6 +65,15 @@ test("launch paths live under the orchestrator's own session artifacts", () => {
 	assert.equal(paths.reportFile, `${paths.childSessionFile}.done`);
 });
 
+test("agy task markdown requests an atomic JSON report sidecar", () => {
+	const md = buildTaskMarkdown({ body: "Role body.", task: "Do it.", harness: "agy" });
+	assert.match(md, /PI_TINYSUBAGENT_REPORT/);
+	assert.match(md, /\{"type":"done","result":"your full result"\}/);
+	assert.match(md, /\{"type":"failed","reason":"error","message":"why"\}/);
+	assert.match(md, /temporary file.*atomically rename/s);
+	assert.doesNotMatch(md, /subagent_report/);
+});
+
 test("the task markdown carries the role, the task, and the reporting contract", () => {
 	const md = buildTaskMarkdown({ body: "You are a worker.\n", task: "Do the thing." });
 	assert.match(md, /^You are a worker\./);
@@ -90,6 +102,91 @@ test("a role with no body produces a task with no dangling blank lines", () => {
 	const none = buildTaskMarkdown({ body: null, task: "Do the thing." });
 	assert.equal(none, md);
 	assert.equal(buildTaskMarkdown({ body: undefined, task: "  spaced  " }).includes("spaced"), true);
+});
+
+test("agy launch script scopes hooks to its run directory and removes only newly-added trust", () => {
+	const script = buildLaunchScript({
+		name: "worker", agent: null, id: "run1", cwd: "/project", piArgv: ["agy", "-i", "@/task"],
+		envPath: "/bin", agentDir: null, childSessionFile: "/s", reportFile: "/r", exitCodeFile: "/s.exitcode",
+		harness: "agy", agyRunDir: "/artifacts/run1/agy-workspace", agyTrustCliPath: "/pkg/src/children/agy-trust-cli.ts",
+		agyStopHookCliPath: "/pkg/src/children/agy-stop-hook-cli.ts",
+	});
+	assert.match(script, /agy-trust-cli\.ts.*add/);
+	assert.match(script, /cd '\/artifacts\/run1\/agy-workspace'/);
+	assert.match(script, /\.agents\/hooks\.json/);
+	assert.match(script, /agy-stop-hook-cli\.ts/);
+	assert.match(script, /agy-trust-cli\.ts.*remove/s);
+	assert.match(script, /trap .*EXIT/);
+});
+
+test("agy exit 0 without a report writes no-output before the exit sidecar", () => {
+	const root = mkdtempSync(path.join(tmpdir(), "tinysubagent-agy-no-output-"));
+	const reportFile = path.join(root, "child.done");
+	const exitCodeFile = path.join(root, "child.exitcode");
+	const scriptPath = path.join(root, "launch.sh");
+	try {
+		writeFileSync(scriptPath, buildLaunchScript({
+			name: "worker", agent: null, id: "run1", cwd: root, piArgv: ["/bin/sh", "-c", "exit 0"],
+			envPath: process.env.PATH ?? "", agentDir: null, childSessionFile: path.join(root, "child"),
+			reportFile, exitCodeFile, harness: "agy", holdOpenSecs: 0,
+		}));
+		execFileSync("bash", [scriptPath]);
+		assert.deepEqual(JSON.parse(readFileSync(reportFile, "utf8")), { type: "failed", reason: "no-output" });
+		assert.equal(readFileSync(exitCodeFile, "utf8"), "0 run1\n");
+	} finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("agy exit 0 preserves an existing report", () => {
+	const root = mkdtempSync(path.join(tmpdir(), "tinysubagent-agy-report-"));
+	const reportFile = path.join(root, "child.done");
+	const scriptPath = path.join(root, "launch.sh");
+	const report = '{"type":"done","result":"finished"}\n';
+	try {
+		writeFileSync(reportFile, report);
+		writeFileSync(scriptPath, buildLaunchScript({
+			name: "worker", agent: null, id: "run2", cwd: root, piArgv: ["/bin/sh", "-c", "exit 0"],
+			envPath: process.env.PATH ?? "", agentDir: null, childSessionFile: path.join(root, "child"),
+			reportFile, exitCodeFile: path.join(root, "child.exitcode"), harness: "agy", holdOpenSecs: 0,
+		}));
+		execFileSync("bash", [scriptPath]);
+		assert.equal(readFileSync(reportFile, "utf8"), report);
+	} finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("agy wrapper keeps global hook dirs byte-identical and removes its trust entry", () => {
+	const root = mkdtempSync(path.join(tmpdir(), "tinysubagent-agy-launch-"));
+	const home = path.join(root, "home");
+	const runDir = path.join(root, "artifacts", "run1", "agy-workspace");
+	const globalConfig = path.join(home, ".gemini", "config");
+	const agentsDir = path.join(home, ".agents");
+	const globalHook = path.join(globalConfig, "hooks.json");
+	const globalAgent = path.join(agentsDir, "settings.json");
+	const trustSettings = path.join(home, ".gemini", "antigravity-cli", "settings.json");
+	try {
+		mkdirSync(globalConfig, { recursive: true });
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(globalHook, '{"global":true}\n');
+		writeFileSync(globalAgent, '{"agent":true}\n');
+		mkdirSync(path.join(root, "bin"), { recursive: true });
+		const fakeAgy = path.join(root, "bin", "agy");
+		writeFileSync(fakeAgy, "#!/bin/sh\nexit 0\n");
+		chmodSync(fakeAgy, 0o755);
+		const scriptPath = path.join(root, "launch.sh");
+		writeFileSync(scriptPath, buildLaunchScript({
+			name: "worker", agent: null, id: "run1", cwd: "/unused", piArgv: [fakeAgy],
+			envPath: process.env.PATH ?? "", agentDir: null, childSessionFile: path.join(root, "session"),
+			reportFile: path.join(root, "session.done"), exitCodeFile: path.join(root, "session.exitcode"),
+			harness: "agy", agyRunDir: runDir,
+			agyTrustCliPath: path.resolve("src/children/agy-trust-cli.ts"),
+			agyStopHookCliPath: path.resolve("src/children/agy-stop-hook-cli.ts"),
+			agyStopCounterDir: path.join(root, "context"), holdOpenSecs: 0,
+		}));
+		execFileSync("bash", [scriptPath], { env: { ...process.env, HOME: home } });
+		assert.equal(readFileSync(globalHook, "utf8"), '{"global":true}\n');
+		assert.equal(readFileSync(globalAgent, "utf8"), '{"agent":true}\n');
+		assert.deepEqual(JSON.parse(readFileSync(trustSettings, "utf8")).trustedWorkspaces, []);
+		assert.equal(existsSync(runDir), false);
+	} finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("child argv puts the session, the hook, and the task in that order", () => {

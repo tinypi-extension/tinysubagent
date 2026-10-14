@@ -7,9 +7,11 @@
  *   <sessionDir>/artifacts/<sessionId>/context/<name>-<ts>.md
  */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+
+import { piHarness } from "./harness/index.ts";
 
 /** Short run id, stamped into the exit-code sidecar so a stale run cannot be mistaken for ours. */
 export function runId(): string {
@@ -56,6 +58,8 @@ export interface LaunchPaths {
 	artifactDir: string;
 	scriptsDir: string;
 	contextDir: string;
+	/** Isolated agy workspace (cwd + `.agents/hooks.json`) for this run. */
+	agyRunDir: string;
 	/** Task markdown, handed to the child as `@<taskFile>`. */
 	taskFile: string;
 	/** The generated shell wrapper the plugin dispatcher runs. */
@@ -87,15 +91,14 @@ export function buildLaunchPaths(input: LaunchPathsInput): LaunchPaths {
 	const contextDir = path.join(artifactDir, "context");
 	const fileSafe = safeName(input.name);
 	const childSessionDir = childSessionDirFor(input.agentDir, input.cwd);
-	const childSessionFile = path.join(
-		childSessionDir,
-		`${timestampForSession()}_${randomUUID()}.jsonl`,
-	);
+	// The pi harness owns the session file's shape; the sidecars are named after it.
+	const childSessionFile = piHarness.sessionFileFor(input.cwd, input.agentDir);
 
 	return {
 		artifactDir,
 		scriptsDir,
 		contextDir,
+		agyRunDir: path.join(artifactDir, "agy-workspaces", `${fileSafe}-${input.id}`),
 		taskFile: path.join(contextDir, `${fileSafe}-${timestampForArtifacts()}.md`),
 		scriptFile: path.join(scriptsDir, `${fileSafe}-${input.id}.sh`),
 		childSessionDir,

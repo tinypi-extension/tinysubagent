@@ -10,6 +10,15 @@
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** agy reasoning effort, the only values its `--effort` flag accepts. */
+export type EffortLevel = "low" | "medium" | "high";
+
+export const EFFORT_LEVELS: readonly EffortLevel[] = ["low", "medium", "high"];
+
+export function isEffortLevel(value: unknown): value is EffortLevel {
+	return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
+}
+
 export const THINKING_LEVELS: readonly ThinkingLevel[] = [
 	"off",
 	"minimal",
@@ -50,8 +59,13 @@ export interface AgentDef {
 	path: string;
 }
 
-/** A model/thinking pair the child can be launched with. */
+/** Which CLI the child runs on; absent means `pi`. */
+export type Harness = "pi" | "agy";
+
+/** A model/thinking profile; thinking is translated for the selected harness. */
 export interface Profile {
 	model?: string;
 	thinking?: ThinkingLevel;
+	/** `pi` when absent. Unknown values never reach here: the profile is dropped at load. */
+	harness?: Harness;
 }
