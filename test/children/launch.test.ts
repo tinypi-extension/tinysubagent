@@ -104,19 +104,14 @@ test("a role with no body produces a task with no dangling blank lines", () => {
 	assert.equal(buildTaskMarkdown({ body: undefined, task: "  spaced  " }).includes("spaced"), true);
 });
 
-test("agy launch script scopes hooks to its run directory and removes only newly-added trust", () => {
+test("agy launch runs from project cwd without installing hooks or changing trust", () => {
 	const script = buildLaunchScript({
 		name: "worker", agent: null, id: "run1", cwd: "/project", piArgv: ["agy", "-i", "@/task"],
 		envPath: "/bin", agentDir: null, childSessionFile: "/s", reportFile: "/r", exitCodeFile: "/s.exitcode",
-		harness: "agy", agyRunDir: "/artifacts/run1/agy-workspace", agyTrustCliPath: "/pkg/src/children/agy-trust-cli.ts",
-		agyStopHookCliPath: "/pkg/src/children/agy-stop-hook-cli.ts",
+		harness: "agy",
 	});
-	assert.match(script, /agy-trust-cli\.ts.*add/);
-	assert.match(script, /cd '\/artifacts\/run1\/agy-workspace'/);
-	assert.match(script, /\.agents\/hooks\.json/);
-	assert.match(script, /agy-stop-hook-cli\.ts/);
-	assert.match(script, /agy-trust-cli\.ts.*remove/s);
-	assert.match(script, /trap .*EXIT/);
+	assert.match(script, /cd '\/project'/);
+	assert.doesNotMatch(script, /hooks\.json|agy-stop-hook|agy-trust-cli|trustedWorkspaces/);
 });
 
 test("agy exit 0 without a report writes no-output before the exit sidecar", () => {
@@ -153,39 +148,42 @@ test("agy exit 0 preserves an existing report", () => {
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("agy wrapper keeps global hook dirs byte-identical and removes its trust entry", () => {
+test("agy wrapper leaves project and global hook/trust files untouched", () => {
 	const root = mkdtempSync(path.join(tmpdir(), "tinysubagent-agy-launch-"));
 	const home = path.join(root, "home");
-	const runDir = path.join(root, "artifacts", "run1", "agy-workspace");
+	const projectDir = path.join(root, "project");
 	const globalConfig = path.join(home, ".gemini", "config");
 	const agentsDir = path.join(home, ".agents");
 	const globalHook = path.join(globalConfig, "hooks.json");
 	const globalAgent = path.join(agentsDir, "settings.json");
-	const trustSettings = path.join(home, ".gemini", "antigravity-cli", "settings.json");
+	const projectHookDir = path.join(projectDir, ".agents");
+	const projectHook = path.join(projectHookDir, "hooks.json");
+	const projectHooks = '{"project":true}\n';
 	try {
 		mkdirSync(globalConfig, { recursive: true });
 		mkdirSync(agentsDir, { recursive: true });
+		mkdirSync(projectHookDir, { recursive: true });
 		writeFileSync(globalHook, '{"global":true}\n');
 		writeFileSync(globalAgent, '{"agent":true}\n');
+		writeFileSync(projectHook, projectHooks);
 		mkdirSync(path.join(root, "bin"), { recursive: true });
 		const fakeAgy = path.join(root, "bin", "agy");
-		writeFileSync(fakeAgy, "#!/bin/sh\nexit 0\n");
+		writeFileSync(fakeAgy, '#!/bin/sh\nprintf "%s\\n" "$PWD" > "$AGY_CWD_FILE"\nexit 0\n');
 		chmodSync(fakeAgy, 0o755);
 		const scriptPath = path.join(root, "launch.sh");
 		writeFileSync(scriptPath, buildLaunchScript({
-			name: "worker", agent: null, id: "run1", cwd: "/unused", piArgv: [fakeAgy],
+			name: "worker", agent: null, id: "run1", cwd: projectDir, piArgv: [fakeAgy],
 			envPath: process.env.PATH ?? "", agentDir: null, childSessionFile: path.join(root, "session"),
 			reportFile: path.join(root, "session.done"), exitCodeFile: path.join(root, "session.exitcode"),
-			harness: "agy", agyRunDir: runDir,
-			agyTrustCliPath: path.resolve("src/children/agy-trust-cli.ts"),
-			agyStopHookCliPath: path.resolve("src/children/agy-stop-hook-cli.ts"),
-			agyStopCounterDir: path.join(root, "context"), holdOpenSecs: 0,
+			harness: "agy", holdOpenSecs: 0,
 		}));
-		execFileSync("bash", [scriptPath], { env: { ...process.env, HOME: home } });
+		const cwdFile = path.join(root, "agy-cwd");
+		execFileSync("bash", [scriptPath], { env: { ...process.env, HOME: home, AGY_CWD_FILE: cwdFile } });
+		assert.equal(readFileSync(cwdFile, "utf8"), `${projectDir}\n`);
 		assert.equal(readFileSync(globalHook, "utf8"), '{"global":true}\n');
 		assert.equal(readFileSync(globalAgent, "utf8"), '{"agent":true}\n');
-		assert.deepEqual(JSON.parse(readFileSync(trustSettings, "utf8")).trustedWorkspaces, []);
-		assert.equal(existsSync(runDir), false);
+		assert.equal(readFileSync(projectHook, "utf8"), projectHooks);
+		assert.equal(existsSync(path.join(projectDir, ".agents", "hooks.json.tmp")), false);
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });
 

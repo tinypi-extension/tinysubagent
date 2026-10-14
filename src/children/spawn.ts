@@ -14,7 +14,7 @@ import { harnessFor } from "./harness/index.ts";
 import { agyBinAvailable } from "./harness/agy.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { agyStopHookCliPath, agyTrustCliPath, childExtensionPath } from "../paths.ts";
+import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "../herdr/cli.ts";
 import { LiveSubPanes, planPlacement, planResizes, type Placement } from "../herdr/layout.ts";
@@ -133,10 +133,6 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		exitCodeFile: paths.exitCodeFile,
 		launchPrefix: resolveLaunchPrefix(context.env, context.cwd),
 		harness: profile.harness,
-		agyRunDir: profile.harness === "agy" ? paths.agyRunDir : undefined,
-		agyTrustCliPath: profile.harness === "agy" ? agyTrustCliPath : undefined,
-		agyStopHookCliPath: profile.harness === "agy" ? agyStopHookCliPath : undefined,
-		agyStopCounterDir: paths.contextDir,
 	});
 
 	writeLaunchFiles([

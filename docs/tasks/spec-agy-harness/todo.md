@@ -51,7 +51,7 @@ Every task: `npm run typecheck` and `npm test` pass before it is ticked. Pi suit
   - Files: `src/children/launch-script.ts`, `src/paths.ts`, `src/children/harness/agy.ts`, test.
 
 - [x] **C8 — agy outcome table.** Depends on C3, C4.
-  - Acceptance: missing binary → `failed` before the pane opens with a failure sidecar. Non-zero exit → `failed / exit`, pane open. Exit 0 with no report → the agy wrapper writes `{"type":"failed","reason":"no-output"}` to the report sidecar before the exit sidecar, only if none exists (Q4); the watcher is unchanged. Exit 0 with a report → `completed / report`. Unreported stop after the nudge → nothing written, pane open.
+  - Acceptance (historical C8): missing binary → `failed` before the pane opens with a failure sidecar. Non-zero exit → `failed / exit`, pane open. Exit 0 with no report → the agy wrapper writes `{"type":"failed","reason":"no-output"}` to the report sidecar before the exit sidecar, only if none exists (Q4); the watcher is unchanged. Exit 0 with a report → `completed / report`. The approved amendment removes the unreported-stop nudge; see below.
   - Verify: missing-binary spawn test asserts no pane open and a failure sidecar; existing watcher tests cover non-zero exit, completed report and unreported stops; wrapper tests verify atomic no-output sidecar ordering and report preservation.
   - Files: `src/children/spawn.ts`, `src/children/harness/agy.ts`, test.
 
@@ -69,34 +69,24 @@ Every task: `npm run typecheck` and `npm test` pass before it is ticked. Pi suit
 ## Checkpoints
 
 - [x] **CP0** — `70f4c9e`, typecheck clean, 423 pass / 0 fail. *(verified this run)*
-- [x] **CP-S0** — original S0 spike recorded. S4 passed for isolated cwd; the project-cwd amendment's A1 investigation is blocked (see below).
+- [x] **CP-S0** — original S0 spike recorded for isolated cwd; the project-cwd amendment is recorded below.
 - [x] **CP1** — after C1-C3: typecheck clean; original 423 tests pass unedited; default profiles unchanged.
 - [x] **CP2** — after C4-C5: typecheck clean; suite green; no `-p` in agy argv.
-- [x] **CP3** — after C6-C8: typecheck clean; suite green; nudge stub test; global-config guard passes.
+- [x] **CP3** — historical verification after C6-C8: typecheck clean; suite green; nudge stub test; global-config guard passes.
 - [x] **CP4** — after C9-C10: `npm run typecheck` and `npm test` pass; manual E2E reviewed; spec success criteria 1-8 checked.
 
 ### C10 live-run note (2026-10-14)
 
 An initial live attempt exposed ambiguous task wording (the model inspected the task markdown instead of reporting the requested result). The instruction was tightened. The passing run returned exactly `AGY_E2E_REPORT_OK`, and the watcher classified it as `completed / report`; the test runner closed the pane. Temporary artifacts and the run's trust entry in `~/.gemini/antigravity-cli/settings.json` were removed after verifying cleanup.
 
-## Project-directory amendment (approved; blocked at A1)
+## Project-directory amendment (approved; implemented)
 
-The approved spec amendment changes agy's working directory from an isolated per-run workspace to the resolved project directory. Existing project `.agents/hooks.json` content and behavior must be preserved; global agy config remains untouched. Complete these tasks without changing the pi path.
+Agy runs with cwd equal to the resolved project directory. Existing project hooks remain active and untouched; tinysubagent makes no project hook, global hook, or trusted-workspace settings changes. The Stop hook and automatic missing-report nudge are removed. A valid report sidecar closes the pane through the existing watcher flow. An unreported stop waits for a human. Pi behavior is unchanged.
 
-- [x] **A1 — hook-preservation spike: BLOCKED.** agy 1.3.5 supports one project `.agents/hooks.json` and documents no per-run overlay/include mechanism. Editing/restoring shared project state cannot guarantee preservation across concurrent/external writes or uncatchable termination; malformed existing JSON cannot be safely merged. The original isolated cwd avoids this conflict but fails the amendment's project-cwd requirement. See `spike.md` and S4 in the spec. **A2/A3 must not proceed without a supported overlay or revised requirement.**
-  - Acceptance: determine whether a safe implementation strategy exists; report an unsafe/blocked result before implementation.
-  - Verify: inspected the installed agy 1.3.5 hook contract; no live project-file mutation was attempted because that cannot establish crash/concurrency guarantees.
-  - Files: `docs/tasks/spec-agy-harness/spike.md`, `docs/specs/spec-agy-harness.md`.
-  - Dependency: none.
-
-- [blocked] **A2 — implement project cwd and safe per-run hook lifecycle.** Blocked: A1 found no safe hook-preservation strategy. Do not change runtime behavior until agy supports an overlay or the requirement is revised.
-  - Acceptance: agy receives the resolved project cwd; existing project hooks are preserved and run; project hook file is restored byte-for-byte after normal exit and failure; global agy config is unchanged; agy trust cleanup remains correct.
-  - Verify: focused unit tests cover absent/existing hooks, cleanup on exit/failure, and concurrent or conflicting runs as dictated by A1; run `npm run typecheck` and `npm test`; repeat the live disposable-project check.
-  - Files likely touched: `src/children/launch-script.ts`, `src/children/launch-paths.ts`, `src/children/spawn.ts`, and launch/spawn tests.
-  - Dependency: A1.
-
-- [blocked] **A3 — update end-to-end evidence and docs.** Blocked on A2. Existing C10 evidence applies only to the prior isolated-workspace implementation; project-cwd amendment is not verified.
-  - Acceptance: report outcome remains correct; project cwd is confirmed; pre-existing hook file is byte-identical afterward and its hook behavior is preserved; global config remains unchanged.
+- [x] **A1 — hook-preservation spike.** Confirmed agy 1.3.5 offers no safe project hook overlay. Revised requirement drops the tinysubagent Stop hook rather than mutating project hooks. See `spike.md`.
+- [x] **A2 — implement project cwd without hook injection.** Remove per-run workspace, Stop hook, and trust setup; preserve exit-0/no-report fallback. Tests verify cwd and existing hook files remain untouched.
+- [ ] **A3 — update end-to-end evidence.** Manual real-agy/herdr E2E remains outstanding.
+  - Acceptance: report outcome remains correct; project cwd is confirmed; project hooks and global config remain untouched.
   - Verify: manual real-agy/herdr E2E; `npm run typecheck` and `npm test`.
   - Files: `docs/tasks/spec-agy-harness/spike.md`, `docs/tasks/spec-agy-harness/todo.md`, `docs/specs/spec-agy-harness.md`, possibly `README.md`.
   - Dependency: A2.
@@ -105,5 +95,5 @@ The approved spec amendment changes agy's working directory from an isolated per
 
 - [x] Q1 — reject role `tools` allowlists on agy (C3).
 - [x] Q2 — approval prompts hold for a human; no skip flag in v1.
-- [x] Q3 — nudge count 1 (C6).
+- [x] Q3 — historical original decision: nudge count 1 (C6); superseded by the project-directory amendment below.
 - [x] Q4 — exit 0 with no report → `failed / no-output` via wrapper-written sidecar (C8).

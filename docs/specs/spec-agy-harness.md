@@ -1,6 +1,6 @@
 # Spec: a profile can choose the child CLI (pi or agy)
 
-Status: **approved project-directory amendment is blocked by the A1 hook-preservation spike.** agy 1.3.5 provides only a single project `.agents/hooks.json` and no per-run overlay; modifying and restoring that shared file cannot guarantee preservation under concurrent/external edits or uncatchable termination. The original isolated-workspace implementation was verified, including the manual real-agy/herdr end-to-end (C10/CP4), but does not satisfy the amendment's project-cwd requirement. See A1 in `docs/tasks/spec-agy-harness/spike.md`. Do not implement the amendment until a safe hook overlay or revised requirement is approved. Q1–Q4 decided (2026-10-14).
+Status: **approved project-directory amendment implemented.** Agy runs from the resolved project directory; tinysubagent never modifies project `.agents/hooks.json` or agy trust settings. The Stop hook and its missing-report nudge are removed. Report sidecars and the existing wrapper exit fallback drive completion. If agy stops without a report and remains open, the batch waits for a human. See A1 in `docs/tasks/spec-agy-harness/spike.md` and the amendment decision in `todo.md`. Q1–Q4 remain resolved (2026-10-14).
 
 Builds on `docs/specs/spec-report-required.md` (the report is the only clean ending) and
 `docs/specs/spec-child-preflight-failure.md`. Does not change the sidecar contract.
@@ -12,7 +12,7 @@ Builds on `docs/specs/spec-report-required.md` (the report is the only clean end
 3. The child's report is written to the existing sidecar `$PI_TINYSUBAGENT_REPORT` with the existing JSON shape. No new keys.
 4. The orchestrator's own session stays pi. Only the child CLI changes.
 5. The watcher needs no new state. Its existing classification (report > settle > exit sidecar > pane liveness) covers agy.
-6. The agy child runs with `cwd` equal to the resolved project directory supplied for the spawn, not a per-run workspace. The per-run Stop hook must not overwrite, remove, or otherwise lose an existing `<project>/.agents/hooks.json` or its hooks. Any temporary hook setup must be cleaned up after the run while preserving the pre-existing project hook file and contents.
+6. The agy child runs with `cwd` equal to the resolved project directory supplied for the spawn. Tinysubagent never creates, edits, or removes project `.agents/hooks.json`, and never edits agy's trusted-workspace settings. Existing project hooks run normally. No Stop hook or automatic missing-report nudge is installed.
 
 ## Test model
 
@@ -65,22 +65,18 @@ interface ChildHarness {
 ```
 
 - `pi` adapter = today's code moved behind the interface. No behaviour change.
-- `agy` adapter = new. Its settle path is the **Stop hook**, not `agent_settled`.
+- `agy` adapter = new. It does not use `agent_settled` or a Stop hook; report sidecars drive clean completion.
 
 `spawn.ts` resolves the profile's harness and passes the adapter to `launch-script.ts`.
 `watcher.ts`, `report.ts`, `herdr/*`, `herdr-plugin/*`, `present/*` are unchanged.
 
 ## agy child lifecycle
 
-1. Spawn: `launch-script.ts` writes the same wrapper as today. It exports `PI_TINYSUBAGENT_*`, prepares the per-run Stop hook without overwriting or losing any existing project `.agents/hooks.json` or hooks, changes directory to the resolved project directory, and runs `agy --model <m> --effort <e> -i "<task file contents>"` (exact flags pinned in Phase 0).
+1. Spawn: `launch-script.ts` writes the wrapper. It exports `PI_TINYSUBAGENT_*`, changes directory to the resolved project directory, and runs `agy --model <m> --effort <e> -i "<task file contents>"` (exact flags pinned in Phase 0). Existing project hooks are left untouched and run normally; tinysubagent does not install a Stop hook or alter trust settings.
 2. The task markdown tells the child to write its final report to `$PI_TINYSUBAGENT_REPORT`
    as `{"type":"done","result":"..."}` or `{"type":"failed","reason":"error","message":"..."}`,
    via a temp file then rename (atomic).
-3. **Stop hook** (`agy` `Stop` event) runs `agy-stop-hook` with the stdin payload.
-   - Sidecar present and valid JSON: hook outputs `decision: "allow"` (any non-`continue` value). Agent stops. Pane stays at prompt until the watcher closes it (report).
-   - Sidecar missing, first stop of this conversation: hook outputs `decision: "continue"` with `reason` = "Call the report now: write your final report to $PI_TINYSUBAGENT_REPORT." The agent gets one more turn.
-   - Sidecar missing, second stop of this conversation: hook allows the stop. Nothing is written. Per `spec-report-required`, the pane stays open and the batch waits for a human.
-4. Nudge count is kept per conversation id in `<artifactDir>/context/` (a small counter file). Hard cap: 1 nudge (decided, Q3). No unbounded loop.
+3. Agy may remain interactive at its prompt after finishing a turn. When the report sidecar appears, the existing watcher classifies the result and the orchestrator closes the pane. If agy stops without writing a report, there is no automatic nudge; the pane remains available for a human and the batch waits, per `spec-report-required`.
 5. Process exit: the wrapper writes the exit sidecar as today. Non-zero = `failed / exit` (watcher, unchanged). Exit 0 with no report: the agy wrapper writes `{"type":"failed","reason":"no-output"}` to `$PI_TINYSUBAGENT_REPORT` **before** the exit sidecar, only if no report exists yet (decided, Q4). The watcher's existing report branch then classifies it as `failed / no-output`. The watcher is not changed.
 
 Outcome table, agy:
@@ -92,15 +88,15 @@ Outcome table, agy:
 | agy process exits 0 with no report | `failed / no-output` via wrapper-written report sidecar (decided, Q4) | left open |
 | agy process exits non-zero | failed / exit | left open |
 | agy process exits 0 with a report | completed / report (report wins; the exit sidecar is ignored) | closed |
-| unreported stop, after the one nudge | nothing written, batch waits | open |
+| unreported stop | nothing written, batch waits for a human | open |
 | pane closed by hand | cancelled | — |
 
 ## Boundaries
 
-- **Always:** keep the sidecar byte-compatible. Write via temp + rename. The hook validates JSON before it allows a stop. Run `npm run typecheck` and `npm test`.
-- **Always:** the hook is scoped to the child run. The user's global agy config is not modified (checked by diff before and after a run). The approved project-cwd amendment is currently blocked: project `.agents/hooks.json` is shared mutable state, and agy offers no per-run overlay that would permit safe injection and exact restoration across crashes and concurrent edits. The original verified implementation instead used an isolated cwd.
+- **Always:** keep the sidecar byte-compatible. Write via temp + rename. Run `npm run typecheck` and `npm test`.
+- **Always:** agy runs in the resolved project cwd. Tinysubagent does not create, modify, or remove project `.agents/hooks.json`, does not modify global agy config or trust settings, and does not install a Stop hook. Report sidecars trigger orchestrator completion; an unreported stop has no automatic nudge and waits for a human.
 - **Ask first:** any change to the pi path beyond moving it behind the interface; any new sidecar key; an unbounded nudge; a global hook install.
-- **Never:** pass the task prompt inline on argv or via env (it stays in a file, as today). Never let an unknown `harness` value fall back to pi silently. Never make the Stop hook block forever.
+- **Never:** pass the task prompt inline on argv or via env (it stays in a file, as today). Never let an unknown `harness` value fall back to pi silently. Never modify project or global hook/trust settings.
 
 ## Phase 0: spike (gates the implementation plan)
 
@@ -111,20 +107,19 @@ Each item must pass or the design changes. Results go to `docs/tasks/spec-agy-ha
 | S1 | Does `agy -i "<prompt>"` start an interactive session that stays at the prompt after the task? | Pane stays alive after the first turn. | Unverified. Headless `-p` exists; `-i` reported in docs. |
 | S2 | Stop hook payload: `conversationId`, `transcriptPath`, last message? | Hook can read `conversationId` and `transcriptPath` from stdin. | Verified in docs: common fields include `conversationId`, `transcriptPath`, `artifactDirectoryPath`. |
 | S3 | Can a Stop hook force one more turn? | `decision:"continue"` + `reason` re-enters the loop. | Documented: `continue` re-enters the execution loop; `reason` is injected as a system message. Needs a live test. |
-| S4 | Per-run hook scope: can the child load its Stop hook from the project cwd without touching global config or losing existing project hooks? | The per-run Stop hook loads from the project cwd; any existing `<project>/.agents/hooks.json` and its hooks remain intact and are preserved after the run. | **Blocked:** agy 1.3.5 documents one project hooks file and no overlay; safe injection/restoration cannot be guaranteed with concurrency, external edits, and uncatchable termination. Original isolated-cwd behavior was verified.
+| S4 | Per-run hook scope: can the child load its Stop hook from the project cwd without touching global config or losing existing project hooks? | No longer required. The approved amendment drops the Stop hook and leaves project hooks untouched. | **Not applicable:** agy has no safe per-run overlay; tinysubagent does not inject hooks.
 | S5 | Is `transcriptPath` a readable format we can parse? | `readTurn` can extract last assistant text. If not, `readTurn` returns null and agy completes report-only. | Unverified. Not blocking. |
 
-If S3 or S4 fails, stop and return to the user before writing the plan. Do not fall back to
-global hooks without approval.
+S3/S4 validated the original hook design. Hook injection is no longer required or permitted by the approved amendment.
 
 ## Success criteria
 
 1. Pi remains the default when `harness` is absent, and pi's thinking argv is unchanged. Unit-tested.
 2. `harness: "agy"` maps the shared `thinking` value to supported `--effort` levels, passes the prompt as a file, and never uses `-p`. Unit-tested.
 3. Unknown harness value drops the profile with a warning. `thinking` is shared across harnesses; legacy `effort` is silently accepted as an alias on either harness and loses to `thinking` when both are present. Unit-tested.
-4. Unreported agy stop: hook nudges once, then allows the stop; no sidecar written; pane open. Tested with a stub agy that scripts the hook calls.
+4. A report sidecar triggers completion and pane closure. An unreported agy stop receives no automatic nudge; the pane remains open for a human.
 5. A real agy child in a herdr pane calls the report: watcher emits `completed / report`, pane closes. Smoke test, run manually once.
-6. Global agy config (`~/.gemini/config/hooks.json` and `~/.agents/`) is byte-identical before and after an agy run. The agy child's cwd is the resolved project directory. Any pre-existing `<project>/.agents/hooks.json` and its hooks are preserved byte-for-byte after the run.
+6. The agy child's cwd is the resolved project directory. Existing project and global hook files and agy trust settings remain byte-identical; tinysubagent makes no changes to them.
 7. Missing agy binary: failed with a message before the pane opens, following `spec-child-preflight-failure`.
 8. `npm run typecheck` and `npm test` pass.
 
@@ -132,7 +127,7 @@ global hooks without approval.
 
 1. **Tool allowlist → reject on agy.** See Config. Refusal at spawn, before the pane opens.
 2. **Tool approval prompts → the human approves in the pane.** Default. `--dangerously-skip-permissions` is not implemented in v1; a per-profile opt-in key can be a follow-up spec.
-3. **Nudge count → 1.** One `continue` from the Stop hook, then allow.
+3. **Nudge count → removed.** The approved project-cwd amendment removes the tinysubagent Stop hook; unreported stops wait for a human.
 4. **Exit 0 with no report → `failed / no-output`.** An agy child that ends without a report is a failure, not a silent completion. Implemented in the agy wrapper only, which writes the failed report sidecar before the exit sidecar. The watcher is unchanged. The pi path keeps its `session-exit` completion.
 
 ## Files
@@ -147,10 +142,10 @@ global hooks without approval.
 | `src/children/harness/index.ts` | new: `harnessFor(profile)` |
 | `src/children/launch-script.ts` | `buildPiArgv`/`resolvePiBin` become harness calls |
 | `src/children/spawn.ts` | resolve harness; preflight failure for missing binary; refuse agy spawns that declare `tools` |
-| `src/children/agy-stop-hook.ts` | new: Stop hook; nudge counter; JSON check |
+| `src/children/agy-stop-hook.ts` | removed from runtime: report completion no longer depends on a tinysubagent Stop hook |
 | `src/children/task-markdown.ts` | report instruction per harness (pi: tool; agy: sidecar write) |
-| `src/paths.ts` | path to the hook script |
-| `test/children/harness-*.test.ts` | new: argv, nudge logic, outcome table |
+| `src/paths.ts` | no agy hook/trust CLI paths are needed |
+| `test/children/harness-*.test.ts` | new: argv and outcome table |
 | `test/config/*` | cases for `harness`, shared `thinking`, legacy `effort`, and warnings |
 | `docs/tasks/spec-agy-harness/spike.md` | spike results (Phase 0) |
 | `AGENTS.md` | spec-memory index entry for this spec |

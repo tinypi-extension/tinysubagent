@@ -38,10 +38,6 @@ export interface LaunchScriptOptions {
 	/** Plain NAME → value pairs from the settings file, exported before launch-owned vars. */
 	env?: Record<string, string>;
 	harness?: "pi" | "agy";
-	agyRunDir?: string;
-	agyTrustCliPath?: string;
-	agyStopHookCliPath?: string;
-	agyStopCounterDir?: string;
 }
 
 export const DEFAULT_HOLD_OPEN_SECS = 15;
@@ -101,26 +97,9 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
 		lines.push(`export PI_TINYSUBAGENT_AGENT=${shellEscape(opts.agent)}`);
 	}
 
-	if (opts.harness === "agy" && opts.agyRunDir && opts.agyTrustCliPath && opts.agyStopHookCliPath) {
-		const trustMarker = path.join(opts.agyRunDir, ".tinysubagent-trust-added");
-		const hookFile = path.join(opts.agyRunDir, ".agents", "hooks.json");
-		lines.push(
-			`mkdir -p ${shellEscape(path.dirname(hookFile))}`,
-			`node ${shellEscape(opts.agyTrustCliPath)} add ${shellEscape(opts.agyRunDir)} ${shellEscape(trustMarker)}`,
-			"trust_code=$?",
-			'if [ "$trust_code" -ne 0 ]; then echo "tinysubagent: could not trust agy run directory"; exit "$trust_code"; fi',
-			`cleanup_agy_trust() { if [ -f ${shellEscape(trustMarker)} ]; then node ${shellEscape(opts.agyTrustCliPath!)} remove ${shellEscape(opts.agyRunDir!)}; fi; rm -rf ${shellEscape(opts.agyRunDir!)}; }`,
-			"trap cleanup_agy_trust EXIT",
-			`printf '%s\\n' ${shellEscape(JSON.stringify({
-				"tinysubagent": {
-					Stop: [{ type: "command", command: `node ${shellEscape(opts.agyStopHookCliPath)} ${shellEscape(opts.reportFile)} ${shellEscape(opts.agyStopCounterDir ?? opts.agyRunDir)}`, timeout: 10 }],
-				},
-			}))} > ${shellEscape(hookFile)}`,
-			`cd ${shellEscape(opts.agyRunDir)}`,
-		);
-	} else {
-		lines.push(`cd ${shellEscape(opts.cwd)}`);
-	}
+	// Agy runs from the project cwd and uses its existing project hooks. We never
+	// inject a Stop hook; report sidecars drive orchestrator completion.
+	lines.push(`cd ${shellEscape(opts.cwd)}`);
 
 	lines.push(
 		piCommand,

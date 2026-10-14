@@ -13,7 +13,7 @@ Implements `docs/specs/spec-agy-harness.md`. Companion checklist: `docs/tasks/sp
 - `harness` defaults to `pi`. Unknown value → profile dropped with a warning (fail closed).
 - agy runs interactively (`-i`), never `-p`. The pane is the only human surface.
 - Report uses the existing sidecar `$PI_TINYSUBAGENT_REPORT`. No new keys.
-- agy settle path = Stop hook, not `agent_settled`. Nudge cap is 1 (Q3).
+- Original agy settle path used a Stop hook (historical implementation); the approved project-cwd amendment removes it. Report sidecars now drive completion; no missing-report nudge.
 - Hook scope is per run. Global agy config is never written.
 - **Test model (testing blocker):** all real agy runs (S0, C10) use `gpt-oss-120b`. Unit tests stay stubbed and never call a model. Google's models page lists GPT-OSS-120b on Free, AI Plus, AI Pro, and AI Ultra, not Enterprise, and marks it for removal on **2026-11-02**. The real-run gate (C10) must pass before then, or the test model must be re-pinned. The exact `--model` string is not documented (the page shows a display name): S1 pins it from `agy` itself. `--effort` with this model is confirmed in S1 too.
 - Tool allowlist (Q1): not a profile key. It is the role's `tools` frontmatter. On agy, a role with a non-empty `tools` list is refused at spawn (`spawn.ts`, before the pane opens). A role with no `tools` is allowed.
@@ -37,7 +37,7 @@ C1 (config) and C2 (pi refactor) touch disjoint files and can run in parallel. C
 | C3 | Spawn resolves `profile.harness` → adapter; refuses agy spawns whose role declares `tools` (Q1) | `src/children/spawn.ts`, `test/children/spawn.test.ts` | S | C1, C2 |
 | C4 | agy adapter: argv (`--model`, `--effort`, `-i` + task file, no `-p`), bin (`TINYSUBAGENT_AGY_BIN`, default `agy`), `supportsExtension: false` | `src/children/harness/agy.ts`, `test/children/harness-agy.test.ts` | S | C2, S0 (S1 flags) |
 | C5 | Task markdown per harness: agy writes sidecar via temp + rename | `src/children/task-markdown.ts`, its test | S | C2 |
-| C6 | Stop hook logic: valid sidecar → allow; missing + first stop → `continue` with reason; missing + second stop → allow; per-conversation counter; JSON validated before allow | `src/children/agy-stop-hook.ts`, `test/children/agy-stop-hook.test.ts` | M | S0 (S2, S3), C4 |
+| C6 | Original Stop-hook logic (superseded by approved project-cwd amendment; no longer in runtime) | Removed | M | S0 (S2, S3), C4 |
 | C7 | Per-run hook wiring and cleanup; global-config byte-identity guard | `src/children/launch-script.ts`, `src/paths.ts`, `src/children/harness/agy.ts`, test | M | S0 (S4), C4, C6 |
 | C8 | Outcome table: missing binary → failed before pane opens; non-zero exit → pane open; exit 0 without report → wrapper writes `no-output` report sidecar before exit sidecar (Q4) | `src/children/launch-script.ts`, `src/children/harness/agy.ts`, test | S | C3, C4 |
 | C9 | Docs: README profile keys; spec status; AGENTS.md spec-memory entry | `README.md`, `AGENTS.md`, `docs/specs/spec-agy-harness.md` | S | C1-C8 |
@@ -59,7 +59,7 @@ C1 (config) and C2 (pi refactor) touch disjoint files and can run in parallel. C
 | Risk | Impact | Mitigation |
 |---|---|---|
 | S4: child cannot load a hook scoped to its own run | High (blocks C7) | Stop, return to user. Do not fall back to global hooks without approval. |
-| S3: Stop hook cannot force another turn | High (changes report channel) | Fall back to transcript scrape for the report, which the spec does not yet design. Re-plan before C6. |
+| S3: Stop hook cannot force another turn | High (changes report channel) | Historical risk; the approved amendment removes Stop-hook reporting and uses report sidecars. |
 | agy flags or hook payload differ across agy versions | Medium | Pin the agy version tested in `spike.md`. Adapter tests use a recorded fixture. |
 | Interactive tool approval holds unattended batches | Medium | Documented default (Q2). `--dangerously-skip-permissions` only as explicit opt-in. |
 | Role `tools` allowlist silently widens agy permissions | High | C3 refuses agy spawns whose role declares `tools` (Q1). Tested in spawn tests. |
@@ -72,7 +72,7 @@ C1 (config) and C2 (pi refactor) touch disjoint files and can run in parallel. C
 
 - Q1: reject role `tools` allowlists on agy (C3).
 - Q2: approval prompts hold for a human; no skip flag in v1.
-- Q3: nudge count 1 (C6).
+- Q3: original nudge count was 1; superseded by the approved amendment removing the nudge.
 - Q4: exit 0 with no report → `failed / no-output` via wrapper-written sidecar (C8).
 
 ## Open questions
