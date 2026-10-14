@@ -114,6 +114,15 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// that will not happen.
 			const routeWarnings: string[] = [];
 			if (routingActive(config)) {
+				const hasAutoRoutedRequests = mode.requests.some(
+					(request) => !request.profile?.trim() && discovered.agents.some((agent) => agent.name === request.agent),
+				);
+				if (config.classifier && hasAutoRoutedRequests) {
+					ctx.ui?.notify(
+						`tinysubagent: routing profile with classifier model ${config.classifier.raw}.`,
+						"info",
+					);
+				}
 				await routeProfiles(mode.requests, config, {
 					route: deps.route(ctx),
 					agents: discovered.agents,

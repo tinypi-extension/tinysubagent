@@ -276,7 +276,7 @@ export async function routeProfiles(
 	const routable: { request: SpawnRequest; agent: AgentDef }[] = [];
 	for (const request of requests) {
 		const agent = byName.get(request.agent);
-		if (!agent) continue;
+		if (!agent || (request.profile?.trim() ?? "") !== "") continue;
 		routable.push({ request, agent });
 	}
 

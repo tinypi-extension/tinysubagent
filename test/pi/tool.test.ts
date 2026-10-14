@@ -94,8 +94,14 @@ function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => R
 	mkdirSync(join(cwd, ".pi", "agent"), { recursive: true });
 	writeFileSync(join(cwd, ".pi", "agents", "worker.md"), "---\nname: worker\ndescription: does work\n---\nYou work.\n");
 
+	const notices: { message: string; level: string }[] = [];
 	const ctx = {
 		cwd,
+		ui: {
+			notify(message: string, level: string) {
+				notices.push({ message, level });
+			},
+		},
 		model: undefined,
 		thinkingLevel: undefined,
 		sessionManager: {
@@ -115,6 +121,7 @@ function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => R
 		tool,
 		cwd,
 		ctx,
+		notices,
 		stop: () => {
 			shuttingDown = true;
 		},
@@ -391,56 +398,28 @@ test("the key and the endpoint appear in no description, schema, or result text"
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// A stale profile in the request never survives routing
+// Explicit profiles bypass routing
 // ────────────────────────────────────────────────────────────────────────────
 
-test("a stale profile in the request is routed anyway, and routing's word is final", async () => {
-	// Single mode here; a stale `profile` on a `tasks[]` item flows through the same
-	// routeProfiles rewrite, so this pins the invariant once.
-	const cases: { name: string; route: RouteFn; ack: RegExp; model: string | null }[] = [
-		{
-			name: "a routed choice overwrites the stale value",
-			route: async () => ({ choice: "pro" }),
-			ack: /\[pro\]/,
-			model: "m-pro",
-		},
-		{
-			name: "no decision clears the stale value onto current",
-			route: async () => ({ choice: null }),
-			ack: /\[current\]/,
-			model: null,
-		},
-	];
+test("an explicit profile overrides automatic routing", async () => {
+	let routeCalls = 0;
+	const h = harness(routingConfig(systemOneOn), () => async () => {
+		routeCalls++;
+		return { choice: "pro" };
+	});
+	try {
+		const result = await withSpawnHerdrStub(() =>
+			executeTool(h.tool, h.ctx, { agent: "worker", task: "one job", profile: "light" }),
+		);
+		assert.match(contentText(result), /\[light\]/);
+		assert.equal(routeCalls, 0, "the router should not be called for an explicit profile");
 
-	for (const c of cases) {
-		const h = harness(routingConfig(systemOneOn), () => c.route);
-		try {
-			const result = await withSpawnHerdrStub(() =>
-				executeTool(h.tool, h.ctx, { agent: "worker", task: "one job", profile: "light" }),
-			);
-			const text = contentText(result);
-			assert.match(text, c.ack, `${c.name}: ${text}`);
-			assert.doesNotMatch(text, /\[light\]/, `${c.name}: the stale profile survived: ${text}`);
-
-			const script = writtenScripts(h.cwd)[0];
-			assert.ok(script, `${c.name}: the child did not spawn`);
-			if (c.model === null) {
-				assert.ok(
-					!script.includes("'--model'") && !script.includes("'--thinking'"),
-					`${c.name}: the child carried model/thinking flags onto current: ${script}`,
-				);
-			} else {
-				assert.ok(script.includes(`'--model' '${c.model}'`), `${c.name}: ${script}`);
-				assert.ok(script.includes("'--thinking' 'high'"), `${c.name}: ${script}`);
-				assert.ok(
-					!script.includes("'m-light'") && !script.includes("'low'"),
-					`${c.name}: the stale profile reached the child: ${script}`,
-				);
-			}
-		} finally {
-			h.stop();
-			h.cleanup();
-		}
+		const script = writtenScripts(h.cwd)[0];
+		assert.ok(script?.includes("'--model' 'm-light'"), `explicit profile did not reach child: ${script}`);
+		assert.ok(script?.includes("'--thinking' 'low'"), `explicit profile did not reach child: ${script}`);
+	} finally {
+		h.stop();
+		h.cleanup();
 	}
 });
 
@@ -473,10 +452,32 @@ test("the route factory is never invoked when profiles are off", async () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// `classifierModel` alone hides the profile knob, with no `describe.ts` change
+// `classifierModel` alone keeps profile as an optional override
 // ────────────────────────────────────────────────────────────────────────────
 
-test("only classifierModel set drops the profile list and parameter", () => {
+test("classifier routing shows an info notice when a profile is chosen automatically", async () => {
+	const config: TinysubagentConfig = {
+		...routingConfig(null),
+		classifier: {
+			provider: "openrouter",
+			model: "typesafe/jev-latest",
+			raw: "openrouter/typesafe/jev-latest",
+		},
+	};
+	const h = harness(config, () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(() => executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }));
+		assert.deepEqual(h.notices, [{
+			message: "tinysubagent: routing profile with classifier model openrouter/typesafe/jev-latest.",
+			level: "info",
+		}]);
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("only classifierModel set keeps the profile list and parameter", () => {
 	const routed: TinysubagentConfig = {
 		...routingConfig(null),
 		classifier: {
@@ -490,9 +491,7 @@ test("only classifierModel set drops the profile list and parameter", () => {
 	assert.match(buildToolDescription([workerAgent], unrouted), /Profiles:/);
 	assert.ok(JSON.stringify(buildParameters(unrouted)).includes('"profile"'));
 
-	assert.doesNotMatch(buildToolDescription([workerAgent], routed), /Profiles:/);
-	assert.ok(
-		!JSON.stringify(buildParameters(routed)).includes('"profile"'),
-		"the profile parameter survived routing",
-	);
+	assert.match(buildToolDescription([workerAgent], routed), /Profiles:/);
+	assert.match(buildToolDescription([workerAgent], routed), /choose automatically/);
+	assert.ok(JSON.stringify(buildParameters(routed)).includes('"profile"'));
 });

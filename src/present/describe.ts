@@ -49,15 +49,16 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 		lines.push(...advertiseAgents(agents));
 	}
 
-	// Routing picks the profile, so the model is told nothing about profiles at
-	// all: a candidate list is a knob it cannot turn.
-	if (config.enableProfiles && !routingActive(config)) {
+	if (config.enableProfiles) {
 		lines.push(
 			"",
 			`Profiles: ${availableProfileNames(config)
 				.map((name) => `\`${name}\``)
 				.join(", ")}. \`${CURRENT_PROFILE}\` is the default and runs on this session's model and thinking level.`,
 		);
+		if (routingActive(config)) {
+			lines.push("Omit `profile` to choose automatically for each task.");
+		}
 	}
 
 	return lines.join("\n");
@@ -72,12 +73,11 @@ export const PROMPT_GUIDELINES = [
 ];
 
 /**
- * The `profile` parameter only exists when profiles are enabled *and routing
- * is off* — the model is never offered a knob that would do nothing, and when
- * routing is active the choice is not the model's to make.
+ * The `profile` parameter exists whenever profiles are enabled. During
+ * automatic routing, an explicitly supplied profile overrides the router.
  */
 export function buildParameters(config: TinysubagentConfig) {
-	const profileOffered = config.enableProfiles && !routingActive(config);
+	const profileOffered = config.enableProfiles;
 	const properties: Record<string, TSchema> = {
 		agent: Type.Optional(
 			Type.String({
@@ -115,7 +115,9 @@ export function buildParameters(config: TinysubagentConfig) {
 	};
 
 	if (profileOffered) {
-		properties.profile = Type.Optional(Type.String({ description: profileParamDescription(config) }));
+		properties.profile = Type.Optional(
+			Type.String({ description: profileParamDescription(config, routingActive(config)) }),
+		);
 	}
 	return Type.Object(properties);
 }

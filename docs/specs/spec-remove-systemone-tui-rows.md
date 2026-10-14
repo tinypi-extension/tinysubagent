@@ -420,8 +420,8 @@ node --test test/config/config.test.ts
 ### Success criteria
 
 1. Config with only `classifierModel: "typesafe/jev-latest"` and `enableProfiles: true` routes
-   each subagent through that classifier, and the `profile` parameter is absent from the tool
-   schema.
+   each subagent through that classifier when `profile` is omitted; the optional `profile`
+   parameter remains available to override that choice.
 2. The same config with a project-scoped `systemOneAPIKey` present emits no routing warning.
 3. Removing `classifierModel` restores today's behaviour exactly, including every existing
    routing warning.

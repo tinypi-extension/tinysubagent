@@ -1,12 +1,12 @@
 # Spec: SystemOne profile routing (`systemOneAPIKey` + `systemOneBaseUrl`)
 
-Status: proposed. Nothing here is built yet.
+Status: implemented, with explicit profile overrides preserved.
 
 ## What it is
 
 When a SystemOne API key is configured, the orchestrator stops choosing profiles by
-hand. The `subagent` tool loses its `profile` parameter entirely, and for each request a
-SystemOne model (a fast structured-decision model, not a text generator) is asked to name
+hand. The `subagent` tool keeps `profile` as an optional override. When it is omitted, for each
+request a SystemOne model (a fast structured-decision model, not a text generator) is asked to name
 one of the configured profiles. The name it returns is then resolved exactly the way a
 hand-written name is resolved today — same code, same `{ model, thinking }` outcome.
 
@@ -185,32 +185,16 @@ already fires; extend it to name the routing keys so the reason is not mysteriou
 
 ## Schema changes
 
-`profile` disappears from **both** places it is currently declared when routing is active:
-
-- the top-level property, today gated on `config.enableProfiles` at
-  `src/present/describe.ts:110-112` — guard becomes `enableProfiles && !routingActive`;
-- the per-task property inside the `tasks` array item at `src/present/describe.ts:97`,
-  which is **unconditional today**.
-
-The per-task guard becomes `enableProfiles && !routingActive` as well, not just
-`!routingActive`. That fixes a pre-existing inconsistency as a side effect: with
-`enableProfiles: false` the schema currently advertises a per-task profile that
-`resolveProfile` is guaranteed to refuse. Removing it makes both locations agree with
-`src/present/describe.ts:72-73`.
-
-The tool description's `Profiles:` block (`src/present/describe.ts:51-58`, the text itself
-at `:54`) is replaced when routing is active by a line stating that a profile is chosen
-automatically per task and cannot be set, so the model is not silently missing a knob it
-has seen before.
+`profile` remains available at both the top level and inside `tasks[]` whenever
+`enableProfiles` is true, including when routing is active. The `Profiles:` list remains
+visible; when routing is active, the description clarifies that omission triggers automatic
+selection.
 
 ### A supplied `profile` while routing is active
 
-Ignored, and overwritten by the routing outcome. The schema no longer offers the field, so
-any value that arrives is a stale session replay, and the spawn still has a correct answer
-available — failing a spawn over a knob that no longer exists is worse than routing through
-it. This is a deliberate exception to the "refuse stale replays loudly" precedent at
-`src/config/profiles.ts:8-11`; that precedent covers an *unhonourable* request, and this
-one is honourable.
+An explicit non-empty profile is preserved and bypasses automatic routing. The existing
+`resolveProfile` validation remains authoritative. If the profile is omitted or empty,
+automatic routing runs as before; a routing failure keeps the current profile.
 
 ## Where the code goes
 

@@ -123,6 +123,17 @@ test("criteria carry each profile's model and thinking and exclude current", () 
 // routeProfiles
 // ────────────────────────────────────────────────────────────────────────────
 
+test("an explicit profile is preserved and excluded from automatic routing", async () => {
+	const { route, calls } = fakeRoute({ t1: { choice: "light" } });
+	const requests = [request("worker", "t1", "light")];
+	await routeProfiles(requests, configWith(), {
+		route,
+		agents: [agent("worker")],
+	});
+	assert.equal(requests[0]?.profile, "light");
+	assert.equal(calls.length, 0);
+});
+
 test("a valid returned name is written to the request's profile", async () => {
 	const { route } = fakeRoute({ t1: { choice: "light", confidence: 0.9 } });
 	const requests = [request("worker", "t1")];

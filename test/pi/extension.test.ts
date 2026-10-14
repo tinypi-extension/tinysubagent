@@ -221,11 +221,10 @@ function assertSharedSchema(tool: Registered): void {
 }
 
 /**
- * `profile` exists exactly when profiles are enabled and routing is off: the
- * schema (top level and per-task) and the description must agree with the
- * config in all four combinations, including a real SystemOne key.
+ * `profile` exists whenever profiles are enabled, including automatic routing:
+ * the schema (top level and per-task) and description agree with config.
  */
-test("the profile parameter exists exactly when profiles are enabled and routing is off", () => {
+test("the profile parameter exists whenever profiles are enabled, including with routing", () => {
 	const cases: { name: string; value: Record<string, unknown>; profile: boolean }[] = [
 		{ name: "profiles off, routing off", value: { enableProfiles: false, profiles: PROFILE_PAIR }, profile: false },
 		{ name: "profiles on, routing off", value: { enableProfiles: true, profiles: PROFILE_PAIR }, profile: true },
@@ -237,7 +236,7 @@ test("the profile parameter exists exactly when profiles are enabled and routing
 				systemOneAPIKey: "sk-test-DEADBEEF",
 				systemOneBaseUrl: "https://api.typesafe.ai",
 			},
-			profile: false,
+			profile: true,
 		},
 		{
 			name: "profiles off, routing on",
@@ -264,15 +263,14 @@ test("the profile parameter exists exactly when profiles are enabled and routing
 			assert.equal(tasksOfferProfile(tool), profile, `tasks[].profile wrong in case: ${name}`);
 
 			const description = tool.description ?? "";
-			// Profiles are advertised only when they are also offered as a parameter.
 			assert.equal(description.includes("Profiles:"), profile, `description wrong in case: ${name}`);
 
 			if (profile) {
-				// Routing off: the model picks from the configured profiles itself.
 				assert.ok(description.includes("`light`") && description.includes("`pro`"), `candidate list wrong in case: ${name}`);
-				assert.doesNotMatch(description, /chosen automatically/);
+				if (name === "profiles on, routing on") {
+					assert.match(description, /choose automatically/);
+				}
 			} else {
-				// Routing on (or profiles off): no profile text at all reaches the model.
 				assert.doesNotMatch(description, /SystemOne/, `routing hint leaked in case: ${name}`);
 				assert.doesNotMatch(description, /`light`|`pro`/, `candidate leaked in case: ${name}`);
 			}
@@ -321,10 +319,9 @@ test("with routing on, the key and endpoint appear in no description, schema, or
 	try {
 		const description = tool.description ?? "";
 		const schema = JSON.stringify(tool.parameters ?? {});
-		// Guard: routing really is on — with routing off, `Profiles:` and the
-		// `profile` parameter would both be offered.
-		assert.ok(!description.includes("Profiles:"), "routing on must not advertise profiles");
-		assert.ok(!schema.includes("\"profile\""), "routing on must not offer the profile parameter");
+		// Routing is active, but callers can still explicitly override it.
+		assert.ok(description.includes("Profiles:"), "routing on must advertise profile choices");
+		assert.ok(schema.includes("\"profile\""), "routing on must offer the profile parameter");
 		assert.ok(!description.includes(FAKE_KEY), "the description leaks the key");
 		assert.ok(!description.includes(FAKE_URL), "the description leaks the endpoint");
 		assert.ok(!schema.includes(FAKE_KEY), "the parameter schema leaks the key");
