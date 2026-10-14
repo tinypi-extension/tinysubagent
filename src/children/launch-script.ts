@@ -12,6 +12,8 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 
+import { piHarness } from "./harness/index.ts";
+
 /** Single-quote a string for bash. The only quoting form used in generated scripts. */
 export function shellEscape(value: string): string {
 	return `'${value.replace(/'/g, "'\\''")}'`;
@@ -35,6 +37,7 @@ export interface LaunchScriptOptions {
 	holdOpenSecs?: number;
 	/** Plain NAME → value pairs from the settings file, exported before launch-owned vars. */
 	env?: Record<string, string>;
+	harness?: "pi" | "agy";
 }
 
 export const DEFAULT_HOLD_OPEN_SECS = 15;
@@ -94,12 +97,20 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
 		lines.push(`export PI_TINYSUBAGENT_AGENT=${shellEscape(opts.agent)}`);
 	}
 
+	// Agy runs from the project cwd and uses its existing project hooks. We never
+	// inject a Stop hook; report sidecars drive orchestrator completion.
+	lines.push(`cd ${shellEscape(opts.cwd)}`);
+
 	lines.push(
-		`cd ${shellEscape(opts.cwd)}`,
 		piCommand,
 		"code=$?",
-		`echo "$code $PI_TINYSUBAGENT_ID" > ${shellEscape(opts.exitCodeFile)}`,
 	);
+	if (opts.harness === "agy") {
+		lines.push(
+			`if [ "$code" -eq 0 ] && [ ! -f ${shellEscape(opts.reportFile)} ]; then printf '%s\\n' '{"type":"failed","reason":"no-output"}' > ${shellEscape(`${opts.reportFile}.tmp`)} && mv ${shellEscape(`${opts.reportFile}.tmp`)} ${shellEscape(opts.reportFile)}; fi`,
+		);
+	}
+	lines.push(`echo "$code $PI_TINYSUBAGENT_ID" > ${shellEscape(opts.exitCodeFile)}`);
 
 	const holdOpenSecs = opts.holdOpenSecs ?? DEFAULT_HOLD_OPEN_SECS;
 	if (holdOpenSecs > 0) {
@@ -128,23 +139,17 @@ export interface PiArgvOptions {
 }
 
 /**
- * Child argv. Model and thinking are two independent flags — the `model:thinking`
- * colon syntax is not used here. The task is delivered as a file reference so
- * the prompt never appears in `ps` output and never needs escaping.
+ * Child argv, as the pi harness builds it. Kept as a named export because both
+ * spawn.ts and the launch tests predate the harness split; the body lives in
+ * `harness/pi.ts` now.
  */
 export function buildPiArgv(opts: PiArgvOptions): string[] {
-	const argv = [opts.piBin, "--session", opts.childSessionFile, "-e", opts.childExtensionPath];
-	if (opts.name) argv.push("--name", opts.name);
-	if (opts.model) argv.push("--model", opts.model);
-	if (opts.thinking) argv.push("--thinking", opts.thinking);
-	if (opts.tools && opts.tools.length > 0) argv.push("--tools", opts.tools.join(","));
-	argv.push(`@${opts.taskFile}`);
-	return argv;
+	return piHarness.buildArgv({ ...opts, bin: opts.piBin });
 }
 
-/** Override, else the `pi` on PATH (the wrapper exports the parent's PATH). */
+/** Bin override from the env, resolved by the pi harness. */
 export function resolvePiBin(env: NodeJS.ProcessEnv = process.env): string {
-	return env.PI_HERDR_PI_BIN || "pi";
+	return piHarness.resolveBin(env);
 }
 
 /**

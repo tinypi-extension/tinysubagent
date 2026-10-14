@@ -16,8 +16,20 @@ import { REPORT_TOOL_NAME } from "../types.ts";
 export function buildTaskMarkdown(opts: {
 	body?: string | null;
 	task: string;
+	harness?: "pi" | "agy";
 }): string {
 	const roleBlock = opts.body && opts.body.trim() !== "" ? `${opts.body.trim()}\n\n` : "";
+	if (opts.harness === "agy") {
+		return (
+			`${roleBlock}Complete this task and use the required report mechanism to report exactly: ${opts.task.trim()} Do not include any other text.\n\n` +
+			"For this reporting harness, writing the required report sidecar is the report mechanism. Do not use tools or open/read files unless the task explicitly requires it.\n\n" +
+			"When your task is complete, write your final report to the file named by " +
+			'`$PI_TINYSUBAGENT_REPORT` as JSON: `{"type":"done","result":"your full result"}`. ' +
+			'If you cannot complete the task, write `{"type":"failed","reason":"error","message":"why"}`. ' +
+			"Write to a temporary file in the same directory, then atomically rename it to " +
+			"`$PI_TINYSUBAGENT_REPORT`. Do not finish without writing this report."
+		);
+	}
 	return (
 		`${roleBlock}Complete your task autonomously.\n\n` +
 		`${opts.task.trim()}\n\n` +

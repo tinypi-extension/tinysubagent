@@ -9,7 +9,11 @@
  * Nothing here waits for a child. Waiting is the watcher's job.
  */
 
-import { buildLaunchPaths, buildLaunchScript, buildPiArgv, buildTaskMarkdown, resolveLaunchPrefix, resolvePiBin, runId, writeLaunchFiles } from "./launch.ts";
+import { buildLaunchPaths, buildLaunchScript, buildTaskMarkdown, resolveLaunchPrefix, runId, writeLaunchFiles } from "./launch.ts";
+import { harnessFor } from "./harness/index.ts";
+import { agyBinAvailable } from "./harness/agy.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+import * as path from "node:path";
 import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "../herdr/cli.ts";
@@ -43,9 +47,22 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	});
 	if (!profile.ok) return { ok: false, error: profile.error };
 
+	const harness = harnessFor(profile);
+	const binary = harness.resolveBin(context.env);
+	if (profile.harness === "agy" && !agyBinAvailable(binary, context.env)) {
+		const paths = buildLaunchPaths({ sessionDir: context.sessionDir, sessionId: context.sessionId, agentDir: context.agentDir, cwd: context.cwd, name: request.name, id: runId() });
+		writeLaunchFiles([{ path: paths.taskFile, content: buildTaskMarkdown({ body: agent.body, task: request.task, harness: profile.harness }) }]);
+		try {
+			mkdirSync(path.dirname(paths.reportFile), { recursive: true });
+			writeFileSync(paths.reportFile, JSON.stringify({ type: "failed", reason: "error", message: `agy executable not found: ${binary}` }), { flag: "wx" });
+		} catch { /* Preserve an existing report; the direct tool error remains sufficient. */ }
+		return { ok: false, error: `agy executable not found: ${binary}` };
+	}
 	const warnings: string[] = [];
 	let tools: string[] | null = null;
-	if (agent.tools && agent.tools.length > 0) {
+	if (profile.harness === "agy" && agent.tools && agent.tools.length > 0) {
+		warnings.push(`agent "${agent.name}": tools list ignored because the agy harness cannot enforce it.`);
+	} else if (agent.tools && agent.tools.length > 0) {
 		const expanded = expandToolPatterns(agent.tools, context.allToolNames);
 		tools = expanded.tools;
 		if (expanded.unmatched.length > 0) {
@@ -91,8 +108,8 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		id,
 	});
 
-	const piArgv = buildPiArgv({
-		piBin: resolvePiBin(context.env),
+	const childArgv = harness.buildArgv({
+		bin: binary,
 		childSessionFile: paths.childSessionFile,
 		childExtensionPath,
 		name: request.name,
@@ -107,7 +124,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		agent: request.agent,
 		id,
 		cwd: context.cwd,
-		piArgv,
+		piArgv: childArgv,
 		envPath: context.env.PATH ?? "",
 		env: context.config.env,
 		agentDir: context.agentDirOverride,
@@ -115,10 +132,11 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		reportFile: paths.reportFile,
 		exitCodeFile: paths.exitCodeFile,
 		launchPrefix: resolveLaunchPrefix(context.env, context.cwd),
+		harness: profile.harness,
 	});
 
 	writeLaunchFiles([
-		{ path: paths.taskFile, content: buildTaskMarkdown({ body: agent.body, task: request.task }) },
+		{ path: paths.taskFile, content: buildTaskMarkdown({ body: agent.body, task: request.task, harness: profile.harness }) },
 		{ path: paths.scriptFile, content: script },
 	]);
 

@@ -174,7 +174,63 @@ test("a disabled profile set refuses a named profile before launching", async ()
 	assert.match(result.ok === false ? result.error : "", /pro/);
 });
 
-test("a role that could spawn subagents is refused rather than half-supported", async () => {
+test("an agy profile with a missing executable fails before opening a pane and writes a failure sidecar", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-missing-agy-"));
+	try {
+		const base = context([{ ...worker, tools: undefined }]);
+		const result = await spawnOne(
+			{ agent: "worker", task: "x", name: "worker", profile: "gemini" },
+			{
+				...base,
+				cwd: dir,
+				agentDir: dir,
+				sessionDir: dir,
+				env: { PATH: "" },
+				config: { ...base.config, enableProfiles: true, profiles: { gemini: { harness: "agy", model: "gpt-oss-120b" } } },
+			},
+		);
+		assert.deepEqual(result, { ok: false, error: "agy executable not found: agy" });
+		const sidecar = readdirSync(join(dir, "sessions"), { recursive: true }).find((file) => String(file).endsWith(".done"));
+		assert.ok(sidecar, "missing-binary failure sidecar was not written");
+		const contents = readFileSync(join(dir, "sessions", String(sidecar)), "utf8");
+		assert.deepEqual(JSON.parse(contents), { type: "failed", reason: "error", message: "agy executable not found: agy" });
+		assert.equal(existsSync(join(dir, "artifacts", "sid", "subagent-scripts")), false, "pane launch files should not be created");
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an agy profile ignores role tools with a warning and proceeds", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-agy-tools-"));
+	try {
+		const agy: AgentDef = { ...worker, tools: ["read", TOOL_NAME] };
+		const base = context([agy]);
+		const config = {
+			...base.config,
+			enableProfiles: true,
+			profiles: { gemini: { harness: "agy" as const, model: "gpt-oss-120b" } },
+		};
+		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
+			const spawned = await spawnOne(
+				{ agent: "worker", task: "x", name: "worker", profile: "gemini" },
+				{
+					...base,
+					cwd: dir,
+					agentDir: dir,
+					sessionDir: dir,
+					env: { TINYSUBAGENT_AGY_BIN: process.execPath },
+					config,
+				},
+			);
+			return { spawned, script: writtenScript(dir, "sid") };
+		});
+		assert.equal(result.spawned.ok, true);
+		assert.deepEqual(result.spawned.warnings, ['agent "worker": tools list ignored because the agy harness cannot enforce it.']);
+		assert.equal(result.script.includes("--tools"), false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a pi role that could spawn subagents is refused rather than half-supported", async () => {
 	// The pane would close on this child's own settle, stranding its children's
 	// results. Refusing loudly is the whole point: no pane is opened here.
 	const nested: AgentDef = { ...worker, name: "boss", tools: ["read", TOOL_NAME] };

@@ -13,7 +13,7 @@
 
 import * as path from "node:path";
 import { CONFIG_FILENAME, CURRENT_PROFILE, type TinysubagentConfig } from "./config.ts";
-import type { Profile, ThinkingLevel } from "../types.ts";
+import type { Harness, Profile, ThinkingLevel } from "../types.ts";
 
 /** Model + thinking of the orchestrator, used as the fallback for every profile. */
 export interface ParentDefaults {
@@ -34,6 +34,8 @@ export interface ResolvedProfile {
 	name: string;
 	model?: string;
 	thinking?: ThinkingLevel;
+	/** `pi` when absent; only named profiles can carry `agy`. */
+	harness?: Harness;
 }
 
 export type ProfileResolution = ({ ok: true } & ResolvedProfile) | { ok: false; error: string };
@@ -60,7 +62,7 @@ export function profileParamDescription(config: TinysubagentConfig, autoRoute = 
 		const detail = configured
 			.map((name) => {
 				const profile = config.profiles[name];
-				const parts = [profile?.model, profile?.thinking].filter(Boolean);
+				const parts = [profile?.harness === "agy" ? "agy" : undefined, profile?.model, profile?.thinking].filter(Boolean);
 				return `\`${name}\`${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
 			})
 			.join(", ");
@@ -71,7 +73,11 @@ export function profileParamDescription(config: TinysubagentConfig, autoRoute = 
 
 /** One-line form of a resolved profile: `current (oc-openai/deepseek-flash, medium)`. */
 export function resolvedProfileLabel(resolution: ResolvedProfile): string {
-	const parts = [resolution.model, resolution.thinking].filter(Boolean);
+	const parts = [
+		resolution.harness === "agy" ? "agy" : undefined,
+		resolution.model,
+		resolution.thinking,
+	].filter(Boolean);
 	return parts.length > 0 ? `${resolution.name} (${parts.join(", ")})` : resolution.name;
 }
 
@@ -114,10 +120,12 @@ export function resolveProfile(
 		};
 	}
 
-	return {
+	const resolved: { ok: true } & ResolvedProfile = {
 		ok: true,
 		name: wanted,
 		model: profile.model ?? parent.model,
 		thinking: profile.thinking ?? parent.thinking,
 	};
+	if (profile.harness !== undefined) resolved.harness = profile.harness;
+	return resolved;
 }

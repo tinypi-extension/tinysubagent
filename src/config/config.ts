@@ -22,7 +22,7 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 // `.json` that grows a comment keeps working — the filename picks precedence, not
 // strictness.
 import { parse as parseJsonc, printParseErrorCode, type ParseError } from "jsonc-parser";
-import { isThinkingLevel, type Profile } from "../types.ts";
+import { isEffortLevel, isThinkingLevel, type Profile } from "../types.ts";
 import { DEFAULT_SYSTEMONE_BASE_URL, SYSTEMONE_MODEL, normalizeBaseUrl } from "../systemone/client.ts";
 
 /** Re-exported so callers of the config need not know where the default lives. */
@@ -186,6 +186,18 @@ function normalizeProfile(
 	}
 	const entry = raw as Record<string, unknown>;
 	const profile: Profile = {};
+	// Harness first: an unknown harness must never silently fall back to pi.
+	if (entry.harness !== undefined) {
+		if (entry.harness === "pi" || entry.harness === "agy") {
+			profile.harness = entry.harness;
+		} else {
+			// Fail closed: an unknown value must never silently fall back to pi.
+			warnings.push(
+				`tinysubagent: profile "${name}" in ${file} has an unknown "harness" value; ignoring the profile.`,
+			);
+			return undefined;
+		}
+	}
 	if (entry.model !== undefined) {
 		if (typeof entry.model === "string" && entry.model.trim() !== "") {
 			profile.model = entry.model.trim();
@@ -196,6 +208,7 @@ function normalizeProfile(
 		}
 	}
 	if (entry.thinking !== undefined) {
+		// The canonical key always wins, even when both keys are present.
 		if (isThinkingLevel(entry.thinking)) {
 			profile.thinking = entry.thinking;
 		} else {
@@ -203,6 +216,14 @@ function normalizeProfile(
 				`tinysubagent: profile "${name}" in ${file} has an unknown "thinking" value; ignoring that field.`,
 			);
 		}
+	} else if (entry.effort !== undefined && isEffortLevel(entry.effort)) {
+		// Keep the old agy spelling as a silent alias. Its historical values are
+		// also valid thinking levels, and the harness decides how to interpret them.
+		profile.thinking = entry.effort;
+	} else if (entry.effort !== undefined) {
+		warnings.push(
+			`tinysubagent: profile "${name}" in ${file} has an unknown "effort" value; ignoring that field.`,
+		);
 	}
 	return profile;
 }

@@ -7,9 +7,11 @@
  *   <sessionDir>/artifacts/<sessionId>/context/<name>-<ts>.md
  */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+
+import { piHarness } from "./harness/index.ts";
 
 /** Short run id, stamped into the exit-code sidecar so a stale run cannot be mistaken for ours. */
 export function runId(): string {
@@ -87,10 +89,8 @@ export function buildLaunchPaths(input: LaunchPathsInput): LaunchPaths {
 	const contextDir = path.join(artifactDir, "context");
 	const fileSafe = safeName(input.name);
 	const childSessionDir = childSessionDirFor(input.agentDir, input.cwd);
-	const childSessionFile = path.join(
-		childSessionDir,
-		`${timestampForSession()}_${randomUUID()}.jsonl`,
-	);
+	// The pi harness owns the session file's shape; the sidecars are named after it.
+	const childSessionFile = piHarness.sessionFileFor(input.cwd, input.agentDir);
 
 	return {
 		artifactDir,
