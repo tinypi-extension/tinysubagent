@@ -186,7 +186,6 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			const lines = [
 				...spawned.map((entry) => ackLine(entry)),
 				...failures.map((entry) => `failed ${entry.agent}: ${entry.error}`),
-				...spawned.flatMap((entry) => entry.warnings),
 				// Routing warnings are diagnostic text for the model — the choice
 				// fell back to `current` and the model should know why. `renderResult`
 				// stays as-is deliberately: it is the same parts with a theme, so
