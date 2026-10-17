@@ -53,7 +53,7 @@ export function profileParamDescription(config: TinysubagentConfig, autoRoute = 
 	const names = availableProfileNames(config);
 	const configured = names.filter((name) => name !== CURRENT_PROFILE);
 	const lines = [
-		`Model/thinking profile for this subagent. One of: ${names.map((n) => `\`${n}\``).join(", ")}.`,
+		`Usually omit this parameter unless a specific profile is required. Available profiles: ${names.map((n) => `\`${n}\``).join(", ")}.`,
 		autoRoute
 			? "Omit it to choose a profile automatically for this task."
 			: `Omit it to inherit this session's model and thinking level, which is what \`${CURRENT_PROFILE}\` means.`,
