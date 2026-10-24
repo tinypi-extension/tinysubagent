@@ -34,6 +34,7 @@ const BASE_URL = "https://api.typesafe.ai";
 function routingConfig(systemOne: TinysubagentConfig["systemOne"]): TinysubagentConfig {
 	return {
 		enableProfiles: true,
+		jevCheckLastMessage: false,
 		profiles: {
 			light: { model: "m-light", thinking: "low" },
 			pro: { model: "m-pro", thinking: "high" },
@@ -475,6 +476,14 @@ test("classifier routing shows an info notice when a profile is chosen automatic
 		h.stop();
 		h.cleanup();
 	}
+});
+
+test("tool description says subagents start immediately, not queued", () => {
+	const config = routingConfig(null);
+	const description = buildToolDescription([workerAgent], config);
+	assert.match(description, /starts the requested subagent\(s\) immediately/);
+	assert.match(description, /does not queue or defer them for later/);
+	assert.match(description, /parallel request starts all of them concurrently/);
 });
 
 test("only classifierModel set keeps the profile list and parameter", () => {

@@ -30,22 +30,35 @@ export const REPORT_CHECK_ROLE = {
 		"Decides whether a subagent that ended its turn without calling subagent_report had finished its work, or was not done yet.",
 };
 
+/** The verdict that means "remind the model to report". */
+export const FORGOTTEN = "forgotten";
+
+/** The verdict that means "this child has nothing to hand back yet". */
+export const NOT_FINISHED = "not-finished";
+
 /** The chooser's two verdicts, keyed by the answer it returns. */
 export const REPORT_CHECK_CRITERIA: Record<string, string> = {
-	forgotten:
+	[FORGOTTEN]:
 		"The subagent completed its task. Its final message is a finished result it never handed back — it should be reminded to call subagent_report.",
-	"not-finished":
+	[NOT_FINISHED]:
 		"The subagent is not finished: it asked a question, needs input, hit a limit, or is still working. It should be left alone.",
 };
+
+/**
+ * What the check concluded. `unknown` is every non-answer — no transport, a
+ * failed transport, an answer this code does not recognise — and it carries the
+ * reason so the line the user reads can say why nothing happened.
+ */
+export type ReportCheck =
+	| { verdict: typeof FORGOTTEN }
+	| { verdict: typeof NOT_FINISHED }
+	| { verdict: "unknown"; reason: string };
 
 /** The question the classifier answers for this decision. */
 export const REPORT_CHECK_INSTRUCTIONS =
 	"Decide whether the subagent's final message is a finished result it never handed " +
 	"back over `subagent_report`, or whether it is not finished. Answer with exactly one " +
 	"of the criterion keys.";
-
-/** The verdict that means "remind the model to report". */
-export const FORGOTTEN = "forgotten";
 
 /** Cap on the decision payload: enough prose to judge, small enough to stay cheap. */
 export const MAX_CHECK_MESSAGE = 4_000;
@@ -57,6 +70,23 @@ export function clipMessage(message: string): string {
 		: `${message.slice(0, MAX_CHECK_MESSAGE - 1)}…`;
 }
 
+/** The line the user sees while the decision is in flight. */
+export function checkingLine(message: string): string {
+	return `report-check: asking the classifier (${clipMessage(message).length} chars)…`;
+}
+
+/** The line the user sees once the decision lands, whatever it landed on. */
+export function checkLine(check: ReportCheck): string {
+	switch (check.verdict) {
+		case FORGOTTEN:
+			return "report-check: forgotten → reminding the subagent to call subagent_report";
+		case NOT_FINISHED:
+			return "report-check: not-finished → leaving the child alone";
+		default:
+			return `report-check: no verdict (${check.reason}) → leaving the child alone`;
+	}
+}
+
 /**
  * The production decider: builds the routing transport once from the loaded
  * config, then asks it for each unreported settle. The registry is the child's
@@ -65,9 +95,42 @@ export function clipMessage(message: string): string {
 export function createReportDecider(
 	config: TinysubagentConfig,
 	registry?: ClassifierRegistry,
-): (message: string) => Promise<boolean> {
+): (message: string) => Promise<ReportCheck> {
+	// Nothing to ask: routing is off, and the user is told so instead of watching
+	// a check that was never going to reach a model.
+	if (config.classifier === null && config.systemOne === null) {
+		return async () => ({ verdict: "unknown", reason: "no routing transport configured" });
+	}
 	const route = createRouteFn(config, { registry });
-	return (message: string) => checkReport(message, route);
+	return (message: string) => inspectReport(message, route);
+}
+
+/**
+ * The full answer: which verdict the transport returned, or why it returned
+ * none. Never throws — the transport's failures become the `unknown` verdict.
+ */
+export async function inspectReport(message: string, route: RouteFn): Promise<ReportCheck> {
+	try {
+		const outcome = await route({
+			agent: REPORT_CHECK_ROLE,
+			task: clipMessage(message),
+			criteria: REPORT_CHECK_CRITERIA,
+			instructions: REPORT_CHECK_INSTRUCTIONS,
+		});
+		if (outcome?.choice === FORGOTTEN) return { verdict: FORGOTTEN };
+		if (outcome?.choice === NOT_FINISHED) return { verdict: NOT_FINISHED };
+		return {
+			verdict: "unknown",
+			reason:
+				typeof outcome?.choice === "string" && outcome.choice !== ""
+					? `unrecognised verdict "${outcome.choice}"`
+					: "the transport returned no verdict",
+		};
+	} catch {
+		// The transport promises not to throw; this backstop makes the promise
+		// airtight, and a broken decision must not break the child.
+		return { verdict: "unknown", reason: "the check threw" };
+	}
 }
 
 /**
@@ -76,17 +139,5 @@ export function createReportDecider(
  * that changes nothing.
  */
 export async function checkReport(message: string, route: RouteFn): Promise<boolean> {
-	try {
-		const outcome = await route({
-			agent: REPORT_CHECK_ROLE,
-			task: clipMessage(message),
-			criteria: REPORT_CHECK_CRITERIA,
-			instructions: REPORT_CHECK_INSTRUCTIONS,
-		});
-		return outcome?.choice === FORGOTTEN;
-	} catch {
-		// The transport promises not to throw; this backstop makes the
-		// promise airtight, and a broken decision must not break the child.
-		return false;
-	}
+	return (await inspectReport(message, route)).verdict === FORGOTTEN;
 }

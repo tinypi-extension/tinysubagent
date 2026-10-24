@@ -69,6 +69,11 @@ export interface ConfigSource {
 
 export interface TinysubagentConfig {
 	enableProfiles: boolean;
+	/**
+	 * Whether a child's unreported final message is judged by the classifier before
+	 * it is reminded to call `subagent_report`. `false` (the default) reminds at once.
+	 */
+	jevCheckLastMessage: boolean;
 	profiles: Record<string, Profile>;
 	/** Plain `NAME` → value pairs exported into the child's shell. Always present. */
 	env: Record<string, string>;
@@ -574,6 +579,7 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	// routing resolver can walk them highest-first without re-reading anything.
 	const read: { source: ConfigSource; root: Record<string, unknown> }[] = [];
 	let enableProfiles = false;
+	let jevCheckLastMessage = false;
 
 	// Lowest precedence first, so a later (higher-precedence) read overwrites.
 	for (const source of [...candidates].reverse()) {
@@ -587,6 +593,11 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 			// decision to this scope. `=== true` stays the only way to switch it on, so
 			// a typo cannot enable profiles.
 			enableProfiles = root.enableProfiles === true;
+		}
+		if (Object.hasOwn(root, "jevCheckLastMessage")) {
+			// Same rule as enableProfiles: the highest scope that sets the key decides, and
+			// only a literal `true` turns the check on.
+			jevCheckLastMessage = root.jevCheckLastMessage === true;
 		}
 		mergeProfiles(root, source.file, profiles, warnings);
 		mergeEnv(root, source.file, env, warnings);
@@ -607,5 +618,8 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 		);
 	}
 
-	return { config: { enableProfiles, profiles, env, systemOne, classifier, sources }, warnings };
+	return {
+		config: { enableProfiles, jevCheckLastMessage, profiles, env, systemOne, classifier, sources },
+		warnings,
+	};
 }

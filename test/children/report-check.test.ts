@@ -5,12 +5,17 @@ import type { TinysubagentConfig } from "../../src/config/config.ts";
 import {
 	FORGOTTEN,
 	MAX_CHECK_MESSAGE,
+	NOT_FINISHED,
 	REPORT_CHECK_CRITERIA,
 	REPORT_CHECK_INSTRUCTIONS,
 	REPORT_CHECK_ROLE,
+	checkLine,
 	checkReport,
+	checkingLine,
 	clipMessage,
 	createReportDecider,
+	inspectReport,
+	type ReportCheck,
 } from "../../src/children/report-check.ts";
 import type {
 	ClassifierContext,
@@ -38,6 +43,7 @@ const CLASSIFIER: NonNullable<TinysubagentConfig["classifier"]> = {
 function config(overrides: Partial<TinysubagentConfig> = {}): TinysubagentConfig {
 	return {
 		enableProfiles: true,
+		jevCheckLastMessage: false,
 		profiles: { light: { model: "m-light", thinking: "low" } },
 		env: {},
 		systemOne: null,
@@ -147,6 +153,69 @@ test("a route that rejects is false, not a throw", async () => {
 	assert.equal(await checkReport("Done.", route), false);
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// inspectReport: the same decision, with the reason a verdict is missing
+// ────────────────────────────────────────────────────────────────────────────
+
+test("inspectReport carries each verdict through unchanged", async () => {
+	const forgotten = fakeRoute(FORGOTTEN).route;
+	const unfinished = fakeRoute(NOT_FINISHED).route;
+	assert.deepEqual(await inspectReport("Done.", forgotten), { verdict: FORGOTTEN });
+	assert.deepEqual(await inspectReport("Which next?", unfinished), {
+		verdict: NOT_FINISHED,
+	});
+});
+
+test("inspectReport names a missing, empty, or unfamiliar answer", async () => {
+	const cases: { choice: string | null; reason: string }[] = [
+		{ choice: null, reason: "the transport returned no verdict" },
+		{ choice: "", reason: "the transport returned no verdict" },
+		{ choice: "maybe", reason: 'unrecognised verdict "maybe"' },
+	];
+	for (const { choice, reason } of cases) {
+		const { route } = fakeRoute(choice);
+		assert.deepEqual(await inspectReport("Done.", route), { verdict: "unknown", reason });
+	}
+});
+
+test("inspectReport turns a rejecting route into an unknown verdict", async () => {
+	const route: RouteFn = async () => {
+		throw new Error("boom");
+	};
+	assert.deepEqual(await inspectReport("Done.", route), {
+		verdict: "unknown",
+		reason: "the check threw",
+	});
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// the two lines the user reads
+// ────────────────────────────────────────────────────────────────────────────
+
+test("the asking line reports the payload size the classifier will judge", () => {
+	assert.equal(checkingLine("Done."), "report-check: asking the classifier (5 chars)…");
+	const long = "x".repeat(MAX_CHECK_MESSAGE + 500);
+	assert.equal(
+		checkingLine(long),
+		`report-check: asking the classifier (${MAX_CHECK_MESSAGE} chars)…`,
+	);
+});
+
+test("the verdict line names the verdict and what happens next", () => {
+	assert.equal(
+		checkLine({ verdict: FORGOTTEN }),
+		"report-check: forgotten → reminding the subagent to call subagent_report",
+	);
+	assert.equal(
+		checkLine({ verdict: NOT_FINISHED }),
+		"report-check: not-finished → leaving the child alone",
+	);
+	assert.equal(
+		checkLine({ verdict: "unknown", reason: "no routing transport configured" }),
+		"report-check: no verdict (no routing transport configured) → leaving the child alone",
+	);
+});
+
 test("the task is clipped to the decision payload cap", async () => {
 	const long = "x".repeat(MAX_CHECK_MESSAGE + 500);
 	const { route, calls } = fakeRoute(FORGOTTEN);
@@ -170,7 +239,7 @@ test("a message within the cap reaches the route verbatim", async () => {
 test("a classifier config decides through the registry with the report-check question", async () => {
 	const registry = fakeRegistry(answering("forgotten"));
 	const decide = createReportDecider(config({ classifier: CLASSIFIER }), registry);
-	assert.equal(await decide("All 12 tables migrated."), true);
+	assert.deepEqual(await decide("All 12 tables migrated."), { verdict: FORGOTTEN });
 
 	assert.deepEqual(registry.findCalls, [
 		{ type: "classifier", provider: "openrouter", modelId: "typesafe/jev-latest" },
@@ -182,25 +251,25 @@ test("a classifier config decides through the registry with the report-check que
 	assert.deepEqual(context?.questions.profile.criteria, REPORT_CHECK_CRITERIA);
 });
 
-test("a classifier not-finished verdict decides false", async () => {
+test("a classifier not-finished verdict is carried through", async () => {
 	const registry = fakeRegistry(answering("not-finished"));
 	const decide = createReportDecider(config({ classifier: CLASSIFIER }), registry);
-	assert.equal(await decide("Which migration next?"), false);
+	assert.deepEqual(await decide("Which migration next?"), { verdict: NOT_FINISHED });
 });
 
 test("the classifier wins when both transports are configured", async () => {
 	const registry = fakeRegistry(answering("forgotten"));
-	let decided: boolean | undefined;
+	let decided: ReportCheck | undefined;
 	const urls = await recordingFetch(async () => {
 		const decide = createReportDecider(config({ classifier: CLASSIFIER, systemOne: SYSTEM_ONE }), registry);
 		decided = await decide("Done.");
 	});
-	assert.equal(decided, true);
+	assert.deepEqual(decided, { verdict: FORGOTTEN });
 	assert.equal(registry.classifyCalls.length, 1);
 	assert.deepEqual(urls, []);
 });
 
-test("a classifier with no usable answer is false: missing answers, wrong kind, or a failed run", async () => {
+test("a classifier with no usable answer is unknown: missing answers, wrong kind, or a failed run", async () => {
 	const cases: ClassifierResult[] = [
 		{ stopReason: "stop" },
 		{ stopReason: "stop", answers: {} },
@@ -209,41 +278,54 @@ test("a classifier with no usable answer is false: missing answers, wrong kind, 
 	];
 	for (const result of cases) {
 		const decide = createReportDecider(config({ classifier: CLASSIFIER }), fakeRegistry(result));
-		assert.equal(await decide("Done."), false, JSON.stringify(result));
+		assert.deepEqual(
+			await decide("Done."),
+			{ verdict: "unknown", reason: "the transport returned no verdict" },
+			JSON.stringify(result),
+		);
 	}
 });
 
-test("a classifier that throws is false, not a throw", async () => {
+test("a classifier that throws is an unknown verdict, not a throw", async () => {
 	const registry = fakeRegistry(answering("forgotten"));
 	registry.classify = async () => {
 		throw new Error("classifier exploded");
 	};
 	const decide = createReportDecider(config({ classifier: CLASSIFIER }), registry);
-	assert.equal(await decide("Done."), false);
+	assert.deepEqual(await decide("Done."), {
+		verdict: "unknown",
+		reason: "the transport returned no verdict",
+	});
 });
 
 test("a SystemOne-only config uses the legacy transport and never the registry", async () => {
 	const registry = fakeRegistry(answering("forgotten"));
-	let decided: boolean | undefined;
+	let decided: ReportCheck | undefined;
 	const urls = await recordingFetch(async () => {
 		const decide = createReportDecider(config({ systemOne: SYSTEM_ONE }), registry);
 		decided = await decide("Done.");
 	});
-	// The stubbed fetch refuses, so the legacy branch degrades to a non-forgotten verdict.
-	assert.equal(decided, false);
+	// The stubbed fetch refuses, so the legacy branch degrades to no verdict.
+	assert.deepEqual(decided, {
+		verdict: "unknown",
+		reason: "the transport returned no verdict",
+	});
 	assert.equal(registry.classifyCalls.length, 0);
 	assert.equal(urls.length, 1);
 	assert.ok(urls[0]?.startsWith(SYSTEM_ONE.baseUrl), `expected a call to ${SYSTEM_ONE.baseUrl}, got ${urls[0]}`);
 });
 
-test("with no transport the decider resolves false without throwing or calling out", async () => {
+test("with no transport the decider says so without throwing or calling out", async () => {
 	const registry = fakeRegistry(answering("forgotten"));
-	let decided: boolean | undefined;
+	let decided: ReportCheck | undefined;
 	const urls = await recordingFetch(async () => {
 		const decide = createReportDecider(config(), registry);
 		decided = await decide("Done.");
 	});
-	assert.equal(decided, false);
+	assert.deepEqual(decided, {
+		verdict: "unknown",
+		reason: "no routing transport configured",
+	});
 	assert.equal(registry.classifyCalls.length, 0);
 	assert.deepEqual(urls, []);
 });

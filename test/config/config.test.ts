@@ -1209,3 +1209,24 @@ test("classifierModel makes the systemOne keys inert in both directions", () => 
 	assert.match(legacy.warnings[1] ?? "", /has no "systemOneAPIKey"/);
 	assertRedacted(legacy.warnings, S1_KEY, S1_URL);
 });
+
+test("jevCheckLastMessage defaults to false when omitted", () => {
+	const file = writeConfig({ enableProfiles: true });
+	assert.equal(read(file).config.jevCheckLastMessage, false);
+});
+
+test("jevCheckLastMessage is on only for a literal true", () => {
+	assert.equal(read(writeConfig({ jevCheckLastMessage: true })).config.jevCheckLastMessage, true);
+	assert.equal(read(writeConfig({ jevCheckLastMessage: "yes" })).config.jevCheckLastMessage, false);
+	assert.equal(read(writeConfig({ jevCheckLastMessage: 1 })).config.jevCheckLastMessage, false);
+});
+
+test("jevCheckLastMessage is decided by the highest scope that sets it", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, JSONC_CONFIG_FILENAME, { jevCheckLastMessage: true });
+	writeProject(cwd, JSONC_CONFIG_FILENAME, { profiles: { pro: { model: "m" } } });
+	assert.equal(loadConfig(cwd, agentDir).config.jevCheckLastMessage, true);
+
+	writeProject(cwd, JSONC_CONFIG_FILENAME, { jevCheckLastMessage: false });
+	assert.equal(loadConfig(cwd, agentDir).config.jevCheckLastMessage, false);
+});

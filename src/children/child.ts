@@ -86,6 +86,11 @@
  * decision, or an unknown answer all mean "leave it alone" too — the
  * child then behaves exactly as it did before this check existed.
  *
+ * Every check speaks to the human watching the pane: one dim line while the
+ * classifier is being asked, one line for the verdict, including the reason no
+ * verdict came back. Those lines are session entries, not messages, so they
+ * never reach the model's context.
+ *
  * ## The run that never started
  *
  * One failure is not a settle, because no run happened: pi validates the selected
@@ -108,11 +113,18 @@
  */
 
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { loadConfig } from "../config/config.ts";
+import { loadConfig, type TinysubagentConfig } from "../config/config.ts";
 import type { ClassifierRegistry } from "../systemone/route.ts";
 import { REPORT_TOOL_NAME } from "../types.ts";
-import { createReportDecider } from "./report-check.ts";
+import {
+	FORGOTTEN,
+	checkLine,
+	checkingLine,
+	createReportDecider,
+	type ReportCheck,
+} from "./report-check.ts";
 import { writeReportFile, writeResultReport } from "./report.ts";
 import { readFinalMessage } from "./session.ts";
 import { failureDetail, settleReason } from "./settle.ts";
@@ -121,6 +133,9 @@ import { errorText, preflightFailure, preflightRefusal } from "./preflight.ts";
 
 /** How many times one child may be nudged to report before it is left alone. */
 export const MAX_REPORT_REMINDERS = 2;
+
+/** Session entry a report check appends; rendered here, never sent to the model. */
+const REPORT_CHECK_ENTRY = "tinysubagent_report_check";
 
 /** The nudge itself: a steer, so the model sees why it is being asked again. */
 const REPORT_REMINDER =
@@ -140,8 +155,8 @@ const REPORT_REMINDER =
 export interface ChildDeps {
 	/** The child's final assistant message, or null when it wrote none. */
 	readFinal?: () => string | null;
-	/** Whether that message is a finished result the model never reported. */
-	decidesReport?: (message: string) => Promise<boolean>;
+	/** What the check concluded about that message. */
+	decidesReport?: (message: string) => Promise<ReportCheck>;
 }
 
 export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}): void {
@@ -153,8 +168,19 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 	let runSignal: AbortSignal | undefined;
 	/** Reminders sent for unreported turn ends; capped by MAX_REPORT_REMINDERS. */
 	let remindersSent = 0;
-	/** The report-check decider, built once on the first unreported settle. */
-	let reportDecider: ((message: string) => Promise<boolean>) | undefined;
+	/** The child's config, read on the first unreported settle so a child that always reports never pays for it. */
+	let childConfig: TinysubagentConfig | undefined;
+	/** The report-check decider, built once on the first check. */
+	let reportDecider: ((message: string) => Promise<ReportCheck>) | undefined;
+
+	// The check's lines are for the human watching this pane, so they are session
+	// entries: visible in the transcript, absent from the model's context, where a
+	// "leaving the child alone" line would just be noise on the next turn.
+	pi.registerEntryRenderer?.(REPORT_CHECK_ENTRY, (entry, _options, theme) => {
+		const data = entry.data as { text?: unknown } | undefined;
+		const text = typeof data?.text === "string" ? data.text : "";
+		return new Text(theme.fg("dim", text), 0, 0);
+	});
 
 	// The explicit hand-back: the model passes its result, this writes it, and
 	// the orchestrator delivers that exact text. This is the only path that
@@ -281,26 +307,18 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 	/**
 	 * Nudge a finished result that was never reported. The turn has ended, so
 	 * the child is idle: a steer starts one more turn, in which the model can
-	 * make the call it skipped.
+	 * make the call it skipped. With `jevCheckLastMessage` on, the classifier
+	 * judges the message first and only a `forgotten` verdict sends the nudge;
+	 * with it off the nudge goes out at once, with no check and no check lines.
 	 */
 	async function remindIfUnreported(ctx: ExtensionContext): Promise<void> {
 		if (remindersSent >= MAX_REPORT_REMINDERS) return;
 		const finalMessage = deps.readFinal ? deps.readFinal() : finalSessionMessage();
 		if (finalMessage === null) return;
-		if (reportDecider === undefined) {
-			reportDecider =
-				deps.decidesReport ??
-				productionDecider(ctx.modelRegistry as unknown as ClassifierRegistry);
+		childConfig ??= loadConfig(process.cwd(), getAgentDir()).config;
+		if (childConfig.jevCheckLastMessage && !(await judgedForgotten(finalMessage, childConfig, ctx))) {
+			return;
 		}
-
-		let remind = false;
-		try {
-			remind = await reportDecider(finalMessage);
-		} catch {
-			// A broken decider must not break the settle; leave the child as it is.
-			remind = false;
-		}
-		if (!remind) return;
 
 		remindersSent += 1;
 		pi.sendMessage(
@@ -313,6 +331,35 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 			{ triggerTurn: true, deliverAs: "steer" },
 		);
 	}
+
+	/** Ask the check about one final message, and say what it concluded in the pane. */
+	async function judgedForgotten(
+		finalMessage: string,
+		config: TinysubagentConfig,
+		ctx: ExtensionContext,
+	): Promise<boolean> {
+		reportDecider ??=
+			deps.decidesReport ??
+			createReportDecider(config, ctx.modelRegistry as unknown as ClassifierRegistry);
+
+		// The user is told what is being asked: the verdict is the only thing that
+		// decides whether this child is nudged, so it should not happen off-screen.
+		noteCheck(checkingLine(finalMessage));
+		let check: ReportCheck;
+		try {
+			check = await reportDecider(finalMessage);
+		} catch {
+			// A broken decider must not break the settle; leave the child as it is.
+			check = { verdict: "unknown", reason: "the check threw" };
+		}
+		noteCheck(checkLine(check));
+		return check.verdict === FORGOTTEN;
+	}
+
+	/** Append one dim transcript line; the check belongs to the user, not the model. */
+	function noteCheck(text: string): void {
+		pi.appendEntry?.(REPORT_CHECK_ENTRY, { text });
+	}
 }
 
 /**
@@ -323,18 +370,4 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 function finalSessionMessage(): string | null {
 	const file = process.env.PI_TINYSUBAGENT_SESSION;
 	return file === undefined ? null : readFinalMessage(file);
-}
-
-/**
- * The production decider: the configured routing transport judges the message,
- * the same one routing uses. Config is read and the decider built on
- * the first unreported settle — a child that always reports never pays for the
- * lookup. The registry is the child's own, which the in-process classifier needs.
- */
-function productionDecider(registry: ClassifierRegistry): (message: string) => Promise<boolean> {
-	let decide: ((message: string) => Promise<boolean>) | undefined;
-	return async (message: string): Promise<boolean> => {
-		decide ??= createReportDecider(loadConfig(process.cwd(), getAgentDir()).config, registry);
-		return decide(message);
-	};
 }

@@ -35,6 +35,7 @@ export function advertiseAgents(agents: readonly AgentDef[]): string[] {
 export function buildToolDescription(agents: readonly AgentDef[], config: TinysubagentConfig): string {
 	const lines = [
 		"Delegate tasks to subagents, each running in its own herdr pane with an isolated context window.",
+		"Calling this tool starts the requested subagent(s) immediately; it does not queue or defer them for later. A single request starts one subagent, and a parallel request starts all of them concurrently.",
 		"",
 		"This returns as soon as the panes are open. Do nothing else after spawning: end your turn and wait for the results. Each subagent's result is delivered back to this session automatically as a steer message when it finishes — do not poll, sleep, tail logs, or start unrelated work while you wait.",
 		"",
@@ -66,6 +67,7 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 
 export const PROMPT_GUIDELINES = [
 	"Use subagent to delegate self-contained work that would otherwise flood this context window.",
+	"Calling subagent starts the requested agent(s) immediately; it does not queue work for later.",
 	"Do not delegate something you can finish in one or two tool calls yourself.",
 	"After spawning, do nothing else: end your turn and wait for the result, which arrives automatically as a steer message. Do not poll, sleep, or start unrelated work.",
 	"Write each task as a complete brief — a subagent cannot see this conversation.",
