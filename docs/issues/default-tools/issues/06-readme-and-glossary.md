@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] The `tools` notes say what setting a floor does to a role that declares no `tools`.
-- [ ] The README documents `defaultTools`, its whole-array scope layering, its name-only grammar, and that `[]` and an absent key mean the same thing.
-- [ ] The README shows `-name` and `-*` examples, and explains that `*` includes `subagent`.
-- [ ] The agy note says the floor is ignored with a warning while a role `tools` list is still refused.
-- [ ] `GLOSSARY.md` defines **Default tools** and **Tool list** without implementation detail.
-- [ ] The project spec index lists `docs/issues/default-tools/spec.md`.
-- [ ] `npm test` and `npm run typecheck` pass.
+- [x] The `tools` notes say what setting a floor does to a role that declares no `tools`.
+- [x] The README documents `defaultTools`, its whole-array scope layering, its name-only grammar, and that `[]` and an absent key mean the same thing.
+- [x] The README shows `-name` and `-*` examples, and explains that `*` includes `subagent`.
+- [x] The agy note says the floor and a role `tools` list are both ignored with a warning while the spawn proceeds (ticket 04 changed this from refusal).
+- [x] `GLOSSARY.md` defines **Default tools** and **Tool list** without implementation detail.
+- [x] The project spec index lists `docs/issues/default-tools/spec.md`.
+- [x] `npm test` and `npm run typecheck` pass.
