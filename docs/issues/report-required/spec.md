@@ -1,6 +1,11 @@
 # Spec: the report is the only clean ending
 
-Status: **approved.** Supersedes the "Never" boundary of
+Status: **superseded in part** by `docs/issues/silent-errors/spec.md`. That spec reverses
+the failure path below: a failed child now writes nothing and is never reported. The rule
+of this spec — an unreported turn end is not an ending — still stands. Everything else is
+kept as the historical record of the original change.
+
+Supersedes the "Never" boundary of
 `docs/spec-report-tool.md` ("a forgetful child must still produce a result") and amends
 `docs/intent.md:45` ("Never hang forever on N/N"). Both edits are deliberate and are part
 of this change, not side effects of it.
@@ -13,8 +18,8 @@ of this change, not side effects of it.
 2. The ask is **unconditional**: a `done` settle that was not preceded by
    `subagent_report` never auto-closes the pane, whether the model forgot or refused.
 3. The human is the actor who resolves it, by typing into the pane or steering the child.
-4. Failure and interrupt paths keep today's behaviour: a failure reports and stays alive;
-   an interrupt reports nothing and stays alive.
+4. **Superseded by `docs/issues/silent-errors/spec.md`:** failure and interrupt paths both
+   write nothing and stay alive; neither is reported to the orchestrator.
 5. The watcher needs no new state — "keep waiting" is already its default when no sidecar
    and no exit code exist. The change is entirely child-side.
 
@@ -54,7 +59,7 @@ Nothing else moves. A report is still the only path that closes the pane automat
 | `subagent_report({result})` | `completed / via:"report"`, pane closed |
 | pi exits 0 (user quits the child) | `completed / via:"session-exit"` |
 | pi exits non-zero | `failed / reason:"exit"` |
-| `failed` settle | `failed / reason`, pane left open |
+| `failed` settle | `failed / reason`, pane left open — **superseded by `docs/issues/silent-errors/spec.md`:** no pi child writes one; a legacy or agy-wrapper `failed` payload is still read this way |
 | pane closed by hand | `cancelled` |
 
 The new terminal set is therefore: *reported*, *exited*, *failed*, *closed*. A finished
@@ -135,7 +140,7 @@ waiting", and `via:"turn-end"` is still reachable through a manual quit-then-set
    change.
 2. **No config flag restores auto-close.** CI and the real-child smokes are callers to fix:
    their tasks must instruct the child to call `subagent_report`.
-3. **A settle with no assistant message stays silent too.** `settleReason` returns
-   `failed` / `no-output` there; the settle treats it like the unreported `done` — nothing
-   written, no shutdown, watcher keeps waiting. Only an `error` stop reason still reports
-   `failed` (with the pane left open).
+3. **A settle with no assistant message stays silent too.** It is treated like the
+   unreported `done` — nothing written, no shutdown, watcher keeps waiting.
+   **Superseded by `docs/issues/silent-errors/spec.md`:** an `error` stop reason writes
+   nothing too, so no child error is reported and the pane is left open.

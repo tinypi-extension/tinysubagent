@@ -114,6 +114,23 @@ const plan = parallel
 		]
 	: [request];
 
+/**
+ * Test-harness watchdog only. `waitForSubagent` waits while a child holds its
+ * pane — correct in production, fatal for a smoke with no human at the pane —
+ * so a held child would otherwise hang this script forever. Generous enough for
+ * a real provider retry, but bounded so CI fails loudly instead of hanging.
+ */
+const WATCHDOG_MS = 5 * 60_000;
+const watchdog = setTimeout(() => {
+	const pending = runnings.length === 0
+		? plan.map((entry) => entry.name).join(", ")
+		: runnings.map((running) => `${running.name} (pane ${running.paneId})`).join(", ");
+	fail(
+		`watchdog: no smoke outcome after ${WATCHDOG_MS / 60_000}m for ${pending} — ` +
+			"a held child stays open until a human acts, so this run will never finish on its own",
+	);
+}, WATCHDOG_MS);
+
 console.log(`spawning ${plan.length} child(ren): ${plan.map((entry) => `${entry.name}[${entry.profile ?? "inherited"}]`).join(", ")}`);
 for (const entry of plan) {
 	const started = await spawnOne(entry, context);
@@ -121,12 +138,6 @@ for (const entry of plan) {
 	runnings.push(started.running);
 	console.log(`pane ${started.running.paneId} up for ${entry.name}`);
 }
-
-const timeout = setTimeout(() => {
-	console.error(`FAIL timed out after 180s waiting for ${runnings.length} subagent(s)`);
-	for (const running of runnings) void herdrPaneClose(running.paneId);
-	process.exit(1);
-}, 180_000);
 
 const settled = await Promise.all(
 	runnings.map(async (running) => ({
@@ -140,7 +151,6 @@ const settled = await Promise.all(
 		elapsedMs: Date.now() - running.startedAt,
 	})),
 );
-clearTimeout(timeout);
 
 console.log("\n── outcomes ──");
 for (const result of settled) {
@@ -166,4 +176,5 @@ if (completed !== plan.length) {
 	process.exit(2);
 }
 console.log(`\nPASS ${completed} completed, all reported together`);
+clearTimeout(watchdog);
 process.exit(0);

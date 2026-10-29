@@ -65,21 +65,19 @@ One sidecar, extended additively. `<sessionFile>.done`:
 version field: an old reader ignores `result` and still works, and a new reader tolerates
 its absence.
 
-`message` is optional too, and is written only on a failure that left **no turn** in the
-session to explain itself: pi refuses to start a run when no model is selected or the
-provider has no usable credentials, and it throws out of `prompt()` before the agent phase.
-No run means no settle hook, so the refusal is reported from the child's `input` hook
-instead (`docs/spec-child-preflight-failure.md`), and the message is the orchestrator's only
-account of it. Where a turn does exist, the session still speaks for the failure, and the
-order is `report message ?: last assistant text ?: session failure note`: a message is
-written only for the run that produced no turn, so it is always fresher than the scrape.
+`message` is optional and legacy. Pi refuses to start a run when no model is selected or
+the provider has no usable credentials, throwing out of `prompt()` before the agent phase;
+that refusal now writes nothing and the child stays at its prompt, so the orchestrator is
+never told. The `input` hook and child-side preflight that once reported it are deleted
+(see `docs/issues/silent-errors/spec.md`). A `failed` payload with `message` is still read
+and classified exactly as before for older builds; the agy launch wrapper still stamps
+`failed / no-output` after an exit-0 run with no report.
 
 `aborted` is a reason the reader tolerates, but one the child no longer writes. The
-interrupt rule lives in the child: a run whose own abort signal was set — or whose stop
-reason pi labelled `aborted` — writes *nothing at all*, because the child is alive at its
-prompt and has not finished. The signal is checked because the stop reason is not enough:
-pi files the common case, an Esc that lands during a tool call, as a plain `error`
-("This operation was aborted"), which no stop reason can tell apart from a real failure.
+interrupt rule lives in the child: a run pi labelled `aborted` writes *nothing at all*,
+because the child is alive at its prompt and has not finished. It does not need to tell an
+Esc from a real failure — every non-clean settle is silent, including the tool-call Esc pi
+files as a plain `error`.
 The watcher additionally drops an `aborted` report and keeps watching the same pane, so an
 interrupt cannot end a batch from either side. The batch ends on the child's next report, or
 when the pane goes away. A child that is interrupted and then never reports again holds its
@@ -189,7 +187,7 @@ doing nothing else, and the result still arrives as one steer message. The chang
 | File | Change |
 |---|---|
 | `src/types.ts` | `REPORT_TOOL_NAME` constant |
-| `src/children/child.ts` | the tool path uses a new `writeResultReport(result)` emitting `{type:"done",result}`; the legacy `writeReportFile(settle, detail?)` still emits content-free reports for the settle and failure paths; both share one atomic temp-file+rename writer |
+| `src/children/child.ts` | the tool path uses a new `writeResultReport(result)` emitting `{type:"done",result}`; the legacy `writeReportFile(settle, detail?)` emitted content-free reports for the settle and failure paths at the time (both paths are gone — see `docs/issues/silent-errors/spec.md`); both shared one atomic temp-file+rename writer |
 | `src/children/launch.ts` | reminder in `buildTaskMarkdown` only — it serializes whatever `tools` it is handed; the injection belongs to `spawn.ts` |
 | `src/children/spawn.ts` | inject `REPORT_TOOL_NAME` into the expanded tool list |
 | `src/children/watcher.ts` | `readReport` reads `result`; `via: "report"` outcome |
