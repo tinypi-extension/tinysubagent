@@ -4,11 +4,11 @@
  * Three inputs decide it: the configured floor (`defaultTools`), whatever the
  * role's `tools` frontmatter declares, and the orchestrator's tool registry.
  * Keeping the composition here — pure, with no filesystem and no pane — is what
- * lets the union rule be tested directly instead of through a spawn.
+ * lets the union and negation rules be tested directly instead of through a
+ * spawn.
  *
- * The rules live behind one request/result pair so later additions (role
- * negation, the floor opt-out, registry warnings) extend the vocabulary without
- * changing the seam.
+ * The rules live behind one request/result pair so later additions (the floor
+ * opt-out, registry warnings) extend the vocabulary without changing the seam.
  */
 
 import { expandToolPatterns } from "./tool-patterns.ts";
@@ -40,6 +40,30 @@ export interface ToolList {
 }
 
 /**
+ * Split the role's entries into what it adds and what it subtracts.
+ *
+ * Negation is spelling, not a tool name: the leading `-` is stripped here so it
+ * can never be forwarded to the child, which would read it as a literal name.
+ */
+function splitDeclared(declared: readonly string[]): { positives: string[]; negatives: string[] } {
+	const positives: string[] = [];
+	const negatives: string[] = [];
+	for (const entry of declared) {
+		if (!entry.startsWith("-")) {
+			positives.push(entry);
+			continue;
+		}
+		const name = entry.slice(1);
+		// `-*` means "drop the whole floor", not "subtract the tool named `*`".
+		// That rule is a later ticket; leaving the branch here keeps it in one place
+		// and stops the entry from being reported as an unknown tool in the meantime.
+		if (name === "*") continue;
+		negatives.push(name);
+	}
+	return { positives, negatives };
+}
+
+/**
  * Resolve the child's tool list.
  *
  * An allowlist exists only when someone asked for one: the role declares
@@ -53,6 +77,11 @@ export interface ToolList {
  * ambient config written for every role at once, so one `subagent` in it must
  * not refuse every spawn in the project. A role naming it itself still refuses
  * in the spawner, because that is a mistake its author can see and fix.
+ *
+ * Deny wins regardless of position, so `-write, write` and `write, -write` mean
+ * the same thing. A list that positives fill and negations then empty is still
+ * an allowlist — of the report tool alone — because falling back to "no
+ * allowlist" would widen the child to every tool the role just subtracted.
  */
 export function resolveToolList(input: ToolListInput): ToolList {
 	const warnings: string[] = [];
@@ -75,23 +104,51 @@ export function resolveToolList(input: ToolListInput): ToolList {
 
 	if (!intent) return { allowlist: false, tools: [], warnings };
 
-	const expanded = expandToolPatterns(declared, input.registry);
+	const { positives, negatives } = splitDeclared(declared);
+
+	const expanded = expandToolPatterns(positives, input.registry);
 	if (expanded.unmatched.length > 0) {
 		warnings.push(
 			`agent "${input.role}": unknown tool(s) ${expanded.unmatched.join(", ")} — the child may be missing what it needs.`,
 		);
 	}
 
-	const tools: string[] = [];
+	// The report tool is the hand-back contract, so denying it is ignored rather
+	// than honoured; a child without it could never deliver a result.
+	const denied = new Set<string>();
+	for (const name of negatives) {
+		if (name === REPORT_TOOL_NAME) {
+			warnings.push(`agent "${input.role}": -${name} is ignored — the report tool is always allowed.`);
+			continue;
+		}
+		denied.add(name);
+		if (!input.registry.includes(name)) {
+			warnings.push(
+				`agent "${input.role}": unknown tool(s) -${name} — negation matched no known tool.`,
+			);
+		}
+	}
+
+	const composed: string[] = [];
 	const seen = new Set<string>();
 	for (const name of [...floor, ...expanded.tools]) {
 		if (seen.has(name)) continue;
 		seen.add(name);
-		tools.push(name);
+		composed.push(name);
 	}
 
-	if (tools.length === 0) return { allowlist: false, tools: [], warnings };
+	// Nothing to subtract from: every pattern matched nothing (or only negations
+	// were declared). That is "nothing resolved", not a narrowed child.
+	if (composed.length === 0) return { allowlist: false, tools: [], warnings };
 
-	if (!seen.has(REPORT_TOOL_NAME)) tools.push(REPORT_TOOL_NAME);
+	const tools = composed.filter((name) => !denied.has(name));
+	if (tools.length === 0) {
+		warnings.push(
+			`agent "${input.role}": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+		);
+		return { allowlist: true, tools: [REPORT_TOOL_NAME], warnings };
+	}
+
+	if (!tools.includes(REPORT_TOOL_NAME)) tools.push(REPORT_TOOL_NAME);
 	return { allowlist: true, tools, warnings };
 }

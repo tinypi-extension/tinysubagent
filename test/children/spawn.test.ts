@@ -423,6 +423,16 @@ test("a wildcard that matches nothing does not produce a one-tool allowlist", as
 	assert.equal(script.includes("--tools"), false);
 });
 
+test("a role's negation never reaches the child, and the child gets plain names only", async () => {
+	// Negation is composed inside the resolver. Forwarding `-bash` would hand pi a
+	// tool name that does not exist, so the wrapper must carry the surviving names
+	// and nothing else.
+	const negated: AgentDef = { ...worker, name: "negated", tools: ["read", "bash", "-bash"] };
+	const script = await spawnInScratch(negated);
+	assert.match(script, new RegExp(`'--tools' 'read,${REPORT_TOOL_NAME}'`));
+	assert.equal(script.includes("-bash"), false);
+});
+
 test("the spawn name becomes the child's own session display name", async () => {
 	// The child pi is started with `--name`, so its header and session list show a
 	// real label instead of the session file's generated id. Passed verbatim.

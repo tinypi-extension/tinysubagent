@@ -25,7 +25,7 @@ Index of project specs. Read the linked spec before changing the area it covers.
 
 ### Issue tracker
 
-Issues live as markdown under `docs/issues/<feature>/` (`spec.md`, `plan.md`, `todo.md`, `spike.md`). See `docs/agents/issue-tracker.md`.
+Issues live as markdown under `docs/issues/<feature>/`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
