@@ -664,3 +664,33 @@ test("spawnOne: without a tracker the open argv is unchanged", async () => {
 	assert.equal(layoutCallIndices(calls).length, 0);
 	assert.deepEqual(calls[1], ["pane", "rename", NEW, "worker"]);
 });
+
+test("a configured floor reaches a child that declares no tools", async () => {
+	// The floor is the whole point of the key: a role with no `tools` frontmatter
+	// stops inheriting everything and starts with exactly these names.
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-floor-"));
+	const saved = process.env.HERDR_BIN_PATH;
+	process.env.HERDR_BIN_PATH = join(dir, "no-herdr-here");
+	try {
+		const open: AgentDef = { ...worker, name: "open", tools: undefined };
+		const base = context([open]);
+		const result = await spawnOne(
+			{ agent: "open", task: "x", name: "open" },
+			{
+				...base,
+				cwd: dir,
+				agentDir: dir,
+				sessionDir: dir,
+				env: {},
+				config: { ...base.config, defaultTools: ["read", "bash"] },
+			},
+		);
+		assert.equal(result.ok, false);
+		const script = writtenScript(dir, "sid");
+		assert.match(script, new RegExp(`'--tools' 'read,bash,${REPORT_TOOL_NAME}'`));
+	} finally {
+		if (saved === undefined) delete process.env.HERDR_BIN_PATH;
+		else process.env.HERDR_BIN_PATH = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

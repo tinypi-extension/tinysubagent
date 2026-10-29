@@ -1209,3 +1209,93 @@ test("classifierModel makes the systemOne keys inert in both directions", () => 
 	assert.match(legacy.warnings[1] ?? "", /has no "systemOneAPIKey"/);
 	assertRedacted(legacy.warnings, S1_KEY, S1_URL);
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// defaultTools: the floor every child starts from
+// ────────────────────────────────────────────────────────────────────────────
+
+test("an absent defaultTools resolves to an empty array without a warning", () => {
+	// Absence is the documented default state, exactly like an absent env map.
+	const { config, warnings } = read(missingFile());
+	assert.deepEqual(config.defaultTools, []);
+	assert.deepEqual(warnings, []);
+});
+
+test("defaultTools of plain names is carried through as written", () => {
+	const file = writeConfig({ defaultTools: ["read", "bash", "codegraph_query"] });
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.defaultTools, ["read", "bash", "codegraph_query"]);
+	assert.deepEqual(warnings, []);
+});
+
+test("a project defaultTools replaces a global one wholesale", () => {
+	// A narrower repo floor must be able to overrule a wider machine-wide one, so
+	// the two arrays never union.
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, { defaultTools: ["read", "bash", "edit", "write"] });
+	writeProject(cwd, CONFIG_FILENAME, { defaultTools: ["read"] });
+
+	const { config, warnings } = loadConfig(cwd, agentDir);
+	assert.deepEqual(config.defaultTools, ["read"]);
+	assert.deepEqual(warnings, []);
+});
+
+test("a project defaultTools wins even when it is an empty array", () => {
+	// `[]` is a stated key, so it means "no floor" rather than falling through.
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, { defaultTools: ["read", "bash"] });
+	writeProject(cwd, CONFIG_FILENAME, { defaultTools: [] });
+
+	assert.deepEqual(loadConfig(cwd, agentDir).config.defaultTools, []);
+});
+
+test("the PI_TINYSUBAGENT_CONFIG override is the only file read for defaultTools", () => {
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, { defaultTools: ["read", "bash"] });
+	const override = writeConfig({ defaultTools: ["edit"] });
+
+	withEnv(override, () => {
+		assert.deepEqual(loadConfig(cwd, agentDir).config.defaultTools, ["edit"]);
+	});
+});
+
+test("a non-array defaultTools warns and drops the whole key", () => {
+	// The winning file stated the key, so its malformed value decides: the lower
+	// scope does not get to stand in behind it.
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, CONFIG_FILENAME, { defaultTools: ["read"] });
+	const file = writeProject(cwd, CONFIG_FILENAME, { defaultTools: "read,bash" });
+
+	const { config, warnings } = loadConfig(cwd, agentDir);
+	assert.deepEqual(config.defaultTools, []);
+	assert.deepEqual(warnings, [
+		`tinysubagent: "defaultTools" must be an array in ${file}; ignoring it.`,
+	]);
+});
+
+test("a non-string defaultTools entry warns and the valid entries still apply", () => {
+	const file = writeConfig({ defaultTools: ["read", 7, "bash"] });
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.defaultTools, ["read", "bash"]);
+	assert.deepEqual(warnings, [
+		`tinysubagent: defaultTools entry 7 in ${file} is not a string; ignoring it.`,
+	]);
+});
+
+test("a defaultTools entry containing * warns and is dropped", () => {
+	const file = writeConfig({ defaultTools: ["read", "codegraph_*", "bash"] });
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.defaultTools, ["read", "bash"]);
+	assert.deepEqual(warnings, [
+		`tinysubagent: defaultTools entry "codegraph_*" in ${file} is not supported; ignoring it.`,
+	]);
+});
+
+test("a defaultTools entry beginning with - warns and is dropped", () => {
+	const file = writeConfig({ defaultTools: ["read", "-write", "bash"] });
+	const { config, warnings } = read(file);
+	assert.deepEqual(config.defaultTools, ["read", "bash"]);
+	assert.deepEqual(warnings, [
+		`tinysubagent: defaultTools entry "-write" in ${file} is not supported; ignoring it.`,
+	]);
+});
