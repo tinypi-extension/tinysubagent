@@ -6,9 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] A floor naming `subagent` produces a warning and a successful spawn, with `subagent` absent from the child's allowlist.
-- [ ] A role naming `subagent` still refuses to spawn with the existing explanatory error.
-- [ ] A role declaring `*` still refuses to spawn, because expansion includes `subagent`.
-- [ ] An agy-profile spawn with a non-empty floor warns that the floor is ignored and launches.
-- [ ] An agy-profile spawn for a role that declares `tools` still refuses, unchanged.
-- [ ] `npm test` and `npm run typecheck` pass.
+- [x] A floor naming `subagent` produces a warning and a successful spawn, with `subagent` absent from the child's allowlist.
+- [x] A role naming `subagent` still refuses to spawn with the existing explanatory error.
+- [x] A role declaring `*` still refuses to spawn, because expansion includes `subagent`.
+- [x] An agy-profile spawn with a non-empty floor warns that the floor is ignored and launches.
+- [x] An agy-profile spawn for a role that declares `tools` warns that the list is ignored and
+      launches, matching what `main` already did (see the agy correction in the spec).
+- [x] `npm test` and `npm run typecheck` pass.

@@ -6,9 +6,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] A role listing `-*, read, grep` on a wide floor launches with exactly `read`, `grep`, and the report tool.
-- [ ] A role listing `-*` alone on a non-empty floor launches with only the report tool.
-- [ ] `-*` on an empty floor is a no-op that raises no warning.
-- [ ] `-*` raises no unmatched-pattern warning.
-- [ ] A role listing `-*` plus a positive glob still expands that glob against the registry.
-- [ ] `npm test` and `npm run typecheck` pass.
+- [x] A role listing `-*, read, grep` on a wide floor launches with exactly `read`, `grep`, and the report tool.
+- [x] A role listing `-*` alone on a non-empty floor launches with only the report tool.
+- [x] `-*` on an empty floor is a no-op that raises no warning.
+- [x] `-*` raises no unmatched-pattern warning.
+- [x] A role listing `-*` plus a positive glob still expands that glob against the registry.
+- [x] `npm test` and `npm run typecheck` pass.

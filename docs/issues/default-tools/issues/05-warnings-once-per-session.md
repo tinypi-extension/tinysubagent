@@ -6,8 +6,8 @@
 
 **Status:** ready-for-agent
 
-- [ ] The first spawn of a session reports an unmatched floor name; later spawns in the same session do not repeat it.
-- [ ] The same once-per-session rule applies to a dropped `subagent` floor entry and to an ignored `-subagent_report`.
-- [ ] A role's own unmatched tool pattern still warns on every acknowledgment for that role.
-- [ ] The warning channel for config shape errors still reports at startup and is not duplicated onto spawns.
-- [ ] `npm test` and `npm run typecheck` pass.
+- [x] The first spawn of a session reports an unmatched floor name; later spawns in the same session do not repeat it.
+- [x] The same once-per-session rule applies to a dropped `subagent` floor entry and to an ignored `-subagent_report`.
+- [x] A role's own unmatched tool pattern still warns on every acknowledgment for that role.
+- [x] The warning channel for config shape errors still reports at startup and is not duplicated onto spawns.
+- [x] `npm test` and `npm run typecheck` pass.

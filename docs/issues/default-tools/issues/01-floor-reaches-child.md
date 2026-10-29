@@ -8,11 +8,11 @@ This ticket lands the single pure tool-list resolver the later tickets build on:
 
 **Status:** ready-for-agent
 
-- [ ] A settings file with `defaultTools` of plain names launches a role that declares no `tools` with exactly those names plus the report tool.
-- [ ] A project-scope `defaultTools` replaces a global one wholesale; entries are not unioned.
-- [ ] An absent `defaultTools` resolves to an empty array without a warning.
-- [ ] A non-array `defaultTools`, a non-string entry, and an entry containing `*` or starting with `-` each warn at startup in the established config-warning form, and the valid entries still apply.
-- [ ] A role's `tools` positives are added to the floor, and its `*` entries still expand against the registry.
-- [ ] A role with no `tools` frontmatter and an empty floor launches with no tool allowlist flag, byte-identical to today.
-- [ ] The resolver is a single pure function covered by table-driven tests for every rule above, with no filesystem or pane involved.
-- [ ] `npm test` and `npm run typecheck` pass, and the existing suites pass unmodified.
+- [x] A settings file with `defaultTools` of plain names launches a role that declares no `tools` with exactly those names plus the report tool.
+- [x] A project-scope `defaultTools` replaces a global one wholesale; entries are not unioned.
+- [x] An absent `defaultTools` resolves to an empty array without a warning.
+- [x] A non-array `defaultTools`, a non-string entry, and an entry containing `*` or starting with `-` each warn at startup in the established config-warning form, and the valid entries still apply.
+- [x] A role's `tools` positives are added to the floor, and its `*` entries still expand against the registry.
+- [x] A role with no `tools` frontmatter and an empty floor launches with no tool allowlist flag, byte-identical to today.
+- [x] The resolver is a single pure function covered by table-driven tests for every rule above, with no filesystem or pane involved.
+- [x] `npm test` and `npm run typecheck` pass, and the existing suites pass unmodified.
