@@ -1,7 +1,10 @@
 # Spec: a run pi refuses to start is still reported
 
-Status: implemented. Extends `docs/intent.md` (failure reporting) and the
-failure half of `docs/spec-report-tool.md`; it contradicts neither.
+Status: **superseded** by `docs/issues/silent-errors/spec.md`. A prompt pi refuses
+writes no sidecar, the child stays at its prompt, and the orchestrator is never told —
+the same silent hold as an unreported turn end. The child-side preflight and the
+harness's refusal hook are deleted, so no child path runs a credential check. Everything
+below is kept as the historical record of the reversed design.
 
 ## Assumptions I'm making
 
@@ -42,16 +45,18 @@ One capability. No capability map.
 | Esc / abort | nothing — the wait continues on the live pane | unchanged |
 | **pi refuses the prompt** (no model selected, no usable credentials for the provider) | **nothing** — no run, so no `agent_end`, so no `agent_settled` | `{"type":"failed","reason":"error","message":...}` |
 
-> **Superseded:** `docs/issues/silent-errors/spec.md` reverses the `Settles error` row. An
-> errored settle — a 503, an expired credential, a bad model, exhausted retries — now writes
-> nothing and holds the pane, exactly like an interrupt, so a human can fix the provider and
-> drive the same child on to `subagent_report`. The sidecar *reader* described below is
-> unchanged.
+> **Superseded:** `docs/issues/silent-errors/spec.md` reverses both the `Settles error`
+> and `pi refuses the prompt` rows. An errored settle — a 503, an expired credential, a
+> bad model, exhausted retries — writes nothing and holds the pane, exactly like an
+> interrupt. A refused prompt writes nothing either: the child stays at its prompt, a
+> human fixes it and drives the child on to `subagent_report`, and closing the pane is
+> what ends the wait, as `cancelled`. The sidecar *reader* described below is unchanged.
 
-The last row is a real hang, reproduced end to end: a child spawned with an
+The last row used to be a real hang, reproduced end to end: a child spawned with an
 unauthenticated provider prints `No API key found for oc-openai.` in its pane, writes no
 sidecar, and the orchestrator's batch waits on it indefinitely (`scripts/smoke-provider-error.ts
---no-auth`, which failed on a 90s watchdog before this change and passes in ~1s after it).
+--no-auth`). Superseded: that wait is now the intended silent hold; closing the pane ends
+it as `cancelled`.
 
 ## The data contract
 
@@ -102,9 +107,14 @@ child knows about pi's verdict.
 
 ## Acceptance criteria
 
-1. **Esc is still silent.** No sidecar, no steer, pane open, wait continues — *until pi
-   refuses that child's next run*, which is a failure and is reported (see #6).
-   Pinned by `npm run smoke:interrupt`, `test/children/child.test.ts` (three interrupt cases).
+> **Superseded (refusal):** criteria 3, 6, and 7 describe the removed child-side preflight
+> and are no longer the contract. A refusal writes nothing and holds the pane; see
+> `docs/issues/silent-errors/spec.md`.
+
+1. **Esc is still silent.** No sidecar, no steer, pane open, wait continues.
+   A redirect that cannot start writes nothing either, so there is no failure report
+   for the interrupt rule to swallow.
+   Pinned by `npm run smoke:interrupt`, `test/children/child.test.ts` (interrupt cases).
 2. **In-run failures still reach the orchestrator with their reason.** Pinned by
    `test/children/child.test.ts`, `test/children/watcher.test.ts`, and `npm run smoke:provider-error`
    (503, with and without pi's retries).

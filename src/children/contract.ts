@@ -6,9 +6,7 @@
  * recipe), so they live on their own to keep those two from importing each
  * other. `errorMessage` sits here for the same reason: both sides name errors.
  *
- * Keep this module free of implementation imports — types only. In particular
- * `errorMessage` is deliberately a separate implementation from `preflight.ts`'s
- * `errorText`; the two are not to be unified.
+ * Keep this module free of implementation imports — types only.
  */
 
 import type { TinysubagentConfig } from "../config/config.ts";

@@ -100,11 +100,10 @@ test("agy adapter maps the shared thinking levels to effort, never print mode", 
 	assert.deepEqual(noLevel, ["agy", "--model", "model", "-i", "@/task.md"]);
 });
 
-test("agy is report-only and does not use the pi extension", async () => {
+test("agy is report-only and does not use the pi extension", () => {
 	assert.equal(agyHarness.supportsExtension, false);
 	assert.equal(agyHarness.sessionFileFor("/cwd", "/agent"), "");
 	assert.equal(agyHarness.readTurn("/transcript"), null);
-	assert.equal(await agyHarness.readRefusal({} as never), null);
 });
 
 test("harnessFor resolves agy and pi for their respective profiles", () => {
