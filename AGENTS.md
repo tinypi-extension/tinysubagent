@@ -17,6 +17,7 @@ Index of project specs. Read the linked spec before changing the area it covers.
 - [docs/issues/report-required/spec.md](docs/issues/report-required/spec.md): A done settle with no subagent_report writes nothing and keeps the child pane open; only report, exit, failure, or close ends a wait.
 - [docs/issues/report-tool/spec.md](docs/issues/report-tool/spec.md): Defines the subagent_report tool: the payload lives in the sidecar, not the child session, and report text is authoritative over the session scrape.
 - [docs/issues/settings-tui/spec.md](docs/issues/settings-tui/spec.md): Defines /subagent-settings, a TUI editing enableProfiles and profiles in the file resolution reads; comments must survive and every change writes immediately.
+- [docs/issues/silent-errors/spec.md](docs/issues/silent-errors/spec.md): An errored or unstartable run is held at its pane like an unreported turn end; the child writes only success (status: needs-triage).
 - [docs/issues/systemone-routing/spec.md](docs/issues/systemone-routing/spec.md): SystemOne profile routing: a configured API key removes the profile parameter and a model picks a profile per task; project-scope keys are inert.
 <!-- spec-memory:end -->
 
