@@ -8,8 +8,6 @@
  * stay CLI-agnostic.
  */
 
-import type { PreflightContext } from "../preflight.ts";
-
 /** Which CLI a child runs on. */
 export type HarnessId = "pi" | "agy";
 
@@ -54,10 +52,4 @@ export interface ChildHarness {
 	 * transcript carries no usable verdict.
 	 */
 	readTurn(file: string): TurnInfo | null;
-	/**
-	 * The refusal this harness is about to raise for a run that never starts,
-	 * or null when it will start. pi: the preflight check. agy: always null in
-	 * v1 — startup failures surface as a non-zero exit instead.
-	 */
-	readRefusal(ctx: PreflightContext): Promise<string | null>;
 }

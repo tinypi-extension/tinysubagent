@@ -7,7 +7,7 @@ Index of project specs. Read the linked spec before changing the area it covers.
 
 ### docs/issues
 
-- [docs/issues/child-preflight-failure/spec.md](docs/issues/child-preflight-failure/spec.md): A pi refusal to start must still write a failed sidecar with an optional message, so the orchestrator is not left hanging.
+- [docs/issues/child-preflight-failure/spec.md](docs/issues/child-preflight-failure/spec.md): Superseded by silent-errors: a pi refusal to start writes nothing and the child waits at its prompt for a human.
 - [docs/issues/code-layout/spec.md](docs/issues/code-layout/spec.md): Splits index.ts and reorganizes src/ into role folders via five ordered modules; behavior-preserving, only src/paths.ts reads import.meta.url.
 - [docs/issues/config-env/spec.md](docs/issues/config-env/spec.md): Adds a top-level env map to the settings file, merged per key project-over-global and exported before launch-owned vars; values must be strings.
 - [docs/issues/agy-harness/spec.md](docs/issues/agy-harness/spec.md): Allows profiles to select pi or agy, with shared thinking levels (mapped to agy's effort flag), project-cwd execution with untouched project hooks, report-sidecar completion, and tested child outcomes.

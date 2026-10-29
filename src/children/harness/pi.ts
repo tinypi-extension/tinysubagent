@@ -11,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 
 import { childSessionDirFor, timestampForSession } from "../launch-paths.ts";
-import { preflightRefusal, type PreflightContext } from "../preflight.ts";
 import { readFinalMessage } from "../session.ts";
 import type { ChildHarness, HarnessArgvSpec, TurnInfo } from "./types.ts";
 
@@ -51,8 +50,5 @@ export const piHarness: ChildHarness = {
 	sessionFileFor,
 	readTurn(file: string): TurnInfo | null {
 		return { text: readFinalMessage(file) };
-	},
-	readRefusal(ctx: PreflightContext): Promise<string | null> {
-		return preflightRefusal(ctx);
 	},
 };

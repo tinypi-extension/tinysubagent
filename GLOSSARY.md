@@ -70,12 +70,8 @@ _Avoid_: cancel, abort, kill (to cancel is to lose the pane)
 What finally ended a wait: completed, failed, or cancelled — plus how that was learned (report, exit, or a vanished pane).
 _Avoid_: status, state, verdict (a verdict is the internal reading that produces an outcome)
 
-**Preflight**:
-The cheap check that a child would actually start, made before a pane is opened.
-_Avoid_: validation, sanity check
-
 **Refusal**:
-Preflight's negative answer: pi would decline to run. A refused spawn must still be reported as failed, so the orchestrator is never left hanging.
+pi declining to run the prompt at all — no usable model or credentials. Nothing is reported and the child stays at its prompt, so a human can log in and drive it on.
 _Avoid_: error, failure (a refusal happens before any run exists)
 
 **Hold open**:

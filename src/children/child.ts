@@ -61,33 +61,26 @@
  *
  * ## The run that never started
  *
- * One failure is not a settle, because no run happened: pi validates the selected
- * model and the provider's credentials inside `prompt()` and *throws* before the
- * agent phase begins when either is missing — "No API key found for oc-openai"
- * being the common one. No run means no `agent_end` and no `agent_settled`, so
- * none of the above runs, and the watcher waits forever on a child that is
- * sitting at its prompt having done nothing. That is a hung batch with nothing
- * on screen to explain it.
+ * pi validates the selected model and the provider's credentials inside
+ * `prompt()` and *throws* before the agent phase begins when either is missing —
+ * "No API key found for oc-openai" being the common one. No run means no
+ * `agent_end` and no `agent_settled`, so none of the above runs: the child sits
+ * at its prompt having written nothing, and the batch waits silently on the live
+ * pane. That is the same wait as an unreported turn end, with the same resolution:
+ * a human runs `/login`, drives the child on, and the report lands.
  *
- * The `input` hook is the one place that can see this coming: it fires inside the
- * same `prompt()` call, immediately before the validation. So the child repeats
- * pi's preflight — the cheap configured check, then the provider lookup pi would
- * fall back to — and, when both come back empty, reports the failure itself,
- * carrying the reason, because pi never wrote a turn to read it back from.
- *
- * The run is the only thing skipped: the child stays alive at its prompt, which
- * is where the user runs `/login` and retries. Reporting is what keeps the
- * orchestrator from waiting on a child that cannot start.
+ * The child deliberately does not mirror pi's check. A check here could only
+ * write a failure for a run that never existed, and that write would end the
+ * batch while the pane it names is still fixable.
  */
 
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { REPORT_TOOL_NAME } from "../types.ts";
-import { writeReportFile, writeResultReport } from "./report.ts";
+import { writeResultReport } from "./report.ts";
 import { readFinalMessage } from "./session.ts";
 import { finishedCleanly } from "./settle.ts";
 import type { TurnMessage } from "./settle.ts";
-import { errorText, preflightFailure, preflightRefusal } from "./preflight.ts";
 
 /** How many times one child may be nudged to report before it is left alone. */
 export const MAX_REPORT_REMINDERS = 2;
@@ -166,36 +159,6 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 
 	pi.on("agent_end", (event) => {
 		lastMessages = event.messages as unknown as TurnMessage[];
-	});
-
-	// pi throws out of `prompt()` when the model or its credentials are missing,
-	// and a run that never started settles nothing — so the failure would go
-	// unreported and the orchestrator would wait on an idle child forever. The
-	// input hook runs inside that same `prompt()` call, just before the check, so
-	// this is the only place able to report it.
-	pi.on("input", async (_event, ctx) => {
-		if (finished) return;
-		// A steer arriving mid-run is not a refusal: pi queues it, and the run it
-		// joins reports for itself when it settles.
-		if (!ctx.isIdle()) return;
-
-		let refusal: string | null;
-		try {
-			refusal = await preflightRefusal(ctx);
-		} catch (error) {
-			// pi swallows a hook that throws, so an unexpected one here would be the
-			// same silence this hook exists to break. Report it rather than lose it.
-			refusal = preflightFailure({
-				provider: ctx.model?.provider ?? null,
-				usesOAuth: false,
-				cause: errorText(error),
-			});
-		}
-		// The lookup above awaits: a report may have landed while it ran.
-		if (finished) return;
-		if (refusal === null) return;
-
-		writeReportFile("failed", "error", refusal);
 	});
 
 	pi.on("agent_settled", async () => {

@@ -45,7 +45,4 @@ export const agyHarness: ChildHarness = {
 	readTurn(_file: string): TurnInfo | null {
 		return null;
 	},
-	async readRefusal(): Promise<string | null> {
-		return null;
-	},
 };

@@ -18,9 +18,10 @@
  * retry-and-give-up path — the path a real provider outage actually takes, and
  * the one most likely to write something early. Both shapes must hold silently.
  *
- * `--no-auth` drops the child's credentials instead, which makes pi refuse the
- * prompt before any run starts. That shape is still owned by the refusal ticket
- * (02); this mode keeps its existing smoke until that ticket rewrites it.
+ * `--no-auth` drops the child's credentials instead, so pi refuses the prompt
+ * before any run starts. A refusal is not an ending either: nothing reaches the
+ * orchestrator while the pane is open, and closing that pane by hand is what
+ * ends the batch — as `cancelled`.
  */
 
 import { strict as assert } from "node:assert";
@@ -285,26 +286,52 @@ async function waitUntil(ready: () => boolean | Promise<boolean>, ms: number): P
 const bodyText = () => sent.map((entry) => entry.message.content).join("\n\n");
 
 if (noAuth) {
-	// ── The refused shape (ticket 02 owns its new contract) ─────────────────
-	const steerArrived = await waitUntil(() => sent.length > 0, 90_000);
-	if (!steerArrived) {
+	// ── The refused shape: a prompt pi will not start holds the pane ─────────
+	// The child has no usable credentials, so pi refuses the prompt before any
+	// run starts. Nothing may reach the orchestrator: a refusal is not an ending,
+	// and the pane is where the human runs /login and drives the child on.
+	const holdMs = 15_000;
+	console.log(`\n── holding ${holdMs / 1000}s with no usable credentials ──`);
+	await sleep(holdMs);
+
+	if (sent.length !== 0) {
 		fail(
-			"timed out after 90s: pi refused the run and the orchestrator was never told — " +
-				"the batch hangs here.",
+			`the orchestrator was steered for a prompt pi refused — a refusal is not an ending.\n\n${bodyText()}`,
 		);
 	}
-	const body = bodyText();
-	assert.equal(sent.length, 1, `expected one steer message, got ${sent.length}`);
-	assert.ok(body.includes("failed (error)"), `expected \`failed (error)\`:\n${body}`);
-	assert.ok(
-		body.includes("no API key") && body.includes("/login oc-openai"),
-		`the refusal reason is missing from the report:\n${body}`,
-	);
+	const heldAlive = await herdrPaneExists(paneId);
+	console.log(`no steer after ${holdMs / 1000}s; child pane still open: ${heldAlive}`);
+	if (heldAlive !== true) {
+		fail("the child pane closed on a refused prompt — the human cannot log in and retry");
+	}
+	// Pin the shape itself, not just the silence: pi refused the prompt before
+	// any run started. The refusal is word-wrapped to the pane width, so match
+	// its stable words rather than one line.
+	const heldText = await paneText();
+	const refused = /no api key/i.test(heldText) && heldText.includes("oc-openai");
+	console.log(`child pane shows pi's refusal: ${refused}`);
+	if (!refused) fail(`the child did not refuse the prompt as expected:\n${heldText}`);
 
-	const alive = await herdrPaneExists(paneId);
-	console.log(`child pane still open: ${alive}`);
+	// The human gave up instead: closing the pane is what ends this wait.
+	console.log("\n── closing the refused child's pane by hand ──");
+	await run("herdr", ["pane", "close", paneId]);
+
+	const cancelled = await waitUntil(() => sent.length > 0, 30_000);
+	if (!cancelled) {
+		reap();
+		cleanup();
+		fail("closing the refused child's pane did not end the batch");
+	}
+	const body = bodyText();
+	assert.equal(sent.length, 1, `expected exactly one steer message, got ${sent.length}:\n${body}`);
+	assert.ok(
+		body.includes("cancelled (pane closed without reporting)"),
+		`expected the batch to end cancelled:\n${body}`,
+	);
+	console.log("\n── steer message ──\n" + body);
+
 	cleanup();
-	console.log("\nPASS the refused shape is still reported as a failure (ticket 02 will invert it)");
+	console.log("\nPASS a refused prompt held silently, and closing the pane ended the batch cancelled");
 	process.exit(0);
 }
 
