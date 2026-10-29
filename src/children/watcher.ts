@@ -4,11 +4,10 @@
  * Two files tell the whole story, both living beside the child's session file:
  *
  *   <sessionFile>.done      the child's report: `{"type":"done","result":...}`
- *                           when it handed its result back explicitly, or a
- *                           content-free `{"type":"done"}` / 
- *                           `{"type":"failed","reason":...}` from the settle hook,
- *                           or a `{"type":"failed","reason":...,"message":...}` when
- *                           pi refused the run and there is no turn to read it from
+ *                           when it handed its result back explicitly. Older
+ *                           builds also wrote a content-free `{"type":"done"}` or
+ *                           a `{"type":"failed","reason":...,"message":...}`;
+ *                           the reader still accepts every one of those shapes.
  *   <sessionFile>.exitcode  written by the wrapper: `"<code> <runId>"`
  *
  * The exit-code sidecar carries the run id because it is the one signal
@@ -37,11 +36,12 @@ const PANE_CHECK_EVERY = 5;
 export type FailureReason = "error" | "exit" | "no-output";
 
 export type SubagentOutcome =
-	/** The child reported a finished turn, exited pi cleanly, or handed back a result. */
+	/** The child handed back a result, exited pi cleanly, or an older build declared a finished turn. */
 	| { kind: "completed"; via: "turn-end" | "session-exit" | "report"; summary: string | null }
 	/**
-	 * The child settled on a bad ending (`error`), or its pi exited non-zero. The
-	 * pane is deliberately left open in both cases.
+	 * The process ended badly — a non-zero exit or a wrapper-written failure —
+	 * or an older build declared a failed settle. The pane is deliberately left
+	 * open in every case.
 	 */
 	| { kind: "failed"; reason: FailureReason; exitCode: number | null; summary: string | null }
 	/** The pane vanished without leaving any signal. */
@@ -75,9 +75,13 @@ function readExitCode(file: string): { code: number; id: string | null } | null 
 }
 
 /**
- * The child's report, as written by `src/children/child.ts`. A malformed file is treated
- * as a completion rather than an error: a report exists, so the child settled,
- * and the result text comes from the session either way.
+ * The child's report, as read from the sidecar. Current children write only
+ * `{"type":"done","result":...}`; older builds could also write a content-free
+ * done or a failed payload, and the reader still classifies those as before.
+ *
+ * A malformed file is treated as a completion rather than an error: a report
+ * exists, so the child settled, and the result text comes from the session
+ * either way.
  *
  * `result` is the explicit payload — present only when the child called
  * `subagent_report`. Anything that is not a non-empty string counts as
@@ -89,8 +93,9 @@ interface Report {
 	reason: FailureReason | "aborted";
 	result: string | null;
 	/**
-	 * Why it failed, when the child could not leave the reason in its session —
-	 * a run pi refused to start writes no turn at all. See `failure` in `classify`.
+	 * Why it failed, on a payload written by an older build — one that could
+	 * declare a turn, or a prompt pi refused to start, failed. See `failure` in
+	 * `classify`.
 	 */
 	message: string | null;
 }
@@ -148,11 +153,12 @@ interface Classification {
 
 function classify(running: RunningSubagent): Classification | null {
 	const summary = () => readFinalMessage(running.sessionFile);
-	// A failed turn carries its reason in the session, not in its text. A failure
-	// with no turn behind it — a run pi refused to start — carries it in the report
-	// instead, and that report leads: a message is written only for the run that is
-	// ending *now*, while the session's last text may be a turn from earlier (the
-	// one the user interrupted before this run was refused).
+	// An older build's failed turn carries its reason in the session, not in its
+	// text. A failed payload with no turn behind it — an older build refusing a
+	// prompt — carries it in the report instead, and that report leads: a message
+	// was written only for the run that was ending *then*, while the session's last
+	// text may be a turn from earlier (the one the user interrupted before that run
+	// was refused).
 	const failure = (reported: string | null) =>
 		reported ?? summary() ?? readFailureNote(running.sessionFile);
 
@@ -169,14 +175,14 @@ function classify(running: RunningSubagent): Classification | null {
 		}
 		// An interrupt is not a settlement. The user stopped this child to redirect it
 		// and it is alive at its prompt, so the report is stale the moment it lands:
-		// drop it and keep watching. The child's next real settle, or its pane closing,
-		// is what ends this wait — the orchestrator is never told the job closed.
+		// drop it and keep watching. The child's next report, or its pane closing, is
+		// what ends this wait — the orchestrator is never told the job closed.
 		if (report.reason === "aborted") {
 			remove(running.reportFile);
 			return null;
 		}
-		// The child settled and said how. A failed settle keeps its pane open —
-		// the error is on screen there and the user may want to retry.
+		// An older build's report said how the turn ended. A failed one keeps its
+		// pane open — the error is on screen there and the user may want to retry.
 		return {
 			outcome:
 				report.settle === "done"

@@ -107,17 +107,17 @@ child knows about pi's verdict.
 
 ## Acceptance criteria
 
-> **Superseded (refusal):** criteria 3, 6, and 7 describe the removed child-side preflight
-> and are no longer the contract. A refusal writes nothing and holds the pane; see
+> **Superseded (reporting):** criteria 2, 3, 6, and 7 describe the removed
+> failure-reporting path and child-side preflight, and are no longer the contract.
+> An in-run error and a refusal both write nothing and hold the pane; see
 > `docs/issues/silent-errors/spec.md`.
 
 1. **Esc is still silent.** No sidecar, no steer, pane open, wait continues.
    A redirect that cannot start writes nothing either, so there is no failure report
    for the interrupt rule to swallow.
    Pinned by `npm run smoke:interrupt`, `test/children/child.test.ts` (interrupt cases).
-2. **In-run failures still reach the orchestrator with their reason.** Pinned by
-   `test/children/child.test.ts`, `test/children/watcher.test.ts`, and `npm run smoke:provider-error`
-   (503, with and without pi's retries).
+2. **In-run failures still reach the orchestrator with their reason.** *(Superseded —
+   they write nothing and hold the pane; the human resolves it there.)*
 3. **A refusal is reported, not waited on.** An idle child whose provider has no usable
    credentials writes `{"type":"failed","reason":"error","message":...}` on the prompt,
    and the orchestrator's steer shows `failed (error)` with `**Error:**` naming the
@@ -126,7 +126,7 @@ child knows about pi's verdict.
 4. **No false failure for a child that can run.** A configured child, and a child whose
    credentials only resolve through the provider lookup, write nothing on input.
 5. **No false failure mid-run.** Input typed while a run is live is a steer, not a
-   refusal: nothing is written, because the run reports for itself at settle.
+   refusal: nothing is written, and only an explicit report ends the wait.
 6. **A refusal cannot overwrite a delivered result**, and an interrupt followed by an
    unstartable redirect is reported (the interrupt rule must not hide a real failure),
    with the refusal message as the summary rather than the interrupted turn's text.

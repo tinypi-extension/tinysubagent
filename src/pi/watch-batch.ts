@@ -1,9 +1,10 @@
 /**
  * Completion delivery: wait for a whole batch, then report once.
  *
- * Children settle independently and a watcher always ends — on a report, on an
- * exit code, or on the pane disappearing — so a batch cannot hang on one dead
- * child. Watcher ownership stays with the caller (index.ts); this module only
+ * Children settle independently and a watcher ends only on a report, an exit
+ * code, or the pane disappearing. A non-report ending leaves a live child at
+ * its prompt instead, so the batch waits on that pane until a human resolves
+ * it. Watcher ownership stays with the caller (index.ts); this module only
  * adds and removes the controllers it creates.
  */
 

@@ -11,13 +11,9 @@
  *
  * Usage: node scripts/smoke.ts [agent] [profile] [--parallel]
  *
- * Pass the profile name `bogus` to exercise the failure path instead: it points
- * the child at a model that cannot exist, so the run is expected to end in
- * `failed` with the pane left open for inspection.
- *
- * `--parallel` spawns three children at once — two healthy and one that cannot
- * succeed — so both the combined single-message report and the rule that one
- * broken child never holds up the others are exercised for real.
+ * `--parallel` spawns two children at once and checks that their results arrive
+ * in one combined message. A child that cannot start is not reported: it holds
+ * its pane, which `npm run smoke:provider-error` exercises on purpose.
  */
 
 import { mkdirSync, rmSync } from "node:fs";
@@ -37,7 +33,7 @@ import {
 } from "../src/herdr/cli.ts";
 import { spawnOne } from "../src/children/spawn.ts";
 import { buildResultText } from "../src/present/steer.ts";
-import { waitForSubagent } from "../src/children/watcher.ts";
+import { waitForSubagent, type RunningSubagent } from "../src/children/watcher.ts";
 
 const agentName = process.argv[2] ?? "worker";
 const profileName = process.argv[3] ?? "light";
@@ -67,12 +63,6 @@ console.log(`herdr ${status.version}, plugin ${PLUGIN_ID} ok`);
 
 const { config, warnings } = loadConfig(process.cwd(), getAgentDir());
 for (const warning of warnings) console.log(`config warning: ${warning}`);
-
-// `bogus` deliberately points at a model that cannot resolve, so the child dies
-// on startup: this is how the failure classification gets exercised end to end.
-const expectFailure = profileName === "bogus";
-config.enableProfiles = true;
-config.profiles.bogus = { model: "oc-openai/definitely-not-a-real-model", thinking: "low" };
 
 const chosen = config.profiles[profileName];
 if (!chosen) {
@@ -121,7 +111,6 @@ const plan = parallel
 				task: "Call subagent_report with the result BETA. Use no other tools.",
 				profile: config.enableProfiles ? profileName : undefined,
 			},
-			{ agent: agentName, name: "broken", task: "Reply with exactly the single word GAMMA.", profile: "bogus" },
 		]
 	: [request];
 
@@ -160,7 +149,7 @@ for (const result of settled) {
 
 console.log(`\n── the single combined steer message ──\n${buildResultText(settled)}`);
 
-// A finished pane closes itself; a failed one is left open on purpose. Reap
+// A finished pane closes itself; a held one is left open on purpose. Reap
 // every pane here so the user's herdr is left exactly as it was found.
 for (const running of runnings) {
 	const alive = await herdrPaneExists(running.paneId);
@@ -169,16 +158,12 @@ for (const running of runnings) {
 
 rmSync(sessionDir, { recursive: true, force: true });
 
-// Expected shape: healthy children complete, the broken one fails, and every
-// child is accounted for in the one message.
+// Expected shape: every healthy child completes, and every child is accounted
+// for in the one message.
 const completed = settled.filter((result) => result.outcome.kind === "completed").length;
-const failed = settled.filter((result) => result.outcome.kind === "failed").length;
-const wantCompleted = parallel ? 2 : expectFailure ? 0 : 1;
-const wantFailed = parallel ? 1 : expectFailure ? 1 : 0;
-
-if (completed !== wantCompleted || failed !== wantFailed) {
-	console.error(`\nFAIL expected ${wantCompleted} completed / ${wantFailed} failed, got ${completed}/${failed}`);
+if (completed !== plan.length) {
+	console.error(`\nFAIL expected ${plan.length} completed, got ${completed}`);
 	process.exit(2);
 }
-console.log(`\nPASS ${completed} completed, ${failed} failed, all reported together`);
+console.log(`\nPASS ${completed} completed, all reported together`);
 process.exit(0);
