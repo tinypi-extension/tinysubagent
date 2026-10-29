@@ -84,11 +84,71 @@ Files load in name order.
 
 Notes on `tools`:
 
-- `subagent_report` (the child's hand-back tool) is always added.
-- Without `tools`, the child has **no allowlist** and inherits pi's normal tool set.
+- `subagent_report` (the child's hand-back tool) is always added, and subtracting it is ignored.
+- Without `tools`, the child inherits the [`defaultTools` floor](#default-tools) when one is set.
+  With neither, it has **no allowlist** and inherits pi's normal tool set. Setting a floor is
+  therefore a behaviour change for every role that declares no `tools`: it stops inheriting
+  everything and starts inheriting exactly the floor.
+- A `-name` entry subtracts, and `-*` drops the floor for that role. See
+  [adding to and subtracting from the floor](#adding-to-and-subtracting-from-the-floor).
 - A literal name is kept even if nothing matches, so a renamed tool warns instead of silently
   narrowing the list. Unmatched wildcards also warn on the spawn acknowledgment.
-- Nested delegation is unsupported.
+- Nested delegation is unsupported. `*` matches `subagent` too, so a role that wants breadth
+  without the spawn tool subtracts it.
+
+## Default tools
+
+`defaultTools` is a top-level key in the same settings file the profiles use: the floor every
+child starts from, written once instead of copied into every role.
+
+```jsonc
+// ~/.pi/agent/tinysubagent.jsonc
+{
+  "defaultTools": ["read", "grep", "glob", "codegraph_search"]
+}
+```
+
+- **Plain names only.** No `*` and no `-` entries: a floor spelled in patterns is a policy you
+  cannot read. An entry that is not a plain name is dropped with a warning, and a value that is not
+  an array means no floor, also with a warning.
+- **The nearest file wins the whole array.** Project beats global as with `profiles`, but the
+  higher-precedence file replaces the list instead of merging it name by name.
+  `"defaultTools": []` and an absent key mean the same thing: no floor.
+- **It reaches every role.** A role with its own `tools` gets the floor added underneath it; a
+  role without `tools` gets an allowlist of exactly the floor plus `subagent_report`. With no
+  floor and no `tools`, the child keeps pi's normal tool set.
+- **Problems are reported once per session.** An unknown tool name, a dropped `subagent` entry,
+  and an ignored `subagent_report` subtraction are config problems, so their warning appears on
+  the first spawn that meets it, not on every acknowledgment. A role's own unmatched patterns
+  still warn on every spawn they affect.
+
+### Adding to and subtracting from the floor
+
+A role's own `tools` compose with the floor, and a `-` entry subtracts. Negation wins whatever
+the order, so `-write, write` and `write, -write` mean the same thing:
+
+```yaml
+tools: -write, -edit        # the floor, minus the two mutating tools
+```
+
+`-*` drops the floor for that role alone, so a deliberately narrow role stays narrow when the
+floor grows. Its own positive entries still apply, which makes `-*, read, grep` exactly `read`
+and `grep` (plus `subagent_report`):
+
+```yaml
+tools: -*, read, grep
+```
+
+`*` still expands over every tool the orchestrator knows, and that includes `subagent`. A role
+that lists `subagent` cannot launch, because nested delegation is unsupported. Take the breadth
+without the spawn tool:
+
+```yaml
+tools: "*", -subagent
+```
+
+A list that ends up empty after subtraction still launches, with only `subagent_report` and a
+warning — falling back to "no allowlist" would hand the child every tool the role just removed.
 
 ## Profiles
 
@@ -114,14 +174,17 @@ a shared model and thinking level, translated to the harness's supported setting
 - `model` is optional and falls back to the session's model for pi; agy profiles should specify a model.
 - `thinking`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` for either harness. 
 - The old `effort` key remains a silent alias for `thinking` at `low`/`medium`/`high`. If both are set, `thinking` wins.
-- Agy profiles do not support role `tools` allowlists. Such a spawn is refused; use a pi profile instead.
+- Agy profiles cannot enforce tool allowlists. The `defaultTools` floor and a role's `tools` list
+  are ignored with a warning, and the spawn proceeds.
 - Set `TINYSUBAGENT_AGY_BIN` to override the `agy` executable path.
 
 ### Using the agy harness
 
 Install and sign in to the `agy` CLI separately. Agy profiles launch interactively in their own
-herdr pane; the model may pause for approval, and you can review or steer it there. Agy does not
-enforce role `tools` allowlists, so tinysubagent refuses agy spawns for roles that declare one.
+herdr pane; the model may pause for approval, and you can review or steer it there. Agy has no
+`--tools` flag, so it cannot enforce an allowlist: the `defaultTools` floor and a role's `tools`
+list are both ignored with a warning, and the spawn proceeds. Use a pi profile when a role's tools
+are the point.
 
 Each run gets a temporary workspace containing its Stop hook. To let agy load the hook without a
 first-run trust prompt, tinysubagent temporarily adds that workspace to

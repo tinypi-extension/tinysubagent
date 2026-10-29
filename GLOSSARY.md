@@ -101,8 +101,16 @@ The opt-in that makes named profiles usable. Without it, Current is the only pro
 _Avoid_: custom profiles
 
 **Allowlist**:
-A role's restriction on which tools its child may use.
+A child's explicit restriction to a tool list, rather than its harness's normal tool set. It exists when a role declares `tools` or a default-tools floor is set.
 _Avoid_: permissions, toolset, whitelist
+
+**Default tools**:
+The tool floor configured once for every child, so a role need not restate it. A role may subtract from it or opt out of it.
+_Avoid_: base tools, global allowlist, global tools
+
+**Tool list**:
+The set of tools a child may use, composed from the default tools and the role's own `tools` entry.
+_Avoid_: toolset, whitelist, permissions
 
 ## Routing and settings
 
