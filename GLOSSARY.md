@@ -55,7 +55,7 @@ The artifact a child leaves beside its session record to declare its outcome. It
 _Avoid_: status file, marker, metadata
 
 **Settle**:
-The moment a child's agent loop finishes and nothing further will run. It is the only moment an outcome may be declared.
+The moment a child's agent loop finishes and nothing further will run. It is not an ending: the child stays at its prompt, and only a report, `/quit`, or the pane's fate ends the wait.
 _Avoid_: finish, end, completion
 
 **Unreported turn end**:

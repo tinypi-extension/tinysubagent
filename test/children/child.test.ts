@@ -9,7 +9,7 @@ import tinysubagentChild, {
 	type ChildDeps,
 } from "../../src/children/child.ts";
 import { preflightFailure } from "../../src/children/preflight.ts";
-import { settleReason } from "../../src/children/settle.ts";
+import { finishedCleanly } from "../../src/children/settle.ts";
 import { writeReportFile, writeResultReport } from "../../src/children/report.ts";
 import { REPORT_TOOL_NAME } from "../../src/types.ts";
 
@@ -125,53 +125,52 @@ function typeInto(stub: ReturnType<typeof stubChildApi>, text = "carry on"): Pro
 	return Promise.resolve(input({ type: "input", text, source: "interactive" }, stub.ctx));
 }
 
-test("a normal stop is a finished turn", () => {
-	assert.equal(settleReason([{ role: "assistant", stopReason: "stop" }]), "done");
+test("a clean turn is one that finished without an error or interrupt", () => {
+	assert.equal(finishedCleanly([{ role: "assistant", stopReason: "stop" }]), true);
 	// Truncated output is still a turn the child completed and reported.
-	assert.equal(settleReason([{ role: "assistant", stopReason: "length" }]), "done");
+	assert.equal(finishedCleanly([{ role: "assistant", stopReason: "length" }]), true);
 });
 
-test("an errored turn is a failure; an interrupted one is not a settle at all", () => {
-	assert.equal(settleReason([{ role: "assistant", stopReason: "error" }]), "failed");
+test("an errored or interrupted turn is not clean", () => {
+	assert.equal(finishedCleanly([{ role: "assistant", stopReason: "error" }]), false);
 	// Esc unwinds the loop, but the child is alive at its prompt waiting to be
-	// redirected — so there is no ending here to hand to the orchestrator.
-	assert.equal(settleReason([{ role: "assistant", stopReason: "aborted" }]), "interrupted");
+	// redirected — that is not a turn to remind to report.
+	assert.equal(finishedCleanly([{ role: "assistant", stopReason: "aborted" }]), false);
 });
 
 test("the last assistant message decides, not the first", () => {
 	assert.equal(
-		settleReason([
+		finishedCleanly([
 			{ role: "assistant", stopReason: "stop" },
 			{ role: "user" },
 			{ role: "assistant", stopReason: "error" },
 		]),
-		"failed",
+		false,
 	);
 	assert.equal(
-		settleReason([
+		finishedCleanly([
 			{ role: "assistant", stopReason: "error" },
 			{ role: "assistant", stopReason: "stop" },
 		]),
-		"done",
+		true,
 	);
 	// An interrupt that a later turn recovered from is not an interrupt at all.
 	assert.equal(
-		settleReason([
+		finishedCleanly([
 			{ role: "assistant", stopReason: "aborted" },
 			{ role: "assistant", stopReason: "stop" },
 		]),
-		"done",
+		true,
 	);
 });
 
-test("a turn with no assistant message at all counts as failed", () => {
-	// This is the hang that mattered: a model-resolution error leaves pi idle with
-	// an errored, empty assistant message. Anything that cannot be called a real
-	// answer must not be reported as success.
-	assert.equal(settleReason(undefined), "failed");
-	assert.equal(settleReason([]), "failed");
-	assert.equal(settleReason([{ role: "user" }]), "failed");
-	assert.equal(settleReason([{ role: "assistant" }]), "done");
+test("a turn with no assistant message at all is not clean", () => {
+	// A model-resolution error can leave pi idle with no assistant message; there
+	// is nothing to remind and nothing to report, so the settle stays silent.
+	assert.equal(finishedCleanly(undefined), false);
+	assert.equal(finishedCleanly([]), false);
+	assert.equal(finishedCleanly([{ role: "user" }]), false);
+	assert.equal(finishedCleanly([{ role: "assistant" }]), true);
 });
 
 test("the report sidecar records done and failure distinctly", () => {
@@ -341,7 +340,7 @@ test("an interrupted settle reports nothing and keeps the child alive", async ()
 	});
 });
 
-test("an interrupt pi filed as an error is not a settle either", async () => {
+test("a tool-call Esc that pi labels an error is silent too", async () => {
 	await withReportFile((report) => {
 		const stub = stubChildApi();
 		tinysubagentChild(stub.api as never);
@@ -352,18 +351,16 @@ test("an interrupt pi filed as an error is not a settle either", async () => {
 		) => void;
 
 		// Esc that lands on a tool call reaches the child as `error` with the abort
-		// message — indistinguishable from a real failure by stop reason. Only the
-		// run's own signal knows the difference, and this is the shape of the bug
-		// that closed the orchestrator's batch under the user's feet.
-		const controller = new AbortController();
-		controller.abort();
+		// message. It no longer has to be told apart from a real failure: every
+		// non-clean settle is silent, so the tool-call Esc takes the same path as a
+		// provider error and nothing is written.
 		end(
 			{
 				messages: [
 					{ role: "assistant", stopReason: "error", errorMessage: "This operation was aborted" },
 				],
 			},
-			{ ...stub.ctx, signal: controller.signal },
+			stub.ctx,
 		);
 		settled({}, stub.ctx);
 
@@ -372,7 +369,7 @@ test("an interrupt pi filed as an error is not a settle either", async () => {
 	});
 });
 
-test("a real error is still reported as a failure", async () => {
+test("an errored settle holds the pane for a later report", async () => {
 	await withReportFile((report) => {
 		const stub = stubChildApi();
 		tinysubagentChild(stub.api as never);
@@ -382,17 +379,44 @@ test("a real error is still reported as a failure", async () => {
 			ctx: { shutdown: () => void },
 		) => void;
 
-		// The interrupt rule must not swallow failures: this run was never aborted,
-		// so the orchestrator has to hear about it or it waits on a dead child.
+		// A request/response error is not an ending: the human can fix the provider
+		// and drive this same child on to its report, so nothing may be written and
+		// nothing may end the child.
 		end(
 			{ messages: [{ role: "assistant", stopReason: "error", errorMessage: "Invalid API key" }] },
 			stub.ctx,
 		);
 		settled({}, stub.ctx);
 
-		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "failed", reason: "error" });
-		// Reported, not shut down: the user may still want to read the error.
+		assert.equal(existsSync(report), false);
 		assert.equal(stub.shutdowns(), 0);
+	});
+});
+
+test("a report after a silent errored settle still lands and closes the pane", async () => {
+	await withReportFile(async (report) => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never);
+		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+		const settled = stub.listeners.get("agent_settled") as (
+			event: unknown,
+			ctx: { shutdown: () => void },
+		) => void;
+		end(
+			{ messages: [{ role: "assistant", stopReason: "error", errorMessage: "503 Service Unavailable" }] },
+			stub.ctx,
+		);
+		settled({}, stub.ctx);
+		assert.equal(existsSync(report), false);
+
+		// The human fixed the provider and drove the child to hand its result back:
+		// that report is the only ending, and it closes the pane.
+		const tool = stub.tools[0];
+		assert.ok(tool?.execute);
+		await tool.execute("call-1", { result: "PONG" }, undefined, undefined, stub.ctx);
+
+		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "done", result: "PONG" });
+		assert.equal(stub.shutdowns(), 1);
 	});
 });
 
@@ -482,8 +506,7 @@ test("a settle with no assistant message is silence too, not a failure", async (
 
 		// Nothing reportable was produced and the child is alive at its prompt:
 		// reporting `no-output` would mark the batch failed for a child the user
-		// can simply steer into working. It waits like an interrupt does; a real
-		// `error` stop reason is the one failure that still reports.
+		// can simply steer into working. It waits like every other non-clean settle.
 		assert.equal(existsSync(report), false);
 		assert.equal(stub.shutdowns(), 0);
 	});
