@@ -41,7 +41,7 @@ export function statusLabel(outcome: SubagentOutcome): string {
 			return outcome.via === "session-exit" ? "completed (session exited)" : "completed";
 		case "failed":
 			// `exit` means the process died before it could report how it went;
-			// anything else is the child telling us which ending it settled on.
+			// anything else is an older build's sidecar declaring how it ended.
 			return outcome.reason === "exit" ? `failed (exit ${outcome.exitCode})` : `failed (${outcome.reason})`;
 		case "cancelled":
 			return "cancelled (pane closed without reporting)";

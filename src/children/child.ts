@@ -40,7 +40,7 @@
  * fires — but the child has not finished: it is alive at its prompt, one
  * keystroke away from being redirected, which is exactly why the user pressed
  * Esc. An interrupted settle therefore writes nothing, and the watcher keeps
- * watching the pane for the child's next real settle.
+ * watching the pane for the child's next report.
  *
  * Esc is not reliably *labelled* as an interrupt: one that lands while a tool
  * call is running is filed by pi as a plain `error` — "This operation was

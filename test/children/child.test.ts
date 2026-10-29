@@ -9,7 +9,7 @@ import tinysubagentChild, {
 	type ChildDeps,
 } from "../../src/children/child.ts";
 import { finishedCleanly } from "../../src/children/settle.ts";
-import { writeReportFile, writeResultReport } from "../../src/children/report.ts";
+import { writeResultReport } from "../../src/children/report.ts";
 import { REPORT_TOOL_NAME } from "../../src/types.ts";
 
 interface RegisteredTool {
@@ -112,44 +112,6 @@ test("a turn with no assistant message at all is not clean", () => {
 	assert.equal(finishedCleanly([{ role: "assistant" }]), true);
 });
 
-test("the report sidecar records done and failure distinctly", () => {
-	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-child-"));
-	const report = join(dir, "s.jsonl.done");
-	process.env.PI_TINYSUBAGENT_REPORT = report;
-	try {
-		assert.equal(writeReportFile("done"), true);
-		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "done" });
-
-		assert.equal(writeReportFile("failed", "error"), true);
-		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "failed", reason: "error" });
-
-		// A blank message is no message: the reader would ignore it anyway, and a key
-		// that is always present is one every reader has to check.
-		assert.equal(writeReportFile("failed", "error", "   "), true);
-		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "failed", reason: "error" });
-
-		assert.equal(writeReportFile("failed", "error", "  no API key  "), true);
-		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), {
-			type: "failed",
-			reason: "error",
-			message: "no API key",
-		});
-	} finally {
-		delete process.env.PI_TINYSUBAGENT_REPORT;
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test("no report path means no write, and no crash", () => {
-	const saved = process.env.PI_TINYSUBAGENT_REPORT;
-	delete process.env.PI_TINYSUBAGENT_REPORT;
-	try {
-		assert.equal(writeReportFile("done"), false);
-	} finally {
-		if (saved !== undefined) process.env.PI_TINYSUBAGENT_REPORT = saved;
-	}
-});
-
 /**
  * Run `body` with the report sidecar pointed at a fresh temp file. The file path
  * is handed back so a test can assert on the bytes that actually landed.
@@ -176,18 +138,6 @@ test("a result report carries the payload and leaves no staging file behind", as
 			result: "the whole answer",
 		});
 		// A rename, not a write-in-place: the staging file must not survive it.
-		assert.equal(existsSync(`${report}.tmp`), false);
-	});
-});
-
-test("the legacy signals are unchanged and also leave no staging file behind", async () => {
-	await withReportFile((report) => {
-		assert.equal(writeReportFile("done"), true);
-		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "done" });
-		assert.equal(existsSync(`${report}.tmp`), false);
-
-		assert.equal(writeReportFile("failed", "exit"), true);
-		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "failed", reason: "exit" });
 		assert.equal(existsSync(`${report}.tmp`), false);
 	});
 });
@@ -242,7 +192,7 @@ test("a settle after a report does not overwrite the reported result", async () 
 		await tool.execute("call-1", { result: "PONG" }, undefined, undefined, stub.ctx);
 
 		// pi settles as it shuts down. The payload is the whole point of the
-		// report, so the fallback path must not stamp over it with a blank signal.
+		// report, and no other path may stamp over it.
 		const settled = stub.listeners.get("agent_settled") as (
 			event: unknown,
 			ctx: { shutdown: () => void },
@@ -408,7 +358,7 @@ test("a failed report write keeps the child alive and says so", async () => {
 	}
 });
 
-test("a done settle writes nothing and keeps the pane open", async () => {
+test("a clean settle writes nothing and keeps the pane open", async () => {
 	await withReportFile((report) => {
 		const stub = stubChildApi();
 		tinysubagentChild(stub.api as never);
