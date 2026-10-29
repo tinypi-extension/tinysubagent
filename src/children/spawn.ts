@@ -20,13 +20,12 @@ import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPa
 import { LiveSubPanes, planPlacement, planResizes, type Placement } from "../herdr/layout.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { resolveToolList } from "../tool-list.ts";
-import { isThinkingLevel, type ThinkingLevel } from "../types.ts";
+import { expandToolPatterns } from "../tool-patterns.ts";
+import { isThinkingLevel, TOOL_NAME, type ThinkingLevel } from "../types.ts";
 import { errorMessage, type SpawnContext, type SpawnFailed, type SpawnRequest, type Spawned } from "./contract.ts";
 
-/** Name of the spawn tool, shared with `index.ts` and used for the nesting guard below. */
-// Renamed from "tinysubagent": the package/config keep the old name, only the
-// model-facing tool name changed.
-export const TOOL_NAME = "subagent";
+/** Name of the spawn tool, used for the nesting guard below. */
+export { TOOL_NAME };
 
 /**
  * The child hook, passed as `-e` to every child. Sourced from `./paths.ts` so
@@ -59,20 +58,34 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		return { ok: false, error: `agy executable not found: ${binary}` };
 	}
 	const warnings: string[] = [];
+	const floor = context.config.defaultTools ?? [];
 	let tools: string[] | null = null;
-	if (profile.harness === "agy" && agent.tools && agent.tools.length > 0) {
-		warnings.push(`agent "${agent.name}": tools list ignored because the agy harness cannot enforce it.`);
-	} else if (profile.harness !== "agy") {
+	// Whether the role itself asked for the spawn tool. Decided from the role's
+	// declaration, never from `tools`: the resolver drops a floor entry naming it,
+	// so the composed list would make ambient config look like a role's mistake.
+	let declaresSpawnTool = false;
+	if (profile.harness === "agy") {
+		// agy has no `--tools` flag, so neither list can be enforced there. Each one
+		// the caller did ask for is reported rather than silently dropped.
+		if (agent.tools && agent.tools.length > 0) {
+			warnings.push(`agent "${agent.name}": tools list ignored because the agy harness cannot enforce it.`);
+		}
+		if (floor.length > 0) {
+			warnings.push(`agent "${agent.name}": defaultTools floor ignored because the agy harness cannot enforce it.`);
+		}
+	} else {
 		// One resolver decides the allowlist, including whether there is one at all.
 		// `tools` stays null when there is none, so the child gets no `--tools` flag.
 		const resolved = resolveToolList({
-			floor: context.config.defaultTools ?? [],
+			floor,
 			declared: agent.tools,
 			registry: context.allToolNames,
 			role: agent.name,
 		});
 		warnings.push(...resolved.warnings);
 		if (resolved.allowlist) tools = resolved.tools;
+		// Expansion, not a literal match: a role's `*` covers the spawn tool too.
+		declaresSpawnTool = expandToolPatterns(agent.tools ?? [], context.allToolNames).tools.includes(TOOL_NAME);
 	}
 
 	// Nested delegation is refused rather than half-supported. A grandchild's
@@ -81,7 +94,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// children report, and the subagent has no report that carries a
 	// grandchild's payload. Failing the spawn says so, instead of losing work
 	// quietly later.
-	if (tools?.includes(TOOL_NAME)) {
+	if (declaresSpawnTool) {
 		return {
 			ok: false,
 			error:
@@ -93,9 +106,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	}
 
 	// The one entry a role's list cannot have is the way to hand the result back.
-	// The resolver appends it whenever an allowlist exists; the nesting guard above
-	// still sees only what the role declared, because that is the mistake a role
-	// author can fix.
+	// The resolver appends it whenever an allowlist exists.
 	const id = runId();
 	const paths = buildLaunchPaths({
 		sessionDir: context.sessionDir,

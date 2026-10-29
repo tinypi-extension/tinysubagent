@@ -12,7 +12,7 @@
  */
 
 import { expandToolPatterns } from "./tool-patterns.ts";
-import { REPORT_TOOL_NAME } from "./types.ts";
+import { REPORT_TOOL_NAME, TOOL_NAME } from "./types.ts";
 
 export interface ToolListInput {
 	/** Plain names from `defaultTools`: what every child starts from. */
@@ -48,10 +48,29 @@ export interface ToolList {
  *
  * The report tool is part of every explicit allowlist because it is the way a
  * child hands its result back, not a capability a role can be denied.
+ *
+ * A floor entry naming the spawn tool is dropped with a warning: the floor is
+ * ambient config written for every role at once, so one `subagent` in it must
+ * not refuse every spawn in the project. A role naming it itself still refuses
+ * in the spawner, because that is a mistake its author can see and fix.
  */
 export function resolveToolList(input: ToolListInput): ToolList {
 	const warnings: string[] = [];
+
+	// Dropping the name is registry-dependent: without the spawn tool registered
+	// it is just an unknown floor name, which warns on its own account.
+	const floor = input.registry.includes(TOOL_NAME)
+		? input.floor.filter((name) => name !== TOOL_NAME)
+		: [...input.floor];
+	if (floor.length < input.floor.length) {
+		warnings.push(
+			`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+		);
+	}
+
 	const declared = input.declared ?? [];
+	// Intent is read from the configured floor, not the filtered one: a floor that
+	// only names the spawn tool is still a request to narrow.
 	const intent = input.declared !== undefined || input.floor.length > 0;
 
 	if (!intent) return { allowlist: false, tools: [], warnings };
@@ -65,7 +84,7 @@ export function resolveToolList(input: ToolListInput): ToolList {
 
 	const tools: string[] = [];
 	const seen = new Set<string>();
-	for (const name of [...input.floor, ...expanded.tools]) {
+	for (const name of [...floor, ...expanded.tools]) {
 		if (seen.has(name)) continue;
 		seen.add(name);
 		tools.push(name);
