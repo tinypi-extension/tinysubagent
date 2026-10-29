@@ -230,6 +230,120 @@ test("an agy profile ignores role tools with a warning and proceeds", async () =
 	}
 });
 
+test("a role declaring a wildcard is refused because expansion includes the spawn tool", async () => {
+	// `*` is not a special case the guard can ignore: it expands over the
+	// registry, and the registry holds the spawn tool.
+	const wildcard: AgentDef = { ...worker, name: "boss", tools: ["*"] };
+	const result = await spawnOne(
+		{ agent: "boss", task: "x", name: "boss" },
+		context([wildcard], ["read", TOOL_NAME]),
+	);
+	assert.equal(result.ok, false);
+	assert.match(result.ok === false ? result.error : "", /Nested delegation is not supported/);
+});
+
+test("a floor naming the spawn tool is dropped with a warning instead of refusing the spawn", async () => {
+	// Ambient config must never block delegation: the role asked for nothing but
+	// the floor, and the floor's `subagent` entry is dropped rather than refused.
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-floor-spawn-tool-"));
+	try {
+		const open: AgentDef = { ...worker, name: "open", tools: undefined };
+		const base = context([open], ["read", "bash", TOOL_NAME]);
+		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
+			const spawned = await spawnOne(
+				{ agent: "open", task: "x", name: "open" },
+				{
+					...base,
+					cwd: dir,
+					agentDir: dir,
+					sessionDir: dir,
+					env: {},
+					config: { ...base.config, defaultTools: ["read", TOOL_NAME, "bash"] },
+				},
+			);
+			return { spawned, script: writtenScript(dir, "sid") };
+		});
+		assert.equal(result.spawned.ok, true);
+		assert.deepEqual(result.spawned.warnings, [
+			`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+		]);
+		// The allowlist is exactly the floor minus the spawn tool, report tool last.
+		assert.match(result.script, new RegExp(`'--tools' 'read,bash,${REPORT_TOOL_NAME}'`));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an agy profile with a non-empty floor warns that the floor is ignored and launches", async () => {
+	// agy has no `--tools` flag, so the floor cannot be enforced there. Saying so
+	// beats a child that quietly runs with whatever agy allows.
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-agy-floor-"));
+	try {
+		const open: AgentDef = { ...worker, name: "open", tools: undefined };
+		const base = context([open]);
+		const config = {
+			...base.config,
+			enableProfiles: true,
+			profiles: { gemini: { harness: "agy" as const, model: "gpt-oss-120b" } },
+			defaultTools: ["read", "bash"],
+		};
+		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
+			const spawned = await spawnOne(
+				{ agent: "open", task: "x", name: "open", profile: "gemini" },
+				{
+					...base,
+					cwd: dir,
+					agentDir: dir,
+					sessionDir: dir,
+					env: { TINYSUBAGENT_AGY_BIN: process.execPath },
+					config,
+				},
+			);
+			return { spawned, script: writtenScript(dir, "sid") };
+		});
+		assert.equal(result.spawned.ok, true);
+		assert.deepEqual(result.spawned.warnings, [
+			'agent "open": defaultTools floor ignored because the agy harness cannot enforce it.',
+		]);
+		assert.equal(result.script.includes("--tools"), false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an agy role with no tools on an empty floor warns about nothing", async () => {
+	// Nothing was asked for and nothing is being ignored, so the acknowledgment
+	// stays clean.
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-agy-quiet-"));
+	try {
+		const open: AgentDef = { ...worker, name: "open", tools: undefined };
+		const base = context([open]);
+		const config = {
+			...base.config,
+			enableProfiles: true,
+			profiles: { gemini: { harness: "agy" as const, model: "gpt-oss-120b" } },
+		};
+		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
+			const spawned = await spawnOne(
+				{ agent: "open", task: "x", name: "open", profile: "gemini" },
+				{
+					...base,
+					cwd: dir,
+					agentDir: dir,
+					sessionDir: dir,
+					env: { TINYSUBAGENT_AGY_BIN: process.execPath },
+					config,
+				},
+			);
+			return spawned;
+		});
+		assert.equal(result.ok, true);
+		assert.deepEqual(result.warnings, []);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("a pi role that could spawn subagents is refused rather than half-supported", async () => {
 	// The pane would close on this child's own settle, stranding its children's
 	// results. Refusing loudly is the whole point: no pane is opened here.

@@ -44,6 +44,15 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
  */
 export const REPORT_TOOL_NAME = "subagent_report";
 
+/**
+ * Name of the spawn tool, shared with the pi tool, the nesting guard, and the
+ * tool-list resolver.
+ */
+// Renamed from "tinysubagent": the package/config keep the old name, only the
+// model-facing tool name changed. It lives here so `src/tool-list.ts` can drop
+// it from a floor without importing the spawner that imports the resolver.
+export const TOOL_NAME = "subagent";
+
 /** Where an agent definition came from. Project definitions shadow user ones. */
 export type AgentSource = "user" | "project";
 

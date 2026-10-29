@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import { resolveToolList, type ToolListInput } from "../src/tool-list.ts";
-import { REPORT_TOOL_NAME } from "../src/types.ts";
+import { REPORT_TOOL_NAME, TOOL_NAME } from "../src/types.ts";
 
 const REGISTRY = ["read", "bash", "edit", "write", "codegraph_query", "codegraph_search"];
 
@@ -89,4 +89,30 @@ test("a floor name the registry does not know is kept as written", () => {
 	// it; the warning for an unmatched floor name is a later tick's job.
 	const resolved = resolve({ floor: ["gone", "read"] });
 	assert.deepEqual(resolved.tools, ["gone", "read", REPORT_TOOL_NAME]);
+});
+
+test("a floor entry naming the spawn tool is dropped with a warning", () => {
+	// The floor is ambient config written once for every role, so one `subagent`
+	// entry in it must not refuse every spawn in the project.
+	const resolved = resolve({ floor: ["read", TOOL_NAME, "bash"], registry: [...REGISTRY, TOOL_NAME] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, ["read", "bash", REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, [
+		`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+	]);
+});
+
+test("the spawn-tool drop is the floor's alone: a role that declares it keeps it", () => {
+	// The nesting refusal keys off what the role declared, so the resolver must
+	// not hide that from the guard by dropping the name everywhere.
+	const resolved = resolve({ floor: ["read"], declared: [TOOL_NAME], registry: [...REGISTRY, TOOL_NAME] });
+	assert.deepEqual(resolved.tools, ["read", TOOL_NAME, REPORT_TOOL_NAME]);
+});
+
+test("a floor entry naming the spawn tool is kept when the registry does not know it", () => {
+	// Dropping it is registry-dependent: without the tool registered the entry is
+	// just an unknown floor name, which warns on its own account.
+	const resolved = resolve({ floor: ["read", TOOL_NAME] });
+	assert.deepEqual(resolved.tools, ["read", TOOL_NAME, REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, []);
 });
