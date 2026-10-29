@@ -1,8 +1,11 @@
 # Spec: an error is not an ending either
 
-Status: **needs-triage** — every decision below was resolved in session with the user and
-is recorded under "Resolved decisions". No plan or todo file accompanies this spec; the
-repo's `plan.md`/`todo.md` conventions are deprecated.
+Status: **implemented** on `integration/silent-errors` — all three tickets are resolved
+(`issues/01`–`03`). The spec was approved with every decision resolved in session with the
+user and recorded under "Resolved decisions"; no plan or todo file accompanies it, since the
+repo's `plan.md`/`todo.md` conventions are deprecated. The agy prompt and launch wrapper
+keep their `failed` writes by the Files table and "Out of scope: agy behaviour" below; the
+pi child writes results only.
 
 Supersedes the `failed`-settle row of `docs/issues/report-required/spec.md` ("What still
 ends a wait") and acceptance criteria 3 and 5 of

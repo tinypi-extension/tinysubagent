@@ -13,15 +13,39 @@ real, all three smoke modes included.
 
 **Blocked by:** 01, 02 — a writer can only be deleted once no path writes it.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] No child-side path can write a `failed` payload; the writer's failure arm and the settle
+- [x] No child-side path can write a `failed` payload; the writer's failure arm and the settle
       union are gone, along with the unit tests that only pinned their byte shape.
-- [ ] The sidecar reader is unchanged: `failed` with and without `message`, malformed payloads,
+- [x] The sidecar reader is unchanged: `failed` with and without `message`, malformed payloads,
       `done` with and without a result, and the exit-code and vanished-pane paths all keep
       their existing tests and outcomes.
-- [ ] A repo-wide sweep finds no remaining claim that an error, a refusal, or a failed settle
+- [x] A repo-wide sweep finds no remaining claim that an error, a refusal, or a failed settle
       reaches the orchestrator; the surviving deliberate statements are the ones describing the
       hold and the escape hatches (report, `/quit`, close the pane).
-- [ ] `npm run typecheck`, `npm test`, and `npm run smoke:provider-error` in every mode run for
+- [x] `npm run typecheck`, `npm test`, and `npm run smoke:provider-error` in every mode run for
       real, and the results are reported as they came out.
+
+## Answer
+
+Implemented on `integration/silent-errors` (`d9a7d0e`, merged `e3cd484`; review fixes
+`e5dc969`, merged `8418662`).
+
+`src/children/report.ts` now exports only `writeResultReport`, which can emit
+`{"type":"done","result":…}`; `ChildSettle` and `writeReportFile` are deleted. The reader
+(`watcher.ts`) and its tests are untouched — `failed` payloads, with and without `message`,
+still classify exactly as before, and their comments now describe them as older-build/agy
+input. The misnamed/unreachable failure-shape tests were deleted with their subject.
+
+The promise sweep covered `GLOSSARY.md`, `AGENTS.md`, `report.ts` docs, `child.ts`,
+`steer.ts`, `watch-batch.ts`, and both `docs/issues/report-required/spec.md` (now
+`superseded in part`) and `docs/issues/report-tool/spec.md` (stale refusal/input-hook
+paragraph replaced). "No child-side path can write a `failed` payload" is satisfied for the
+pi child: the two remaining writers are the agy launch wrapper's post-exit
+`failed/no-output` stamp and `spawnOne`'s missing-binary stamp, both explicitly out of
+scope per the spec's Files table (line 150, "not changed") and "Out of scope: agy
+behaviour" (line 165). They are documented as exceptions in `report.ts` rather than denied.
+
+Verified on the merged tip: `npm run typecheck` clean; `npm test` 420/420;
+`smoke:provider-error` default/`--retries`/`--no-auth` all PASS; `npm run smoke` PASS; the
+failed/refusal-reporting grep returns only an unrelated herdr resize message.

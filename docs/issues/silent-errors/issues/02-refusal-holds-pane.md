@@ -15,19 +15,34 @@ batch holding an unreported turn end.
 **Blocked by:** 01 — this ticket's smoke work edits the same real-child smoke script that 01
 rewrites. The behaviour itself does not depend on 01.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A prompt pi would refuse writes no sidecar and never shuts the child down; the mirrored
+- [x] A prompt pi would refuse writes no sidecar and never shuts the child down; the mirrored
       preflight is gone, and no child-side path runs a credential check.
-- [ ] The harness contract no longer asks a harness what it would refuse; both implementations
+- [x] The harness contract no longer asks a harness what it would refuse; both implementations
       drop it, and the type still compiles for agy's report-only shape.
-- [ ] A steer typed into a live run is still not a refusal, and a refusal can no longer
+- [x] A steer typed into a live run is still not a refusal, and a refusal can no longer
       overwrite a delivered result — because nothing is written at all.
-- [ ] The real-child smoke pins the refused shape: with credentials removed, no steer reaches
+- [x] The real-child smoke pins the refused shape: with credentials removed, no steer reaches
       the orchestrator within the hold window and the child's pane is still open; closing the
       pane by hand ends the batch `cancelled`.
-- [ ] `GLOSSARY.md`'s `Refusal` entry no longer promises a report, and `Preflight` is deleted
+- [x] `GLOSSARY.md`'s `Refusal` entry no longer promises a report, and `Preflight` is deleted
       with the check it named.
-- [ ] `AGENTS.md`'s spec-memory line for `child-preflight-failure` no longer claims a failed
+- [x] `AGENTS.md`'s spec-memory line for `child-preflight-failure` no longer claims a failed
       sidecar is written.
-- [ ] `npm run typecheck` and `npm test` pass; the smoke's real result is reported, not assumed.
+- [x] `npm run typecheck` and `npm test` pass; the smoke's real result is reported, not assumed.
+
+## Answer
+
+Implemented on `integration/silent-errors` (`7756c9b`, merged `6c72b3c`).
+
+A refused prompt now writes nothing and never shuts the child down: `src/children/preflight.ts`
+is deleted, the `input` hook is removed from `child.ts`, `readRefusal` is dropped from
+`harness/{types,pi,agy}.ts`, and `contract.ts` no longer references the deleted module.
+`test/children/child.test.ts` lost the whole refusal suite and its preflight-only stub
+plumbing. `smoke:provider-error --no-auth` now holds for 15 s with zero steers, confirms pi's
+refusal on the pane, then closes the pane and gets exactly one `cancelled`. `GLOSSARY.md`
+(`Refusal`, `Preflight` deleted) and the `AGENTS.md` index line are updated.
+
+Verified: `npm run typecheck` clean; `npm test` 426/426 at the time of this ticket; all
+three smoke modes PASS.

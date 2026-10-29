@@ -15,20 +15,37 @@ abort-signal capture go with it.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] An `error` settle writes no sidecar and never shuts the child down; a unit test that
+- [x] An `error` settle writes no sidecar and never shuts the child down; a unit test that
       fails on today's code proves it.
-- [ ] An interrupt, a tool-call Esc, and an assistant-less settle behave exactly as they do
+- [x] An interrupt, a tool-call Esc, and an assistant-less settle behave exactly as they do
       now: silence, pane open.
-- [ ] A clean turn with no report still gets the reminder, still capped.
-- [ ] After any silent settle a later `subagent_report` lands as reported and closes the pane.
-- [ ] The real-child smoke pins the new contract for the provider-outage shape: with a local
+- [x] A clean turn with no report still gets the reminder, still capped.
+- [x] After any silent settle a later `subagent_report` lands as reported and closes the pane.
+- [x] The real-child smoke pins the new contract for the provider-outage shape: with a local
       endpoint answering 503 (both with pi's retries off and exhausted), no steer reaches the
       orchestrator while the child is held and its pane is still alive; once the endpoint is
       healthy again and the pane is driven to report, exactly one `completed (reported)` steer
       arrives carrying the child's answer.
-- [ ] `GLOSSARY.md`'s `Settle` entry no longer claims a settle is where an outcome is declared.
-- [ ] `docs/issues/child-preflight-failure/spec.md` records that its "settles `error` →
+- [x] `GLOSSARY.md`'s `Settle` entry no longer claims a settle is where an outcome is declared.
+- [x] `docs/issues/child-preflight-failure/spec.md` records that its "settles `error` →
       unchanged" row is superseded here.
-- [ ] `npm run typecheck` and `npm test` pass; the smoke's real result is reported, not assumed.
+- [x] `npm run typecheck` and `npm test` pass; the smoke's real result is reported, not assumed.
+
+## Answer
+
+Implemented on `integration/silent-errors` (`0c38188`, merged `e557543`).
+
+`src/children/settle.ts` collapsed to `finishedCleanly(messages)`; `SettleVerdict`,
+`settleReason`, `failureDetail` and the abort-signal capture are gone. `agent_settled` has
+one acting branch: a clean turn with no report gets the capped reminder. An `error`,
+`aborted`, tool-call-Esc or assistant-less settle returns without writing or shutting down.
+`scripts/smoke-provider-error.ts` now pins the hold-then-recover contract on a real child
+(503 endpoint, no steer, live pane; healthy endpoint, driven report, exactly one
+`completed (reported)` steer carrying the result, pane closed). `GLOSSARY.md` `Settle` and
+the `child-preflight-failure` `Settles error` row are updated.
+
+Verified: `npm run typecheck` clean; `npm test` 434/434 at the time of this ticket (420
+after the ticket 03/04 test deletions); `smoke:provider-error` default, `--retries` and
+`--no-auth` all PASS.
