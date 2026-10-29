@@ -349,3 +349,34 @@ test("a dropped floor entry and an ignored -subagent_report are each reported on
 		}
 	}
 });
+
+test("a negatives-only role on an empty floor narrows rather than widens", () => {
+	// `-write` says what the child must not have. Returning no allowlist here
+	// would hand it every tool, including the one the role just removed.
+	const resolved = resolve({ declared: ["-write"] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, [
+		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+	]);
+});
+
+test("several negatives-only entries on an empty floor narrow the same way", () => {
+	const resolved = resolve({ declared: ["-write", "-edit"] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, [
+		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+	]);
+});
+
+test("a negatives-only role whose sole negative is the report tool keeps no allowlist", () => {
+	// Nothing to narrow: there is no floor, no positive, and the report tool
+	// cannot be subtracted. The entry is ignored, like `-*` on an empty floor.
+	const resolved = resolve({ declared: ["-subagent_report"] });
+	assert.equal(resolved.allowlist, false);
+	assert.deepEqual(resolved.tools, []);
+	assert.deepEqual(resolved.warnings, [
+		`agent "worker": -${REPORT_TOOL_NAME} is ignored — the report tool is always allowed.`,
+	]);
+});

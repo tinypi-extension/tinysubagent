@@ -19,7 +19,7 @@ import { loadConfig } from "../../src/config/config.ts";
 import { PLUGIN_ID, type TabLayout } from "../../src/herdr/cli.ts";
 import { LiveSubPanes } from "../../src/herdr/layout.ts";
 import { MAX_PARALLEL_TASKS } from "../../src/children/requests.ts";
-import { TOOL_NAME } from "../../src/children/spawn.ts";
+import { TOOL_NAME } from "../../src/types.ts";
 
 interface Registered {
 	name: string;

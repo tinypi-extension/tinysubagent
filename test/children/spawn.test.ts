@@ -7,9 +7,9 @@ import { test } from "node:test";
 import { PLUGIN_ENTRYPOINT, PLUGIN_ID, type Rect, type TabLayout } from "../../src/herdr/cli.ts";
 import { LiveSubPanes, planResizes } from "../../src/herdr/layout.ts";
 import { MAX_PARALLEL_TASKS, collectRequests, resolveCwd, uniqueName } from "../../src/children/requests.ts";
-import { TOOL_NAME, spawnOne } from "../../src/children/spawn.ts";
+import { spawnOne } from "../../src/children/spawn.ts";
 import type { SpawnContext, ToolParams } from "../../src/children/contract.ts";
-import { REPORT_TOOL_NAME, type AgentDef } from "../../src/types.ts";
+import { REPORT_TOOL_NAME, TOOL_NAME, type AgentDef } from "../../src/types.ts";
 
 test("single mode takes an agent and a task", () => {
 	const mode = collectRequests({ agent: "worker", task: "Do it." });
