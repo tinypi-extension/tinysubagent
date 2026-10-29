@@ -44,23 +44,55 @@ export interface ToolList {
  *
  * Negation is spelling, not a tool name: the leading `-` is stripped here so it
  * can never be forwarded to the child, which would read it as a literal name.
+ *
+ * `-*` is the floor opt-out rather than a name. It is returned separately so the
+ * caller can drop the floor without ever treating `*` as a tool to subtract:
+ * that keeps it out of the unknown-negation warning, and it stays a no-op when
+ * there is no floor to drop.
  */
-function splitDeclared(declared: readonly string[]): { positives: string[]; negatives: string[] } {
+function splitDeclared(declared: readonly string[]): {
+	positives: string[];
+	negatives: string[];
+	dropFloor: boolean;
+} {
 	const positives: string[] = [];
 	const negatives: string[] = [];
+	let dropFloor = false;
 	for (const entry of declared) {
 		if (!entry.startsWith("-")) {
 			positives.push(entry);
 			continue;
 		}
 		const name = entry.slice(1);
-		// `-*` means "drop the whole floor", not "subtract the tool named `*`".
-		// That rule is a later ticket; leaving the branch here keeps it in one place
-		// and stops the entry from being reported as an unknown tool in the meantime.
-		if (name === "*") continue;
+		// `-*` means "do not inherit the floor", not "subtract the tool named `*`".
+		if (name === "*") {
+			dropFloor = true;
+			continue;
+		}
 		negatives.push(name);
 	}
-	return { positives, negatives };
+	return { positives, negatives, dropFloor };
+}
+
+/**
+ * Whether a role's own declaration puts the spawn tool in its child's allowlist.
+ *
+ * The nesting guard asks this of the role, never of the composed list: a floor
+ * entry naming the spawn tool is dropped (ambient config must not refuse every
+ * spawn), while a role naming it is a mistake its author can see and fix.
+ *
+ * The same grammar as the resolver applies, so a negation wins: `*` covers the
+ * spawn tool and therefore refuses, but `*, -subagent` is the documented way to
+ * take the breadth without nested delegation and must launch.
+ */
+export function declaresSpawnTool(
+	declared: readonly string[] | undefined,
+	registry: readonly string[],
+): boolean {
+	if (!declared || declared.length === 0) return false;
+	const { positives, negatives } = splitDeclared(declared);
+	if (negatives.includes(TOOL_NAME)) return false;
+	return expandToolPatterns(positives, registry).tools.includes(TOOL_NAME);
 }
 
 /**
@@ -82,6 +114,10 @@ function splitDeclared(declared: readonly string[]): { positives: string[]; nega
  * the same thing. A list that positives fill and negations then empty is still
  * an allowlist — of the report tool alone — because falling back to "no
  * allowlist" would widen the child to every tool the role just subtracted.
+ *
+ * `-*` opts out of the floor for the same reason in the other direction: a role
+ * that stays narrow must not grow when the floor does. It only removes the
+ * floor, so a role's own positives still expand and compose normally.
  */
 export function resolveToolList(input: ToolListInput): ToolList {
 	const warnings: string[] = [];
@@ -104,7 +140,7 @@ export function resolveToolList(input: ToolListInput): ToolList {
 
 	if (!intent) return { allowlist: false, tools: [], warnings };
 
-	const { positives, negatives } = splitDeclared(declared);
+	const { positives, negatives, dropFloor } = splitDeclared(declared);
 
 	const expanded = expandToolPatterns(positives, input.registry);
 	if (expanded.unmatched.length > 0) {
@@ -131,15 +167,27 @@ export function resolveToolList(input: ToolListInput): ToolList {
 
 	const composed: string[] = [];
 	const seen = new Set<string>();
-	for (const name of [...floor, ...expanded.tools]) {
+	// Dropping the floor is this word's whole meaning; the rest of the list still
+	// composes, which is what makes `-*, read, grep` exactly read and grep.
+	for (const name of [...(dropFloor ? [] : floor), ...expanded.tools]) {
 		if (seen.has(name)) continue;
 		seen.add(name);
 		composed.push(name);
 	}
 
-	// Nothing to subtract from: every pattern matched nothing (or only negations
-	// were declared). That is "nothing resolved", not a narrowed child.
-	if (composed.length === 0) return { allowlist: false, tools: [], warnings };
+	// Something positive was asked for if the configured floor named anything —
+	// even a name the spawn-tool filter removed — or the role's own patterns
+	// expanded to a name. Without that, an empty list is "nothing resolved" and
+	// must stay no-allowlist: it is a broken pattern, not a deliberate narrowing.
+	const askedForTools = input.floor.length > 0 || expanded.tools.length > 0;
+
+	if (composed.length === 0) {
+		if (!askedForTools) return { allowlist: false, tools: [], warnings };
+		warnings.push(
+			`agent "${input.role}": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+		);
+		return { allowlist: true, tools: [REPORT_TOOL_NAME], warnings };
+	}
 
 	const tools = composed.filter((name) => !denied.has(name));
 	if (tools.length === 0) {

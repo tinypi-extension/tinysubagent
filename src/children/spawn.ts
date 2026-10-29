@@ -19,8 +19,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "../herdr/cli.ts";
 import { LiveSubPanes, planPlacement, planResizes, type Placement } from "../herdr/layout.ts";
 import { resolveProfile } from "../config/profiles.ts";
-import { resolveToolList } from "../tool-list.ts";
-import { expandToolPatterns } from "../tool-patterns.ts";
+import { declaresSpawnTool, resolveToolList } from "../tool-list.ts";
 import { isThinkingLevel, TOOL_NAME, type ThinkingLevel } from "../types.ts";
 import { errorMessage, type SpawnContext, type SpawnFailed, type SpawnRequest, type Spawned } from "./contract.ts";
 
@@ -60,10 +59,11 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	const warnings: string[] = [];
 	const floor = context.config.defaultTools ?? [];
 	let tools: string[] | null = null;
-	// Whether the role itself asked for the spawn tool. Decided from the role's
-	// declaration, never from `tools`: the resolver drops a floor entry naming it,
-	// so the composed list would make ambient config look like a role's mistake.
-	let declaresSpawnTool = false;
+	// Whether the role itself puts the spawn tool in its child's allowlist. Read
+	// from the role's declaration, never from `tools`: the resolver drops a floor
+	// entry naming it, so the composed list would make ambient config look like a
+	// role's mistake.
+	let wantsSpawnTool = false;
 	if (profile.harness === "agy") {
 		// agy has no `--tools` flag, so neither list can be enforced there. Each one
 		// the caller did ask for is reported rather than silently dropped.
@@ -84,8 +84,9 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		});
 		warnings.push(...resolved.warnings);
 		if (resolved.allowlist) tools = resolved.tools;
-		// Expansion, not a literal match: a role's `*` covers the spawn tool too.
-		declaresSpawnTool = expandToolPatterns(agent.tools ?? [], context.allToolNames).tools.includes(TOOL_NAME);
+		// Expansion, not a literal match: a role's `*` covers the spawn tool too,
+		// while `-subagent` removes it again.
+		wantsSpawnTool = declaresSpawnTool(agent.tools, context.allToolNames);
 	}
 
 	// Nested delegation is refused rather than half-supported. A grandchild's
@@ -94,7 +95,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// children report, and the subagent has no report that carries a
 	// grandchild's payload. Failing the spawn says so, instead of losing work
 	// quietly later.
-	if (declaresSpawnTool) {
+	if (wantsSpawnTool) {
 		return {
 			ok: false,
 			error:

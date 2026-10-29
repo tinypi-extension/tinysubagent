@@ -196,3 +196,61 @@ test("a negation is not mistaken for a tool name, with or without positives", ()
 		assert.equal(resolved.tools.some((tool) => tool.startsWith("-")), false, declared.join(","));
 	}
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// `-*`: opting out of the floor rather than subtracting a name
+// ────────────────────────────────────────────────────────────────────────────
+
+test("a role's `-*` drops the floor and keeps its own positives", () => {
+	// The point of the opt-out: a role written when the floor was small stays
+	// narrow after someone widens `defaultTools`.
+	const resolved = resolve({
+		floor: ["read", "bash", "edit"],
+		declared: ["-*", "read", "grep"],
+		registry: [...REGISTRY, "grep"],
+	});
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, ["read", "grep", REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, []);
+});
+
+test("`-*` alone on a non-empty floor is report-only with the empty-list warning", () => {
+	// Dropping the floor leaves nothing to allow, and returning no allowlist would
+	// widen the child to every tool — the exact opposite of the declaration.
+	const resolved = resolve({ floor: ["read", "bash"], declared: ["-*"] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, [
+		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+	]);
+});
+
+test("`-*` on an empty floor is a silent no-op", () => {
+	// There is no floor to drop, and `-*` is not a name, so nothing is unresolved
+	// and nothing warrants a warning.
+	const resolved = resolve({ declared: ["-*"] });
+	assert.equal(resolved.allowlist, false);
+	assert.deepEqual(resolved.tools, []);
+	assert.deepEqual(resolved.warnings, []);
+});
+
+test("`-*` plus a positive glob still expands that glob against the registry", () => {
+	// The opt-out only removes the floor; it must not switch off expansion of what
+	// the role did ask for.
+	const resolved = resolve({ floor: ["read"], declared: ["-*", "codegraph_*"] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, ["codegraph_query", "codegraph_search", REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, []);
+});
+
+test("a floor naming only the spawn tool still narrows to report-only", () => {
+	// The floor asked to narrow; the only name in it was the dropped spawn tool.
+	// Treating what remains as "no allowlist" would hand the child every tool.
+	const resolved = resolve({ floor: [TOOL_NAME], registry: [...REGISTRY, TOOL_NAME] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, [
+		`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+	]);
+});

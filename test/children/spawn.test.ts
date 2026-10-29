@@ -274,6 +274,59 @@ test("a floor naming the spawn tool is dropped with a warning instead of refusin
 	}
 });
 
+test("a role's `-*` keeps the floor out of the child's allowlist", async () => {
+	// Opting out of the floor is how a narrow role stays narrow when someone later
+	// widens `defaultTools`, so no floor name may reach the child's `--tools` list.
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-floor-optout-"));
+	try {
+		const narrow: AgentDef = { ...worker, name: "narrow", tools: ["-*", "read"] };
+		const base = context([narrow], ["read", "bash", "edit"]);
+		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
+			const spawned = await spawnOne(
+				{ agent: "narrow", task: "x", name: "narrow" },
+				{
+					...base,
+					cwd: dir,
+					agentDir: dir,
+					sessionDir: dir,
+					env: {},
+					config: { ...base.config, defaultTools: ["read", "bash", "edit"] },
+				},
+			);
+			return { spawned, script: writtenScript(dir, "sid") };
+		});
+		assert.equal(result.spawned.ok, true);
+		assert.deepEqual(result.spawned.warnings, []);
+		assert.match(result.script, new RegExp(`'--tools' 'read,${REPORT_TOOL_NAME}'`));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a role's `*` does not refuse the spawn when its own negation removes the spawn tool", async () => {
+	// `*, -subagent` is the documented way to take the breadth without nested
+	// delegation, so the guard must read the negation, not just the expansion.
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-negated-spawn-tool-"));
+	try {
+		const broad: AgentDef = { ...worker, name: "broad", tools: ["*", `-${TOOL_NAME}`] };
+		const base = context([broad], ["read", "bash", TOOL_NAME]);
+		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
+			const spawned = await spawnOne(
+				{ agent: "broad", task: "x", name: "broad" },
+				{ ...base, cwd: dir, agentDir: dir, sessionDir: dir, env: {} },
+			);
+			return { spawned, script: writtenScript(dir, "sid") };
+		});
+		assert.equal(result.spawned.ok, true);
+		assert.deepEqual(result.spawned.warnings, []);
+		// The registry order settles the allowlist; the spawn tool is absent because
+		// the negation beat the expansion.
+		assert.match(result.script, new RegExp(`'--tools' 'read,bash,${REPORT_TOOL_NAME}'`));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("an agy profile with a non-empty floor warns that the floor is ignored and launches", async () => {
 	// agy has no `--tools` flag, so the floor cannot be enforced there. Saying so
 	// beats a child that quietly runs with whatever agy allows.
