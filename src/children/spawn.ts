@@ -23,9 +23,6 @@ import { declaresSpawnTool, resolveToolList } from "../tool-list.ts";
 import { isThinkingLevel, TOOL_NAME, type ThinkingLevel } from "../types.ts";
 import { errorMessage, type SpawnContext, type SpawnFailed, type SpawnRequest, type Spawned } from "./contract.ts";
 
-/** Name of the spawn tool, used for the nesting guard below. */
-export { TOOL_NAME };
-
 /**
  * The child hook, passed as `-e` to every child. Sourced from `./paths.ts` so
  * the target cannot drift when this module is relocated.

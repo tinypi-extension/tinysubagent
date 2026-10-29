@@ -37,7 +37,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import tinysubagent from "../index.ts";
 import { discoverAgents } from "../src/config/agents.ts";
 import { herdrPaneExists, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
-import { TOOL_NAME } from "../src/children/spawn.ts";
+import { TOOL_NAME } from "../src/types.ts";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

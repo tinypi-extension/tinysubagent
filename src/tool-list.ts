@@ -71,6 +71,20 @@ function reportOnce(
 }
 
 /**
+ * Whether a floor entry is a plain tool name — the only shape `defaultTools`
+ * accepts.
+ *
+ * The floor is not a pattern language: `*` and a leading `-` are the role
+ * `tools` grammar, and borrowing them here would make the ambient default a
+ * policy the user cannot read. The settings loader asks this predicate so the
+ * floor's shape and the resolver's grammar of the same two characters cannot
+ * drift apart.
+ */
+export function isPlainToolName(name: string): boolean {
+	return !name.includes("*") && !name.startsWith("-");
+}
+
+/**
  * Split the role's entries into what it adds and what it subtracts.
  *
  * Negation is spelling, not a tool name: the leading `-` is stripped here so it
@@ -164,10 +178,12 @@ export function resolveToolList(input: ToolListInput): ToolList {
 	// Dropping the name is registry-dependent: only a registry that actually
 	// offers the spawn tool makes the entry dangerous. Without it the entry is
 	// left alone — not dropped, and not called a typo by the check below.
-	const floor = input.registry.includes(TOOL_NAME)
+	const dropsSpawnTool =
+		input.registry.includes(TOOL_NAME) && input.floor.includes(TOOL_NAME);
+	const floor = dropsSpawnTool
 		? input.floor.filter((name) => name !== TOOL_NAME)
 		: [...input.floor];
-	if (floor.length < input.floor.length) {
+	if (dropsSpawnTool) {
 		reportOnce(
 			input.reportedWarnings,
 			`defaultTools:${TOOL_NAME}`,
@@ -244,18 +260,19 @@ export function resolveToolList(input: ToolListInput): ToolList {
 	// even a name the spawn-tool filter removed — or the role's own patterns
 	// expanded to a name. Without that, an empty list is "nothing resolved" and
 	// must stay no-allowlist: it is a broken pattern, not a deliberate narrowing.
-	const askedForTools = input.floor.length > 0 || expanded.tools.length > 0;
-
-	if (composed.length === 0) {
-		if (!askedForTools) return { allowlist: false, tools: [], warnings };
-		warnings.push(
-			`agent "${input.role}": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
-		);
-		return { allowlist: true, tools: [REPORT_TOOL_NAME], warnings };
-	}
+	//
+	// A role that declares only negations is the exception: `-write` on an empty
+	// floor is a request to remove a capability, so it must narrow, not widen to
+	// every tool including the one it just removed. The opt-out (`-*`) and the
+	// ignored report-tool negation remove nothing from the list, so they stay
+	// "no allowlist" when nothing else asked for one.
+	const negativesOnly = positives.length === 0 && denied.size > 0;
+	const askedForTools =
+		input.floor.length > 0 || expanded.tools.length > 0 || negativesOnly;
 
 	const tools = composed.filter((name) => !denied.has(name));
 	if (tools.length === 0) {
+		if (!askedForTools) return { allowlist: false, tools: [], warnings };
 		warnings.push(
 			`agent "${input.role}": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
 		);

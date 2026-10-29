@@ -34,7 +34,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import tinysubagent from "../index.ts";
 import { discoverAgents } from "../src/config/agents.ts";
 import { MIN_HERDR_VERSION, PLUGIN_ID, herdrPaneExists, herdrPluginInfo, herdrStatus, isInsideHerdr, versionAtLeast } from "../src/herdr/cli.ts";
-import { TOOL_NAME } from "../src/children/spawn.ts";
+import { TOOL_NAME } from "../src/types.ts";
 
 const agentName = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "worker";
 const parallel = process.argv.includes("--parallel");

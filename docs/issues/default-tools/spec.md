@@ -42,7 +42,7 @@ is resolved by tinysubagent before launch and never reaches pi as a flag.
 `defaultTools` is a plain list of names — there is no glob and no negation inside it.
 
 ```jsonc
-// ~/.pi/tinysubagent.jsonc
+// ~/.pi/agent/tinysubagent.jsonc
 { "defaultTools": ["read", "bash", "edit", "write", "codegraph_query", "codegraph_search"] }
 ```
 
@@ -113,8 +113,12 @@ tools: -*, read, grep, find, ls
     single acknowledgment.
 22. As an orchestrator user running an agy profile, I want `defaultTools` ignored with a
     warning, so that setting it does not refuse every agy spawn.
-23. As an orchestrator user running an agy profile for a role that declares `tools`, I want
-    the existing refusal to stay, so that the rule I document is the rule I get.
+23. ~~As an orchestrator user running an agy profile for a role that declares `tools`, I
+    want the existing refusal to stay, so that the rule I document is the rule I get.~~
+    **Corrected 2026-10-29:** as an orchestrator user running an agy profile for a role that
+    declares `tools`, I want the list ignored with a warning and the spawn to proceed, so
+    that a role written for pi still launches on agy. There was no existing refusal to keep;
+    see **agy** below.
 24. As a reader of the README, I want the `tools` notes to say what the floor does to a role
     with no `tools` frontmatter, so that I understand the blast radius before setting it.
 25. As a reader of the README, I want `*` documented as including `subagent`, so that I know
@@ -179,6 +183,14 @@ subagent_report` and a warning in the acknowledgment that the allowlist is empty
 **not** launch with no flag, because that would mean *everything* and turn a narrowing
 mistake into a widening one.
 
+**Negatives only.** *(delegated, added 2026-10-29)* A role whose `tools` holds only negations
+(`-write`, or `-write, -edit`) is asking to narrow even when the floor is empty. It therefore
+has intent and launches with `--tools subagent_report` plus the empty-list warning, rather
+than with no flag: no flag would hand the child every tool, including the one the role just
+removed. Opting out (`-*`) and the ignored report-tool negation remove nothing, so on an
+empty floor they stay the no-flag case, and so does an unmatched positive pattern — an empty
+expansion is not an allowlist (see **The report tool**).
+
 **The report tool.** *(interview)* `subagent_report` is appended to every explicit allowlist
 after composition, whatever the floor and negations say. A role's `-subagent_report` is
 ignored with a warning rather than honouring it: the report is the hand-back contract, not a
@@ -194,9 +206,23 @@ block every spawn in the project.
 `*` expands over the registry and the registry contains `subagent`. The README gains the
 explanatory line rather than the guard gaining an exception.
 
+> **Corrected 2026-10-29.** The guard shipped deny-wins, so it *did* gain the exception the
+> original expected to avoid. The decision is now: `tools: "*", -subagent` and
+> `tools: "subagent, -subagent"` launch, while a bare `subagent` or a `*` with no
+> subtraction still refuses. The reason is the same one that makes negation win everywhere
+> else: a name the role subtracts was never in its child, so refusing on it would make the
+> documented `*`-with-`-subagent` workaround impossible. The README documents `-subagent`
+> beside `-*`; the refusal is for a spawn tool that survives the role's own negations.
+
 **agy.** *(interview)* `defaultTools` is ignored for an agy profile with a warning on the
 spawn, and the role-declares-`tools` refusal is unchanged. A floor is ambient, so it
 degrades; a role's own declaration is the role's mistake, so it refuses.
+
+> **Corrected 2026-10-29.** The premise was wrong: `main` already warned and launched for a
+> role that declares `tools` on an agy profile (test `an agy profile ignores role tools with
+> a warning and proceeds`). The shipped code keeps that baseline for both the floor and a
+> role's list, because agy has no `--tools` flag and a refusal would make every pi role with
+> a `tools` entry unusable there. User story 23 is corrected with it.
 
 **Warning channels.** *(interview)* Shape errors and unsupported entries are reported through
 the existing config-load warning channel at startup, beside the current `env`/`profiles`

@@ -23,6 +23,7 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 // strictness.
 import { parse as parseJsonc, printParseErrorCode, type ParseError } from "jsonc-parser";
 import { isEffortLevel, isThinkingLevel, type Profile } from "../types.ts";
+import { isPlainToolName } from "../tool-list.ts";
 import { DEFAULT_SYSTEMONE_BASE_URL, SYSTEMONE_MODEL, normalizeBaseUrl } from "../systemone/client.ts";
 
 /** Re-exported so callers of the config need not know where the default lives. */
@@ -405,7 +406,7 @@ function resolveDefaultTools(raw: unknown, file: string, warnings: string[]): st
 			);
 			continue;
 		}
-		if (entry.includes("*") || entry.startsWith("-")) {
+		if (!isPlainToolName(entry)) {
 			warnings.push(
 				`tinysubagent: defaultTools entry "${entry}" in ${file} is not supported; ignoring it.`,
 			);

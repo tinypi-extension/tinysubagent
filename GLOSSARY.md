@@ -104,8 +104,12 @@ _Avoid_: custom profiles
 A child's explicit restriction to a tool list, rather than its harness's normal tool set. It exists when a role declares `tools` or a default-tools floor is set.
 _Avoid_: permissions, toolset, whitelist
 
+**Floor**:
+The tool list every child starts from, set once so a role need not restate it. A role may add to it or subtract from it, and with no floor and no declaration of its own a child keeps its harness's normal tool set.
+_Avoid_: base tools, global allowlist, global tools
+
 **Default tools**:
-The tool floor configured once for every child, so a role need not restate it. A role may subtract from it or opt out of it.
+The configured floor: the `defaultTools` setting and the names it holds.
 _Avoid_: base tools, global allowlist, global tools
 
 **Tool list**:
