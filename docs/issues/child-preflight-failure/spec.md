@@ -38,9 +38,15 @@ One capability. No capability map.
 | How the child ends | Before | Intended |
 |---|---|---|
 | Settles `done` | `{"type":"done"}` | unchanged |
-| Settles `error` (503, bad model, tool failure) | `{"type":"failed","reason":"error"}`, reason scraped from the session | unchanged |
+| Settles `error` (503, bad model, tool failure) | `{"type":"failed","reason":"error"}`, reason scraped from the session | **superseded** — see below |
 | Esc / abort | nothing — the wait continues on the live pane | unchanged |
 | **pi refuses the prompt** (no model selected, no usable credentials for the provider) | **nothing** — no run, so no `agent_end`, so no `agent_settled` | `{"type":"failed","reason":"error","message":...}` |
+
+> **Superseded:** `docs/issues/silent-errors/spec.md` reverses the `Settles error` row. An
+> errored settle — a 503, an expired credential, a bad model, exhausted retries — now writes
+> nothing and holds the pane, exactly like an interrupt, so a human can fix the provider and
+> drive the same child on to `subagent_report`. The sidecar *reader* described below is
+> unchanged.
 
 The last row is a real hang, reproduced end to end: a child spawned with an
 unauthenticated provider prints `No API key found for oc-openai.` in its pane, writes no

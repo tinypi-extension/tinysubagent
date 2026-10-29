@@ -1,40 +1,45 @@
 /**
- * Provider-error smoke test: a child whose model endpoint fails must be reported
- * to the orchestrator as `failed (error)`, not silently swallowed.
+ * Provider-error smoke test: a child whose model endpoint dies must be held, not
+ * reported.
  *
- * The distinction this pins down is the whole point of the interrupt rule: an Esc
- * is *not* a failure and must tell the orchestrator nothing, while a genuine
- * provider error (503, bad model, auth) must still come back. The two are easy to
- * conflate because pi labels a tool-call Esc as a plain `error` too.
+ * A request/response error is not an ending. The child stays at its prompt with
+ * its context intact, the orchestrator is told nothing, and the batch keeps
+ * waiting. A human can then fix the provider and drive that same child on to
+ * `subagent_report`, which lands as `completed (reported)` and closes the pane.
  *
- * It drives a real child in a real pane against a local HTTP server that always
- * answers 503, so no external provider is involved and the failure is exact.
+ * It drives a real child in a real pane against a local HTTP server that answers
+ * 503 while the child is held, then serves a real OpenAI-compatible stream that
+ * calls `subagent_report` once the endpoint is healthy again. No external
+ * provider is involved.
  *
  * Usage: node scripts/smoke-provider-error.ts [agent] [--retries] [--no-auth]
  *
  * `--retries` keeps pi's automatic retry on, so the 503 has to survive the
  * retry-and-give-up path — the path a real provider outage actually takes, and
- * the one most likely to lose the report. Both shapes must end the same way.
+ * the one most likely to write something early. Both shapes must hold silently.
  *
  * `--no-auth` drops the child's credentials instead, which makes pi refuse the
- * prompt before any run starts. That is the other kind of "the subagent errored":
- * no agent phase, so no settle, so nothing is written unless the child notices
- * on its own.
+ * prompt before any run starts. That shape is still owned by the refusal ticket
+ * (02); this mode keeps its existing smoke until that ticket rewrites it.
  */
 
 import { strict as assert } from "node:assert";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import tinysubagent from "../index.ts";
 import { discoverAgents } from "../src/config/agents.ts";
-import { herdrPaneClose, herdrPaneExists, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
+import { herdrPaneExists, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
 import { TOOL_NAME } from "../src/children/spawn.ts";
+
+const run = promisify(execFile);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function fail(message: string): never {
 	console.error(`\nFAIL ${message}`);
@@ -53,10 +58,73 @@ const agentName = args.find((arg) => !arg.startsWith("--")) ?? "worker";
 const agent = agents.find((entry) => entry.name === agentName) ?? agents[0];
 if (!agent) fail("no agents found");
 
-// ── The 503 endpoint ────────────────────────────────────────────────────────
-const server = createServer((_req, res) => {
-	res.writeHead(503, { "content-type": "application/json" });
-	res.end(JSON.stringify({ error: { message: "Service Unavailable (smoke)", type: "server_error" } }));
+// ── The endpoint: 503 while held, a real report-calling stream once healthy ──
+let healthy = false;
+let healthyRequests = 0;
+
+const chunk = (delta: unknown, finishReason: string | null) => ({
+	id: "chatcmpl-smoke",
+	object: "chat.completion.chunk",
+	created: Math.floor(Date.now() / 1000),
+	model: "deepseek-flash",
+	choices: [{ index: 0, delta, finish_reason: finishReason }],
+});
+
+const server = createServer((req, res) => {
+	req.resume();
+	if (!healthy) {
+		res.writeHead(503, { "content-type": "application/json" });
+		res.end(
+			JSON.stringify({ error: { message: "Service Unavailable (smoke)", type: "server_error" } }),
+		);
+		return;
+	}
+
+	healthyRequests += 1;
+	res.writeHead(200, {
+		"content-type": "text/event-stream",
+		"cache-control": "no-cache",
+		connection: "keep-alive",
+	});
+	const send = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+
+	if (healthyRequests === 1) {
+		// The one turn the human drove: hand the result back through the tool.
+		send(
+			chunk(
+				{
+					role: "assistant",
+					tool_calls: [
+						{
+							index: 0,
+							id: "call_smoke_report",
+							type: "function",
+							function: {
+								name: "subagent_report",
+								arguments: JSON.stringify({ result: "PONG" }),
+							},
+						},
+					],
+				},
+				null,
+			),
+		);
+		send(chunk({}, "tool_calls"));
+	} else {
+		// Anything after the report is not our contract; do not loop on the tool.
+		send(chunk({ role: "assistant", content: "Reported." }, null));
+		send(chunk({}, "stop"));
+	}
+	send({
+		id: "chatcmpl-smoke",
+		object: "chat.completion.chunk",
+		created: Math.floor(Date.now() / 1000),
+		model: "deepseek-flash",
+		choices: [],
+		usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+	});
+	res.write("data: [DONE]\n\n");
+	res.end();
 });
 const port: number = await new Promise((resolve) => {
 	server.listen(0, "127.0.0.1", () => {
@@ -95,7 +163,7 @@ writeFileSync(
 );
 // The provider's own SDK retries are always off — one HTTP request, one outcome.
 // pi's retries are the interesting knob: off means the 503 settles immediately,
-// on means it has to exhaust its backoff first. Either way the child must report.
+// on means it has to exhaust its backoff first. Either way the child must hold.
 writeFileSync(
 	join(childAgentDir, "settings.json"),
 	JSON.stringify(
@@ -124,10 +192,6 @@ function cleanup(): void {
 // ── Stub surface ────────────────────────────────────────────────────────────
 const tools: Record<string, unknown>[] = [];
 const sent: { message: { content: string }; options: unknown }[] = [];
-let steerResolve: (() => void) | null = null;
-const steered = new Promise<void>((resolve) => {
-	steerResolve = resolve;
-});
 
 const api = {
 	on() {},
@@ -136,7 +200,7 @@ const api = {
 	},
 	sendMessage(message: { content: string }, options: unknown) {
 		sent.push({ message, options });
-		steerResolve?.();
+		console.log(`\n!!! STEER MESSAGE ARRIVED (${sent.length}) !!!\n${message.content}`);
 	},
 	getAllTools: () => [{ name: "read" }, { name: "bash" }, { name: TOOL_NAME }],
 };
@@ -197,47 +261,108 @@ function reap(): void {
 		// Already gone.
 	}
 }
+process.on("exit", reap);
 
-/** A refusal settles in the child's first second; a 503 has retries to exhaust. */
-const timeoutMs = noAuth ? 90_000 : 120_000;
+async function paneText(): Promise<string> {
+	try {
+		const { stdout } = await run("herdr", ["pane", "read", paneId, "--format", "text", "--lines", "80"]);
+		return stdout;
+	} catch {
+		return "";
+	}
+}
 
-const timeout = setTimeout(
-	() => {
-		reap();
-		cleanup();
-		fail(
-			`timed out after ${timeoutMs / 1000}s: ` +
-				(noAuth
-					? "pi refused the run and the orchestrator was never told — the batch hangs here."
-					: "a provider 503 was never reported to the orchestrator.") +
-				"\nThis is the bug — an error that is not an interrupt must reach the parent.",
-		);
-	},
-	timeoutMs,
-);
-await steered;
-clearTimeout(timeout);
+/** Wait until `ready()` is true or the deadline passes. */
+async function waitUntil(ready: () => boolean | Promise<boolean>, ms: number): Promise<boolean> {
+	const deadline = Date.now() + ms;
+	while (Date.now() < deadline) {
+		if (await ready()) return true;
+		await sleep(1_000);
+	}
+	return ready();
+}
 
-console.log(`\n── steer message ──\n${sent.map((entry) => entry.message.content).join("\n\n")}`);
-const body = sent.map((entry) => entry.message.content).join("\n");
-assert.equal(sent.length, 1, `expected one steer message, got ${sent.length}`);
-assert.ok(body.includes("failed (error)"), `expected \`failed (error)\`:\n${body}`);
+const bodyText = () => sent.map((entry) => entry.message.content).join("\n\n");
+
 if (noAuth) {
-	// pi never started the run, so there is no turn to scrape a reason out of: the
-	// report itself has to carry it, or the orchestrator sees a bare "failed".
+	// ── The refused shape (ticket 02 owns its new contract) ─────────────────
+	const steerArrived = await waitUntil(() => sent.length > 0, 90_000);
+	if (!steerArrived) {
+		fail(
+			"timed out after 90s: pi refused the run and the orchestrator was never told — " +
+				"the batch hangs here.",
+		);
+	}
+	const body = bodyText();
+	assert.equal(sent.length, 1, `expected one steer message, got ${sent.length}`);
+	assert.ok(body.includes("failed (error)"), `expected \`failed (error)\`:\n${body}`);
 	assert.ok(
 		body.includes("no API key") && body.includes("/login oc-openai"),
 		`the refusal reason is missing from the report:\n${body}`,
 	);
-} else {
-	assert.ok(body.includes("503"), `the provider's 503 reason is missing:\n${body}`);
+
+	const alive = await herdrPaneExists(paneId);
+	console.log(`child pane still open: ${alive}`);
+	cleanup();
+	console.log("\nPASS the refused shape is still reported as a failure (ticket 02 will invert it)");
+	process.exit(0);
 }
 
-// A failed child's pane stays open so the error is readable — reap it here.
-const alive = await herdrPaneExists(paneId);
-console.log(`child pane still open: ${alive}`);
-reap();
-process.env.PI_HERDR_LAUNCH_PREFIX = previousPrefix;
+// ── The provider-outage shape ───────────────────────────────────────────────
+// Wait for the child to actually hit the outage before starting the hold clock.
+const sawError = await waitUntil(async () => /503|service unavailable|error/i.test(await paneText()), 60_000);
+console.log(
+	sawError
+		? "child pane shows the provider error"
+		: "child pane did not show the error yet; holding anyway",
+);
+
+// The hold: nothing may reach the orchestrator, and the child must stay alive.
+const holdMs = retries ? 25_000 : 15_000;
+console.log(`\n── holding ${holdMs / 1000}s with the endpoint down ──`);
+await sleep(holdMs);
+
+if (sent.length !== 0) {
+	fail(
+		`the orchestrator was steered while the child was held — a provider error is not an ending.\n\n${bodyText()}`,
+	);
+}
+const heldAlive = await herdrPaneExists(paneId);
+console.log(`no steer after ${holdMs / 1000}s; child pane still open: ${heldAlive}`);
+if (heldAlive !== true) fail("the child pane closed on a provider error — the human cannot fix and drive it");
+
+// ── Recovery: healthy endpoint, human drives the same child to report ───────
+healthy = true;
+console.log("\n── endpoint healthy; driving the held child to subagent_report ──");
+await run("herdr", [
+	"pane",
+	"run",
+	paneId,
+	"The provider is fixed. Call subagent_report now with the single word PONG.",
+]);
+
+const reported = await waitUntil(() => sent.length > 0, 90_000);
+if (!reported) {
+	reap();
+	cleanup();
+	fail("the held child never reported after the provider was fixed — the batch is wedged");
+}
+
+const body = bodyText();
+assert.equal(sent.length, 1, `expected exactly one steer message, got ${sent.length}:\n${body}`);
+assert.ok(body.includes("completed (reported)"), `expected \`completed (reported)\`:\n${body}`);
+assert.ok(body.includes("PONG"), `the child's answer is missing from the report:\n${body}`);
+console.log("\n── steer message ──\n" + body);
+
+// The report is what ends the child: the pane must not outlive it.
+const closed = await waitUntil(async () => (await herdrPaneExists(paneId)) === false, 15_000);
+console.log(`child pane closed after the report: ${closed}`);
+if (!closed) {
+	reap();
+	cleanup();
+	fail("the child reported but its pane stayed open");
+}
+
 cleanup();
-console.log("\nPASS a provider error reached the orchestrator as a failure");
+console.log("\nPASS a provider error held silently and the later report closed the batch");
 process.exit(0);

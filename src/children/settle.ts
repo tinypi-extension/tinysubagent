@@ -1,14 +1,13 @@
 /**
- * Settle classification: what a run's end means and the reason to record.
+ * Settle classification: did this turn finish cleanly?
  *
- * At settle time the run is over whatever the stop reason says, so only the two
- * genuinely bad endings are separated out; everything else means the child
- * finished. Reporting *something* in every case is the point — a settle that
- * reported nothing would be a hang — so an empty or assistant-less run counts as
- * failed rather than silently succeeding.
+ * The child no longer declares an outcome at settle time; the explicit
+ * `subagent_report` is the only thing that does. All a settle still needs is
+ * the one answer to "can this turn be reminded to report?" — a turn that
+ * finished cleanly without one. An error, an interrupt, and a turn that
+ * produced no assistant message at all are all silence: the child stays at its
+ * prompt, and the watcher keeps waiting on the pane.
  */
-
-import type { ChildSettle } from "./report.ts";
 
 /** Only the fields of a turn message this module reasons about. */
 export interface TurnMessage {
@@ -17,46 +16,22 @@ export interface TurnMessage {
 }
 
 /**
- * What a settled run means.
+ * True when the run's last assistant message finished without an error or an
+ * interrupt.
  *
- * `interrupted` is deliberately not a `ChildSettle`: it is the one verdict that
- * is *not* reportable, because the child it describes has not finished.
+ * `aborted` is an interrupt, not a completion: the user stopped the turn to
+ * redirect it, and the child is alive at its prompt. An `error` may be a real
+ * provider failure or an Esc that landed on a tool call — pi labels both the
+ * same — and neither is an ending. A run that produced no assistant message
+ * has nothing to remind and nothing to report either.
+ *
+ * Any other stop reason — `stop`, a truncated `length`, one this code has never
+ * heard of — is a turn the child completed.
  */
-export type SettleVerdict = ChildSettle | "interrupted";
-
-/**
- * Which settle reason a run ended with.
- *
- * At settle time the run is over whatever the stop reason says, so only the two
- * genuinely bad endings are separated out; everything else — `stop`, a truncated
- * `length`, a stop reason this code has never heard of — means the child
- * finished and its last message is the result. Reporting *something* in every
- * case is the point: a settle that reported nothing would be a hang.
- *
- * A run that produced no assistant message at all counts as failed, because
- * nothing was accomplished and there is no result to hand back.
- *
- * `aborted` is separated out from `error` rather than folded into it: an abort is
- * the user stopping the run to redirect it, not the run going wrong. It is only
- * half the picture — pi does not label every interrupt this way — which is why the
- * settle hook checks the run's own signal as well.
- */
-export function settleReason(messages: readonly TurnMessage[] | undefined): SettleVerdict {
+export function finishedCleanly(messages: readonly TurnMessage[] | undefined): boolean {
 	const message = lastAssistantMessage(messages);
-	if (!message) return "failed";
-	if (message.stopReason === "aborted") return "interrupted";
-	return message.stopReason === "error" ? "failed" : "done";
-}
-
-/**
- * The reason to record for a failed settle.
- *
- * `aborted` is absent by construction — `settleReason` never calls a failed
- * settle aborted — so all that is left to distinguish is an errored turn from a
- * run that produced no assistant message to judge at all.
- */
-export function failureDetail(messages: readonly TurnMessage[] | undefined): string {
-	return lastAssistantMessage(messages) ? "error" : "no-output";
+	if (!message) return false;
+	return message.stopReason !== "error" && message.stopReason !== "aborted";
 }
 
 /** The last assistant message, or undefined when there is none. */
