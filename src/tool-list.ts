@@ -23,6 +23,14 @@ export interface ToolListInput {
 	registry: readonly string[];
 	/** The role's name, so a warning says whose list it is about. */
 	role: string;
+	/**
+	 * Warning keys this session has already reported. The extension registration
+	 * owns one set and hands the same one to every spawn, which is what makes the
+	 * registry-dependent warnings below say their piece once. Absent — a
+	 * single-shot call such as a test or a smoke run — every warning is emitted,
+	 * because there is no session to remember it for.
+	 */
+	reportedWarnings?: Set<string>;
 }
 
 export interface ToolList {
@@ -37,6 +45,29 @@ export interface ToolList {
 	tools: string[];
 	/** Problems about this role's list, already phrased for the acknowledgment. */
 	warnings: string[];
+}
+
+/**
+ * Report a registry-dependent, floor-class warning at most once per session.
+ *
+ * The key names the fact, not the sentence: the same floor entry is the same
+ * problem whichever role is spawning, so keying off the message would make the
+ * role name part of the identity and repeat it for every role.
+ *
+ * Role-level warnings deliberately do not go through here. A floor is ambient
+ * config that one spawn explains once, but a role's own pattern is that role's
+ * mistake: every acknowledgment it affects should name it, or a batch would
+ * hide which children need fixing behind whichever child spawned first.
+ */
+function reportOnce(
+	reportedWarnings: Set<string> | undefined,
+	key: string,
+	message: string,
+	warnings: string[],
+): void {
+	if (reportedWarnings?.has(key)) return;
+	reportedWarnings?.add(key);
+	warnings.push(message);
 }
 
 /**
@@ -82,18 +113,45 @@ function splitDeclared(declared: readonly string[]): { positives: string[]; nega
  * the same thing. A list that positives fill and negations then empty is still
  * an allowlist — of the report tool alone — because falling back to "no
  * allowlist" would widen the child to every tool the role just subtracted.
+ *
+ * Registry-dependent warnings — an unmatched floor name, the dropped spawn-tool
+ * entry, the ignored report-tool negation — go through `reportedWarnings`, so a
+ * session explains them once. They describe config that does not change while
+ * the session runs, and repeating them would bury the role-level warnings under
+ * the same three lines on every acknowledgment. A role's own unmatched patterns
+ * are not deduplicated: they name a role, and every acknowledgment they affect
+ * should say which role still needs fixing.
  */
 export function resolveToolList(input: ToolListInput): ToolList {
 	const warnings: string[] = [];
 
-	// Dropping the name is registry-dependent: without the spawn tool registered
-	// it is just an unknown floor name, which warns on its own account.
+	// Dropping the name is registry-dependent: only a registry that actually
+	// offers the spawn tool makes the entry dangerous. Without it the entry is
+	// left alone — not dropped, and not called a typo by the check below.
 	const floor = input.registry.includes(TOOL_NAME)
 		? input.floor.filter((name) => name !== TOOL_NAME)
 		: [...input.floor];
 	if (floor.length < input.floor.length) {
-		warnings.push(
+		reportOnce(
+			input.reportedWarnings,
+			`defaultTools:${TOOL_NAME}`,
 			`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+			warnings,
+		);
+	}
+
+	// A floor name the registry does not know is kept — dropping it would narrow
+	// the child without saying so — and reported, matching the rule for a literal
+	// role name. The spawn tool is exempt: it is a name this resolver knows how
+	// to handle, so above it was either dropped with its own warning or the
+	// registry simply does not offer nesting, and neither is a typo.
+	for (const name of floor) {
+		if (name === TOOL_NAME || input.registry.includes(name)) continue;
+		reportOnce(
+			input.reportedWarnings,
+			`defaultTools:unknown:${name}`,
+			`tinysubagent: defaultTools entry "${name}" matches no known tool — the child may be missing what it needs.`,
+			warnings,
 		);
 	}
 
@@ -118,7 +176,14 @@ export function resolveToolList(input: ToolListInput): ToolList {
 	const denied = new Set<string>();
 	for (const name of negatives) {
 		if (name === REPORT_TOOL_NAME) {
-			warnings.push(`agent "${input.role}": -${name} is ignored — the report tool is always allowed.`);
+			// The report contract is the same for every role, so one explanation
+			// covers whoever declares the negation next.
+			reportOnce(
+				input.reportedWarnings,
+				`contract:deny:${REPORT_TOOL_NAME}`,
+				`agent "${input.role}": -${name} is ignored — the report tool is always allowed.`,
+				warnings,
+			);
 			continue;
 		}
 		denied.add(name);

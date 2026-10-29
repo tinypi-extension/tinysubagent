@@ -818,3 +818,43 @@ test("a configured floor reaches a child that declares no tools", async () => {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Registry-dependent warnings: one session says them once
+// ────────────────────────────────────────────────────────────────────────────
+
+test("two spawns in one session report the floor once and still report each role's own pattern", async () => {
+	// The floor is ambient config, so the first acknowledgment explains it and
+	// every later spawn stays quiet. A role's own pattern is that role's mistake,
+	// so the second spawn must still name it: a batch would otherwise hide which
+	// roles need fixing behind whichever child happened to spawn first.
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-warn-once-"));
+	try {
+		const quiet: AgentDef = { ...worker, name: "quiet", tools: undefined };
+		const typo: AgentDef = { ...worker, name: "typo", tools: ["nope_*"] };
+		const base = context([quiet, typo], ["read", TOOL_NAME]);
+		const shared: SpawnContext = {
+			...base,
+			cwd: dir,
+			agentDir: dir,
+			sessionDir: dir,
+			env: {},
+			reportedWarnings: new Set<string>(),
+			config: { ...base.config, defaultTools: ["gone", TOOL_NAME, "read"] },
+		};
+		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
+			const first = await spawnOne({ agent: "quiet", task: "x", name: "quiet" }, shared);
+			const second = await spawnOne({ agent: "typo", task: "x", name: "typo" }, shared);
+			return { first, second };
+		});
+		assert.deepEqual(result.first.ok ? result.first.warnings : result.first, [
+			`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+			'tinysubagent: defaultTools entry "gone" matches no known tool — the child may be missing what it needs.',
+		]);
+		assert.deepEqual(result.second.ok ? result.second.warnings : result.second, [
+			'agent "typo": unknown tool(s) nope_* — the child may be missing what it needs.',
+		]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

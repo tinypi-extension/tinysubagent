@@ -57,6 +57,14 @@ export interface SpawnContext {
 	 * the original behaviour: every child splits right off the orchestrator pane.
 	 */
 	columns?: LiveSubPanes;
+	/**
+	 * Warning keys this pi session has already reported. One set per extension
+	 * registration, handed to every spawn, so registry-dependent warnings about
+	 * the floor say their piece once rather than on every acknowledgment. When
+	 * absent, every warning is emitted — a context with no session behind it has
+	 * nothing to remember.
+	 */
+	reportedWarnings?: Set<string>;
 }
 
 export interface Spawned {
