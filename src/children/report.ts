@@ -1,15 +1,19 @@
 /**
- * The child's report sidecar: the single byte-writer the orchestrator polls.
+ * The child's report sidecar writer: the single byte-writer for a pi child's
+ * explicit hand-back.
  *
  * The explicit `subagent_report` hand-back is the only thing that writes it, so
- * the child can only ever declare success. The atomic write stages a temp file
+ * a pi child can only ever declare success. The atomic write stages a temp file
  * beside the target and renames it, so a reader sees either the old file or the
  * complete new one, never a half-written mixture.
  *
  * The sidecar contract is frozen: `{"type":"done","result":…}` is what this
  * writer emits. Readers still accept a content-free `{"type":"done"}` and a
- * `{"type":"failed","reason":…[,"message":…]}` left by an older build, but no
- * child-side path can produce either any more.
+ * `{"type":"failed","reason":…[,"message":…]}`. Those are not produced by a pi
+ * child's report path: the agy launch wrapper stamps `failed / no-output` after
+ * agy exits 0 with no report, `spawnOne` stamps one when the agy binary is
+ * missing, and older builds wrote the rest. The reader classifies every one of
+ * them exactly as before.
  */
 
 import { renameSync, rmSync, writeFileSync } from "node:fs";

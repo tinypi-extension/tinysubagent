@@ -51,7 +51,7 @@ The append-only log a child's harness writes as it runs. It is where the child's
 _Avoid_: transcript, log, history
 
 **Sidecar**:
-The artifact a child leaves beside its session record to declare its outcome. It is authoritative over anything scraped from that record, and it is the only signal that survives a child that cannot speak.
+The artifact a child leaves beside its session record to hand its result back. It is authoritative over anything scraped from that record; a `failed` payload in it is older-build or agy-wrapper input that the reader still classifies.
 _Avoid_: status file, marker, metadata
 
 **Settle**:
@@ -67,7 +67,7 @@ An operator stopping the child's current turn without ending the child, so it ca
 _Avoid_: cancel, abort, kill (to cancel is to lose the pane)
 
 **Outcome**:
-What finally ended a wait: completed, failed, or cancelled — plus how that was learned (report, exit, or a vanished pane).
+What finally ended a wait: completed, failed, or cancelled — plus how that was learned (a result report, an exit code, a legacy `failed` payload, or a vanished pane).
 _Avoid_: status, state, verdict (a verdict is the internal reading that produces an outcome)
 
 **Refusal**:

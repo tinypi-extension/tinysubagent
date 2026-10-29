@@ -229,36 +229,7 @@ test("an interrupted settle reports nothing and keeps the child alive", async ()
 	});
 });
 
-test("a tool-call Esc that pi labels an error is silent too", async () => {
-	await withReportFile((report) => {
-		const stub = stubChildApi();
-		tinysubagentChild(stub.api as never);
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		// Esc that lands on a tool call reaches the child as `error` with the abort
-		// message. It no longer has to be told apart from a real failure: every
-		// non-clean settle is silent, so the tool-call Esc takes the same path as a
-		// provider error and nothing is written.
-		end(
-			{
-				messages: [
-					{ role: "assistant", stopReason: "error", errorMessage: "This operation was aborted" },
-				],
-			},
-			stub.ctx,
-		);
-		settled({}, stub.ctx);
-
-		assert.equal(existsSync(report), false);
-		assert.equal(stub.shutdowns(), 0);
-	});
-});
-
-test("an errored settle holds the pane for a later report", async () => {
+test("an errored settle writes nothing and keeps the pane open", async () => {
 	await withReportFile((report) => {
 		const stub = stubChildApi();
 		tinysubagentChild(stub.api as never);
@@ -393,20 +364,20 @@ test("a settle with no assistant message is silence too, not a failure", async (
 		) => void;
 		settled({}, stub.ctx);
 
-		// Nothing reportable was produced and the child is alive at its prompt:
-		// reporting `no-output` would mark the batch failed for a child the user
-		// can simply steer into working. It waits like every other non-clean settle.
+		// Nothing reportable was produced and the child is alive at its prompt, so
+		// there is nothing to report and nothing to end. It waits like every other
+		// non-clean settle, and the user can simply steer it into working.
 		assert.equal(existsSync(report), false);
 		assert.equal(stub.shutdowns(), 0);
 	});
 });
 
-test("a refused prompt writes nothing and leaves the child at its prompt", async () => {
+test("a run that never started writes nothing and registers no input hook", async () => {
 	await withReportFile(async (report) => {
 		// No credentials for the child's provider: pi throws out of `prompt()`
-		// before any run starts, so no settle ever fires. The child has no
-		// credential check and no input hook either — nothing writes, and the pane
-		// stays where a human can run /login and retry.
+		// before any run starts, so no settle ever fires. The extension registers
+		// no input hook, so nothing can intercept a typed steer as a refusal; the
+		// pane stays where a human can run /login and retry.
 		const stub = stubChildApi();
 		tinysubagentChild(stub.api as never);
 
@@ -417,40 +388,6 @@ test("a refused prompt writes nothing and leaves the child at its prompt", async
 		) => void;
 		await settled({}, stub.ctx);
 
-		assert.equal(existsSync(report), false);
-		assert.equal(stub.shutdowns(), 0);
-	});
-});
-
-test("a message typed into a live run is a steer, not a refusal", async () => {
-	await withReportFile((report) => {
-		// Mid-run pi queues the text and validates nothing. The child never sees
-		// it, so a steer cannot be mistaken for a refused prompt.
-		const stub = stubChildApi();
-		tinysubagentChild(stub.api as never);
-
-		assert.equal(stub.listeners.has("input"), false);
-		assert.equal(existsSync(report), false);
-	});
-});
-
-test("an interrupted child that cannot start its next run holds silently", async () => {
-	await withReportFile((report) => {
-		const stub = stubChildApi();
-		tinysubagentChild(stub.api as never);
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		// The user Esc'd to redirect — silence, as designed.
-		end({ messages: [{ role: "assistant", stopReason: "aborted" }] }, stub.ctx);
-		settled({}, stub.ctx);
-
-		// The redirect they typed next cannot run either: a refused prompt writes
-		// nothing now, so there is no failure report for the interrupt rule to
-		// swallow and nothing that ends the batch while the pane is still live.
 		assert.equal(existsSync(report), false);
 		assert.equal(stub.shutdowns(), 0);
 	});

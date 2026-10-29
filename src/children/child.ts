@@ -200,7 +200,6 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 			{ triggerTurn: true, deliverAs: "steer" },
 		);
 	}
-
 }
 
 /**
