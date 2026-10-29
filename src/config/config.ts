@@ -73,6 +73,13 @@ export interface TinysubagentConfig {
 	/** Plain `NAME` → value pairs exported into the child's shell. Always present. */
 	env: Record<string, string>;
 	/**
+	 * The floor every child starts from: plain tool names, never globs or
+	 * negations. Every config returned by {@link loadConfig} carries one (`[]`
+	 * when the key is absent); it is optional in the type only so a hand-built
+	 * config literal need not restate a default it does not exercise.
+	 */
+	defaultTools?: string[];
+	/**
 	 * Routing credentials when a `systemOneAPIKey` was resolved from the override
 	 * or global file, `null` when routing is off. Project scope never decides it.
 	 */
@@ -378,6 +385,38 @@ function mergeEnv(
 }
 
 /**
+ * Read one file's `defaultTools` as the floor.
+ *
+ * The key has no grammar on purpose: a glob or negation written here is a shape
+ * error, not an expression, because a floor spelled in patterns is a policy the
+ * user cannot read. Dropping only the offending part keeps the rest of a mostly
+ * valid list working, so one typo never blocks delegation.
+ */
+function resolveDefaultTools(raw: unknown, file: string, warnings: string[]): string[] {
+	if (!Array.isArray(raw)) {
+		warnings.push(`tinysubagent: "defaultTools" must be an array in ${file}; ignoring it.`);
+		return [];
+	}
+	const tools: string[] = [];
+	for (const entry of raw) {
+		if (typeof entry !== "string") {
+			warnings.push(
+				`tinysubagent: defaultTools entry ${JSON.stringify(entry)} in ${file} is not a string; ignoring it.`,
+			);
+			continue;
+		}
+		if (entry.includes("*") || entry.startsWith("-")) {
+			warnings.push(
+				`tinysubagent: defaultTools entry "${entry}" in ${file} is not supported; ignoring it.`,
+			);
+			continue;
+		}
+		tools.push(entry);
+	}
+	return tools;
+}
+
+/**
  * Resolve `classifierModel` from the files that were successfully read, highest
  * precedence first. The walk mirrors {@link resolveSystemOne}: a file without the
  * key falls through. Unlike the SystemOne credentials this is a model reference,
@@ -569,6 +608,7 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 
 	const profiles: Record<string, Profile> = {};
 	const env: Record<string, string> = {};
+	let defaultTools: string[] = [];
 	const sources: ConfigSource[] = [];
 	// Every root that parsed, in read order (lowest precedence first), so the
 	// routing resolver can walk them highest-first without re-reading anything.
@@ -590,6 +630,11 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 		}
 		mergeProfiles(root, source.file, profiles, warnings);
 		mergeEnv(root, source.file, env, warnings);
+		// Highest-precedence file that states the key wins its whole array, never a
+		// union: a repo floor is usually narrower than the machine-wide one.
+		if (Object.hasOwn(root, "defaultTools")) {
+			defaultTools = resolveDefaultTools(root.defaultTools, source.file, warnings);
+		}
 		read.push({ source, root });
 	}
 
@@ -608,7 +653,7 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	}
 
 	return {
-		config: { enableProfiles, profiles, env, systemOne, classifier, sources },
+		config: { enableProfiles, profiles, env, defaultTools, systemOne, classifier, sources },
 		warnings,
 	};
 }

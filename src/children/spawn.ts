@@ -19,8 +19,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "../herdr/cli.ts";
 import { LiveSubPanes, planPlacement, planResizes, type Placement } from "../herdr/layout.ts";
 import { resolveProfile } from "../config/profiles.ts";
-import { expandToolPatterns } from "../tool-patterns.ts";
-import { isThinkingLevel, REPORT_TOOL_NAME, type ThinkingLevel } from "../types.ts";
+import { resolveToolList } from "../tool-list.ts";
+import { isThinkingLevel, type ThinkingLevel } from "../types.ts";
 import { errorMessage, type SpawnContext, type SpawnFailed, type SpawnRequest, type Spawned } from "./contract.ts";
 
 /** Name of the spawn tool, shared with `index.ts` and used for the nesting guard below. */
@@ -62,14 +62,17 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	let tools: string[] | null = null;
 	if (profile.harness === "agy" && agent.tools && agent.tools.length > 0) {
 		warnings.push(`agent "${agent.name}": tools list ignored because the agy harness cannot enforce it.`);
-	} else if (agent.tools && agent.tools.length > 0) {
-		const expanded = expandToolPatterns(agent.tools, context.allToolNames);
-		tools = expanded.tools;
-		if (expanded.unmatched.length > 0) {
-			warnings.push(
-				`agent "${agent.name}": unknown tool(s) ${expanded.unmatched.join(", ")} — the child may be missing what it needs.`,
-			);
-		}
+	} else if (profile.harness !== "agy") {
+		// One resolver decides the allowlist, including whether there is one at all.
+		// `tools` stays null when there is none, so the child gets no `--tools` flag.
+		const resolved = resolveToolList({
+			floor: context.config.defaultTools ?? [],
+			declared: agent.tools,
+			registry: context.allToolNames,
+			role: agent.name,
+		});
+		warnings.push(...resolved.warnings);
+		if (resolved.allowlist) tools = resolved.tools;
 	}
 
 	// Nested delegation is refused rather than half-supported. A grandchild's
@@ -90,14 +93,9 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	}
 
 	// The one entry a role's list cannot have is the way to hand the result back.
-	// Injected after the nesting guard, so the guard sees exactly what the role
-	// declared. The `tools !== null` guard is the load-bearing part: a role with no
-	// `tools` frontmatter passes no `--tools` flag at all, and inventing an
-	// allowlist here would silently narrow that child to the report tool alone.
-	// An empty expansion is also not an allowlist: the role declared patterns that
-	// matched nothing, which means "nothing resolved", not "report tool only".
-	if (tools !== null && tools.length > 0 && !tools.includes(REPORT_TOOL_NAME)) tools.push(REPORT_TOOL_NAME);
-
+	// The resolver appends it whenever an allowlist exists; the nesting guard above
+	// still sees only what the role declared, because that is the mistake a role
+	// author can fix.
 	const id = runId();
 	const paths = buildLaunchPaths({
 		sessionDir: context.sessionDir,
