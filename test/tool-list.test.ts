@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { resolveToolList, type ToolListInput } from "../src/tool-list.ts";
+import { isFloorEntry, resolveToolList, type ToolListInput } from "../src/tool-list.ts";
 import { REPORT_TOOL_NAME, TOOL_NAME } from "../src/types.ts";
 
 const REGISTRY = ["read", "bash", "edit", "write", "codegraph_query", "codegraph_search"];
@@ -118,6 +118,101 @@ test("a floor entry naming the spawn tool is kept when the registry does not kno
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// `*` patterns in the floor: names and families share one grammar
+// ────────────────────────────────────────────────────────────────────────────
+
+test("isFloorEntry accepts a pattern and a name, and rejects a negation", () => {
+	assert.equal(isFloorEntry("mcp__codegraph__*"), true);
+	assert.equal(isFloorEntry("read"), true);
+	assert.equal(isFloorEntry("-write"), false);
+});
+
+test("a floor pattern reaches a role that declares no tools, in registry order", () => {
+	const resolved = resolve({ floor: ["codegraph_*"] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, ["codegraph_query", "codegraph_search", REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, []);
+});
+
+test("a floor pattern mixed with names expands in place and is not acknowledged", () => {
+	const resolved = resolve({ floor: ["write", "codegraph_*"] });
+	assert.deepEqual(resolved.tools, [
+		"write",
+		"codegraph_query",
+		"codegraph_search",
+		REPORT_TOOL_NAME,
+	]);
+	assert.deepEqual(resolved.warnings, []);
+});
+
+test("a floor pattern that matches nothing adds nothing and warns once per session", () => {
+	const reportedWarnings = new Set<string>();
+	const input: ToolListInput = {
+		floor: ["gone_*", "read"],
+		registry: REGISTRY,
+		role: "worker",
+		reportedWarnings,
+	};
+
+	const first = resolveToolList(input);
+	assert.equal(first.allowlist, true);
+	// Dropped, not kept as a literal entry.
+	assert.deepEqual(first.tools, ["read", REPORT_TOOL_NAME]);
+	assert.deepEqual(first.warnings, [
+		'tinysubagent: defaultTools entry "gone_*" matched no tool — it adds nothing.',
+	]);
+
+	const second = resolveToolList(input);
+	assert.deepEqual(second.tools, ["read", REPORT_TOOL_NAME]);
+	assert.deepEqual(second.warnings, []);
+});
+
+test("a floor of one pattern that matched nothing still counts as intent", () => {
+	const resolved = resolve({ floor: ["gone_*"] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, [
+		'tinysubagent: defaultTools entry "gone_*" matched no tool — it adds nothing.',
+		`agent "worker": the tool list is empty — only ${REPORT_TOOL_NAME} is allowed.`,
+	]);
+});
+
+test("a floor of exactly * grants every tool but the spawn tool, and says so once", () => {
+	const reportedWarnings = new Set<string>();
+	const input: ToolListInput = {
+		floor: ["*"],
+		registry: [...REGISTRY, TOOL_NAME],
+		role: "worker",
+		reportedWarnings,
+	};
+
+	const first = resolveToolList(input);
+	assert.equal(first.allowlist, true);
+	assert.deepEqual(first.tools, [...REGISTRY, REPORT_TOOL_NAME]);
+	assert.deepEqual(first.warnings, [
+		`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+		'tinysubagent: defaultTools is "*", so the floor grants every tool and no longer narrows anything.',
+	]);
+
+	const second = resolveToolList(input);
+	assert.deepEqual(second.tools, [...REGISTRY, REPORT_TOOL_NAME]);
+	assert.deepEqual(second.warnings, []);
+});
+
+test("a role's -name subtracts a name that a floor pattern expanded to", () => {
+	const resolved = resolve({ floor: ["codegraph_*"], declared: ["-codegraph_query"] });
+	assert.deepEqual(resolved.tools, ["codegraph_search", REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, []);
+});
+
+test("a role's -* drops the floor including its patterns", () => {
+	const resolved = resolve({ floor: ["codegraph_*", "read"], declared: ["-*", "bash"] });
+	assert.equal(resolved.allowlist, true);
+	assert.deepEqual(resolved.tools, ["bash", REPORT_TOOL_NAME]);
+	assert.deepEqual(resolved.warnings, []);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // `-name` negation: subtracting from the floor and from the role's own positives
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -162,7 +257,7 @@ test("a list emptied by subtraction still spawns with only the report tool and a
 	assert.equal(resolved.allowlist, true);
 	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
 	assert.deepEqual(resolved.warnings, [
-		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+		`agent "worker": the tool list is empty — only ${REPORT_TOOL_NAME} is allowed.`,
 	]);
 });
 
@@ -221,7 +316,7 @@ test("`-*` alone on a non-empty floor is report-only with the empty-list warning
 	assert.equal(resolved.allowlist, true);
 	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
 	assert.deepEqual(resolved.warnings, [
-		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+		`agent "worker": the tool list is empty — only ${REPORT_TOOL_NAME} is allowed.`,
 	]);
 });
 
@@ -251,7 +346,7 @@ test("a floor naming only the spawn tool still narrows to report-only", () => {
 	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
 	assert.deepEqual(resolved.warnings, [
 		`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
-		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+		`agent "worker": the tool list is empty — only ${REPORT_TOOL_NAME} is allowed.`,
 	]);
 });
 
@@ -357,7 +452,7 @@ test("a negatives-only role on an empty floor narrows rather than widens", () =>
 	assert.equal(resolved.allowlist, true);
 	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
 	assert.deepEqual(resolved.warnings, [
-		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+		`agent "worker": the tool list is empty — only ${REPORT_TOOL_NAME} is allowed.`,
 	]);
 });
 
@@ -366,7 +461,7 @@ test("several negatives-only entries on an empty floor narrow the same way", () 
 	assert.equal(resolved.allowlist, true);
 	assert.deepEqual(resolved.tools, [REPORT_TOOL_NAME]);
 	assert.deepEqual(resolved.warnings, [
-		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+		`agent "worker": the tool list is empty — only ${REPORT_TOOL_NAME} is allowed.`,
 	]);
 });
 

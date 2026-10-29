@@ -10,6 +10,10 @@ and are stated so they can be reversed in one edit. Extends
 neither, nor `docs/issues/agy-harness/spec.md`'s rule that agy cannot enforce a role `tools`
 allowlist.
 
+Amended 2026-10-29 *(interview)*: `defaultTools` now accepts `*` patterns naming a tool family
+(`mcp__codegraph__*`). The former names-only rule is reversed; see **The key** and **Floor
+patterns** below. Every other decision stands.
+
 ## Problem Statement
 
 Every role must restate the tools it wants. There is no way to say "every child gets
@@ -24,26 +28,33 @@ and tinysubagent passes a plain-name allowlist that replaces the whole selection
 natural request — *give all children this floor, but this role must not have `write`* — has
 no expression today.
 
+The floor cannot name a family either. An MCP server registers its tools under a shared prefix
+(`mcp__codegraph__codegraph_explore`, `mcp__codegraph__codegraph_files`, …), the set grows
+whenever the server does, and a floor that enumerates those tools goes stale silently.
+
 The user's original ask was a `!`-prefixed negation (`!grep`). That spelling was rejected
 in the interview: pi already uses `-name` inside `--tools` and `--exclude-tools` for the
 same idea, and one dialect is better than two.
 
 ## Solution
 
-A new top-level `defaultTools` key in `tinysubagent.jsonc`: an array of plain tool names
-that every child starts with. It is deliberately dumb — names only, no `*`, no `-`, no
-`!` — so it reads as a floor, not a program.
+A new top-level `defaultTools` key in `tinysubagent.jsonc`: an array of tool names, or `*`
+patterns naming a tool family, that every child starts with. It is deliberately small —
+names and `*`, no `-` negation and no `!` — so it reads as a floor, not a program.
 
 A role's `tools` frontmatter gains negative entries: `-write` removes `write` from the
 final list, and `-*` drops the `defaultTools` floor entirely so a narrow role can keep
 being narrow. The child is still launched with a plain-name `--tools` allowlist; negation
 is resolved by tinysubagent before launch and never reaches pi as a flag.
 
-`defaultTools` is a plain list of names — there is no glob and no negation inside it.
+`defaultTools` holds names and `*` family patterns; it has no negation inside it. A pattern
+uses the grammar a role's `tools` already uses — `*` anywhere in the entry, anchored at both
+ends, everything else literal — so `"mcp__codegraph__*"` and `"codegraph_*"` are the same
+kind of entry, and `"mcp__*__get"` works too.
 
 ```jsonc
 // ~/.pi/agent/tinysubagent.jsonc
-{ "defaultTools": ["read", "bash", "edit", "write", "codegraph_query", "codegraph_search"] }
+{ "defaultTools": ["read", "bash", "edit", "write", "mcp__codegraph__*"] }
 ```
 
 ```markdown
@@ -90,9 +101,11 @@ tools: -*, read, grep, find, ls
     role wins over `bash` in `defaultTools`.
 12. As an orchestrator user, I want a `defaultTools` entry I misspelt to warn instead of
     silently doing nothing, so that a typo surfaces.
-13. As an orchestrator user, I want a `*` or `-name` written in `defaultTools` to warn at
+13. ~~As an orchestrator user, I want a `*` or `-name` written in `defaultTools` to warn at
     startup and be dropped, so that I learn the key has no grammar before wondering why a
-    glob did nothing.
+    glob did nothing.~~ **Corrected 2026-10-29:** a `*` entry is accepted and expanded; a
+    `-name` entry is still dropped with a startup warning, so that the one spelling the key
+    does not take announces itself.
 14. As an orchestrator user, I want `defaultTools` that is not an array, or holds a
     non-string, to warn and be ignored, so that a config mistake never blocks delegation.
 15. As an orchestrator user, I want a role that ends up with zero tools to still start, so
@@ -127,12 +140,44 @@ tools: -*, read, grep, find, ls
     union/subtraction rule is testable without spawning a pane.
 27. As a user of `/subagent-settings`, I want the screen untouched, so that this change cannot
     break profile editing.
+28. As an orchestrator user, I want `mcp__codegraph__*` in `defaultTools`, so that every child
+    gets a whole MCP family without my enumerating it and without the floor going stale when
+    the server adds a tool.
+29. As an orchestrator user, I want a floor pattern that matches nothing to warn once per
+    session, so that a misnamed family is visible without being repeated on every
+    acknowledgment.
+30. As an orchestrator user, I want a floor of exactly `*` to be acknowledged once, so that the
+    one shape which silently reverses the key's purpose says so.
 
 ## Implementation Decisions
 
 **The key.** *(interview)* Top-level `defaultTools` in the settings file, plural to match
-pi's own `defaultTools` setting. An array of plain tool names. *(interview)* No `*` and no
-`-` grammar inside it: a glob or negation written there is a shape error, not an expression.
+pi's own `defaultTools` setting. An array whose entries are plain tool names or `*` patterns.
+There is no `-` grammar inside it: a negation written there is a shape error, not an
+expression.
+
+> **Amended 2026-10-29.** *(interview)* The floor accepts `*` patterns. The original rule was
+> names only, on the argument that a floor spelled in globs is a policy the user cannot read.
+> That argument still holds for negation, and for a `*` used as a shrug, but it does not hold
+> for a family: `mcp__codegraph__*` names a set the user already thinks of as one thing, and
+> enumerating an MCP server's tools in the floor goes stale whenever the server adds one.
+> Readability is now a preference, not a rule. See **Floor patterns**.
+
+**Floor patterns.** *(interview, added 2026-10-29)* An entry containing `*` is a pattern, and
+it uses the same matcher as a role's positives — `*` matches any run of characters, anchored
+at both ends, everything else literal — so a floor pattern and a role pattern are one grammar
+with one implementation. It expands against the orchestrator's registry at composition time,
+which is when a registry is finally available; the config loader checks shape only. Three
+consequences:
+
+- A pattern that matches nothing contributes **nothing** and warns once per session, through
+  the floor's registry-dependent channel beside the dropped-`subagent` warning. It is not kept
+  as a literal, because there is no literal to keep (see **Unmatched floor patterns**).
+- A bare `"*"` is a legal entry: it expands to every tool in the registry, `subagent` is then
+  dropped by the rule below, so it means "everything except the spawn tool". No floor rule
+  changes to accommodate it; it gets its own acknowledgment (see **A floor of exactly `*`**).
+- A pattern that expands to include `subagent` gets the same drop-and-warn as a name that
+  spells it, because the rule is about the resolved name, not the spelling.
 
 **Absent means empty.** *(interview)* The resolved config always carries an array; an absent
 key resolves to `[]`. Because absence and `[]` are indistinguishable, `[]` is **not**
@@ -146,11 +191,13 @@ with its **whole array**; there is no union and no per-entry merge. This mirrors
 override is usually to narrow it. The `PI_TINYSUBAGENT_CONFIG` override still short-circuits
 and remains the only file read.
 
-**Shape errors.** *(interview)* A `defaultTools` that is not an array, and any non-string
-entry, warn and are dropped — the rest of the key still applies. An entry containing `*`, or
-beginning with `-`, is likewise dropped with its own warning naming that entry, rather than
-being passed through as a literal name. Warning text keeps the house form used by `env` and
-`profiles`: `tinysubagent: defaultTools entry "-write" in <file> is not supported; ignoring it.`
+**Shape errors.** *(interview, amended 2026-10-29)* A `defaultTools` that is not an array, and
+any non-string entry, warn and are dropped — the rest of the key still applies. An entry
+beginning with `-` is likewise dropped with its own warning naming that entry, rather than
+being passed through to the child as a literal name. `*` is no longer a shape error at any
+position; only the leading `-` and the non-string remain. Warning text keeps the house form
+used by `env` and `profiles`: `tinysubagent: defaultTools entry "-write" in <file> is not
+supported; ignoring it.`
 
 **Negation spelling.** *(interview)* A role `tools` entry beginning with `-` is a negation.
 The originally suggested `!` prefix is not implemented. pi spells the same idea `-name`
@@ -166,10 +213,10 @@ opt-out, so it produces no unmatched warning and is a no-op when the floor is al
 This is what stops a narrow role from silently widening when the floor widens.
 
 **Composition.** *(interview, delegated detail)* The final list is the union of positives
-(floor names plus role positives, with `*` in role positives expanded against the
-orchestrator's tool registry) minus the union of negatives (role negatives, with `*` only in
-the form of the `-*` opt-out). **Deny wins, order-independently**: `-write, write` and
-`write, -write` both exclude `write`, and a role negation beats a floor name. First-seen
+(the floor entries plus the role's positives, with `*` expanded against the orchestrator's
+tool registry in both) minus the union of negatives (role negatives, with `*` only in the
+form of the `-*` opt-out). **Deny wins, order-independently**: `-write, write` and
+`write, -write` both exclude `write`, and a role negation beats a floor entry. First-seen
 order is preserved for the argv string so acknowledgments stay stable.
 
 **Allowlist intent.** *(delegated)* "Intent to constrain" exists iff the role declares
@@ -199,7 +246,8 @@ a role with no declared `tools` on an empty floor gets no flag at all.
 
 **`subagent` in the floor.** *(interview)* A floor entry naming `subagent` is dropped with a
 warning; it is never a refusal. Ambient config the user wrote for its other names must not
-block every spawn in the project.
+block every spawn in the project. The rule applies after expansion, so a floor pattern that
+resolves to `subagent` (`"*"`, `"sub*"`) is dropped and warned the same way a name is.
 
 **`subagent` in a role.** *(interview)* Naming `subagent` in a role's `tools` stays a
 **refusal**, unchanged, tests included. A role declaring `*` also keeps refusing, because
@@ -226,22 +274,38 @@ degrades; a role's own declaration is the role's mistake, so it refuses.
 
 **Warning channels.** *(interview)* Shape errors and unsupported entries are reported through
 the existing config-load warning channel at startup, beside the current `env`/`profiles`
-messages. Problems that need the tool registry — a floor name matching no tool, a dropped
-`subagent`, an ignored `-subagent_report` — are reported on the **first spawn of the
-session only**, then go quiet, so they cannot bury a role-specific warning on every
-acknowledgment. Role-level unmatched patterns keep their current per-spawn behaviour.
+messages. Problems that need the tool registry — a floor name or floor pattern matching no
+tool, a dropped `subagent`, an ignored `-subagent_report`, a floor of exactly `*` — are
+reported on the **first spawn of the session only**, then go quiet, so they cannot bury a
+role-specific warning on every acknowledgment. Role-level unmatched patterns keep their
+current per-spawn behaviour.
 
 **Unmatched floor names.** *(delegated)* A floor name that matches nothing in the registry is
 kept in the allowlist and warned about, matching the existing rule for literal role names
 ("a renamed tool warns instead of silently narrowing the list"). A **negative** entry that
 matches nothing also warns, because a `-noshuchtool` typo is the same class of mistake.
 
+**Unmatched floor patterns.** *(interview, added 2026-10-29)* A floor **pattern** that matches
+nothing contributes nothing and warns once per session. The floor therefore has two failure
+modes, and the spec states both rather than hiding the asymmetry: a misspelt **name** stays in
+the allowlist and warns, because a name is a claim the user can act on and narrowing a child
+by typo is the worse outcome; a misspelt **pattern** resolves to no names at all, because a
+pattern is a description and a description that matches nothing describes nothing.
+
+**A floor of exactly `*`.** *(interview, added 2026-10-29)* `["*"]` grants every tool but
+`subagent`, which silently reverses the key's purpose: the floor stops being a floor. It is
+acknowledged once per session — *"defaultTools is `*`, so the floor grants every tool and no
+longer narrows anything"* — with no refusal and no change to the expansion. A `*` mixed with
+names (`["read", "mcp__codegraph__*"]`) is ordinary configuration and says nothing.
+
 **No settings-screen work.** *(interview)* `/subagent-settings` is untouched; the key is
 file-only for now. An editor for an array of names with an opt-out entry is its own issue.
 
-**Vocabulary.** `GLOSSARY.md` gains **Default tools** (the names every child starts with
-unless a role removes them) and **Tool list** (a role's `tools` frontmatter, the floor plus
-its positives minus its negations), stated without implementation detail. The glossary's
+**Vocabulary.** `GLOSSARY.md` gains **Default tools** (the names and `*` patterns every child
+starts with unless a role removes them) and **Tool list** (a role's `tools` frontmatter, the
+floor plus its positives minus its negations), stated without implementation detail. The
+glossary's **Floor** entry is already the composed list rather than the setting, so it needs
+no change; only **Default tools**' "names" becomes "names and `*` patterns". The glossary's
 "Role" and "Profile" entries are unchanged.
 
 ## Testing Decisions
@@ -256,11 +320,14 @@ intermediate sets, or on how negation is parsed.
 1. **New, highest available: a pure tool-list resolver.** One function taking the floor
    entries, the role's raw entries, and the tool registry, returning the final names, a
    warning list, and whether an allowlist exists at all. Every grammar rule above (union,
-   deny-wins, `-*`, empty-after-subtraction, unsupported floor entries, `subagent` drop,
-   report-tool append) is asserted here, with no filesystem and no pane. This is the seam
+   deny-wins, `-*`, empty-after-subtraction, unsupported floor entries (a leading `-`, and a
+   `*` that must now be accepted), floor-pattern expansion, a floor pattern that matched
+   nothing, the `["*"]` acknowledgment, `subagent` drop, report-tool append) is asserted here,
+   with no filesystem and no pane. This is the seam
    that should carry almost all the coverage.
 2. **Existing, config loader.** Layering assertions — project replaces the whole array,
-   absent resolves to `[]`, wrong types warn — against the current config-loading tests'
+   absent resolves to `[]`, wrong types warn, `-write` warns, `mcp__codegraph__*` is kept
+   verbatim for the resolver to expand — against the current config-loading tests'
    style of writing real files into a temp directory and inspecting the resolved config.
 3. **Existing, spawn.** One integration assertion that the resolver's result reaches the
    child's argv, that the agy warning fires, and that the `subagent` refusal still refuses.
@@ -281,7 +348,8 @@ explicitly in the plan, not adjusted quietly.
 - Any change to pi's own `defaultTools` setting, or to how the child's pi settings file is
   found. The two defaults compose by pi's rules (tinysubagent passes `--tools`, which replaces
   pi's selection) and that interaction is documented, not reimplemented.
-- `*` or `-` grammar inside `defaultTools`.
+- `-` negation, or `+name`, inside `defaultTools`. The floor gains breadth by naming a family;
+  subtracting from it stays a role's job.
 - Per-profile `defaultTools`.
 - Nested delegation, or making `subagent` available to a child.
 - agy tool enforcement.
@@ -297,9 +365,18 @@ explicitly in the plan, not adjusted quietly.
   `tools` frontmatter**, since such a role stops inheriting everything and starts inheriting
   the floor. The README must say this plainly, and `-*` is the documented answer for a role
   that wants the old breadth.
-- `defaultTools` cannot express "everything". A name the user has not listed is a tool the
-  child will not have, and the only way to grant breadth is to name it or to unset the key.
-  That is intentional — a floor written in globs is a policy the user cannot read.
-- The floor expands against the **orchestrator's** tool registry (`pi.getAllTools()`), which
-  is what the child's registry is derived from but is not guaranteed identical. This is the
-  same limitation the existing role globs already live with; no new machinery is proposed.
+- `defaultTools` can express "everything but the spawn tool" (`["*"]`) and a family
+  (`["mcp__codegraph__*"]`), but it still cannot subtract. A name or family the user has not
+  written is a tool the child will not have; subtraction is a role's job, via `tools: -name` or
+  `-*`. The 2026-10-29 amendment reversed the names-only rule that used to sit in this bullet.
+  What survives from it is the ban on negation: negation is what makes a floor read as a policy
+  rather than as a list, and a family name is the one glob a reader can still check at a glance.
+- **Superseded ticket.** `docs/issues/default-tools/issues/01-floor-reaches-child.md` is the
+  shipped, names-only ticket: its brief and checklist say an entry containing `*` warns at
+  startup. That text is history, not the current rule — do not read it as the amendment's
+  specification. The amendment needs its own ticket; ticket 01 stays as the record of what
+  shipped.
+- The floor and a role's positives both expand against the **orchestrator's** tool registry
+  (`pi.getAllTools()`), which is what the child's registry is derived from but is not
+  guaranteed identical. Allowing patterns in the floor does not widen that gap: it is the
+  same limitation the role globs already live with, and no new machinery is proposed.

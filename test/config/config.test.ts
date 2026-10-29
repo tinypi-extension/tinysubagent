@@ -1282,13 +1282,11 @@ test("a non-string defaultTools entry warns and the valid entries still apply", 
 	]);
 });
 
-test("a defaultTools entry containing * warns and is dropped", () => {
+test("a defaultTools pattern is kept verbatim for the resolver to expand", () => {
 	const file = writeConfig({ defaultTools: ["read", "codegraph_*", "bash"] });
 	const { config, warnings } = read(file);
-	assert.deepEqual(config.defaultTools, ["read", "bash"]);
-	assert.deepEqual(warnings, [
-		`tinysubagent: defaultTools entry "codegraph_*" in ${file} is not supported; ignoring it.`,
-	]);
+	assert.deepEqual(config.defaultTools, ["read", "codegraph_*", "bash"]);
+	assert.deepEqual(warnings, []);
 });
 
 test("a defaultTools entry beginning with - warns and is dropped", () => {

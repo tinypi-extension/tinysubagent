@@ -23,7 +23,7 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 // strictness.
 import { parse as parseJsonc, printParseErrorCode, type ParseError } from "jsonc-parser";
 import { isEffortLevel, isThinkingLevel, type Profile } from "../types.ts";
-import { isPlainToolName } from "../tool-list.ts";
+import { isFloorEntry } from "../tool-list.ts";
 import { DEFAULT_SYSTEMONE_BASE_URL, SYSTEMONE_MODEL, normalizeBaseUrl } from "../systemone/client.ts";
 
 /** Re-exported so callers of the config need not know where the default lives. */
@@ -74,10 +74,12 @@ export interface TinysubagentConfig {
 	/** Plain `NAME` → value pairs exported into the child's shell. Always present. */
 	env: Record<string, string>;
 	/**
-	 * The floor every child starts from: plain tool names, never globs or
-	 * negations. Every config returned by {@link loadConfig} carries one (`[]`
-	 * when the key is absent); it is optional in the type only so a hand-built
-	 * config literal need not restate a default it does not exercise.
+	 * The floor every child starts from: tool names and `*` patterns, never
+	 * negations. Patterns are kept verbatim here and expanded by the tool-list
+	 * resolver against the orchestrator's registry. Every config returned by
+	 * {@link loadConfig} carries one (`[]` when the key is absent); it is optional
+	 * in the type only so a hand-built config literal need not restate a default
+	 * it does not exercise.
 	 */
 	defaultTools?: string[];
 	/**
@@ -388,10 +390,12 @@ function mergeEnv(
 /**
  * Read one file's `defaultTools` as the floor.
  *
- * The key has no grammar on purpose: a glob or negation written here is a shape
- * error, not an expression, because a floor spelled in patterns is a policy the
- * user cannot read. Dropping only the offending part keeps the rest of a mostly
- * valid list working, so one typo never blocks delegation.
+ * The loader checks shape only. Names and `*` patterns are both kept verbatim:
+ * expanding a pattern needs the tool registry, which the loader does not have,
+ * so the resolver does it on spawn. A leading `-` stays unsupported, because a
+ * floor that subtracts reads as a policy rather than as a list. Dropping only
+ * the offending entry keeps the rest of a mostly valid list working, so one typo
+ * never blocks delegation.
  */
 function resolveDefaultTools(raw: unknown, file: string, warnings: string[]): string[] {
 	if (!Array.isArray(raw)) {
@@ -406,7 +410,7 @@ function resolveDefaultTools(raw: unknown, file: string, warnings: string[]): st
 			);
 			continue;
 		}
-		if (!isPlainToolName(entry)) {
+		if (!isFloorEntry(entry)) {
 			warnings.push(
 				`tinysubagent: defaultTools entry "${entry}" in ${file} is not supported; ignoring it.`,
 			);

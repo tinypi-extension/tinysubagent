@@ -104,23 +104,26 @@ child starts from, written once instead of copied into every role.
 ```jsonc
 // ~/.pi/agent/tinysubagent.jsonc
 {
-  "defaultTools": ["read", "grep", "glob", "codegraph_search"]
+  "defaultTools": ["read", "grep", "glob", "mcp__codegraph__*"]
 }
 ```
 
-- **Plain names only.** No `*` and no `-` entries: a floor spelled in patterns is a policy you
-  cannot read. An entry that is not a plain name is dropped with a warning, and a value that is not
-  an array means no floor, also with a warning.
+- **Names and `*` patterns.** An entry is a plain tool name or a pattern: the same grammar a
+  role's `tools` uses, where `*` matches any run of characters and everything else is literal,
+  so `mcp__codegraph__*` claims a whole MCP server and `codegraph_*` a whole family. There is no
+  `-` and no `+` inside the floor; a `-name` entry is dropped with a warning, and a value that is
+  not an array means no floor, also with a warning. A pattern that matches nothing contributes
+  nothing and warns once per session — the floor is for breadth, subtraction is a role's job.
 - **The nearest file wins the whole array.** Project beats global as with `profiles`, but the
   higher-precedence file replaces the list instead of merging it name by name.
   `"defaultTools": []` and an absent key mean the same thing: no floor.
 - **It reaches every role.** A role with its own `tools` gets the floor added underneath it; a
   role without `tools` gets an allowlist of exactly the floor plus `subagent_report`. With no
   floor and no `tools`, the child keeps pi's normal tool set.
-- **Problems are reported once per session.** An unknown tool name, a dropped `subagent` entry,
-  and an ignored `subagent_report` subtraction are config problems, so their warning appears on
-  the first spawn that meets it, not on every acknowledgment. A role's own unmatched patterns
-  still warn on every spawn they affect.
+- **Problems are reported once per session.** An unknown tool name, a floor pattern that matched
+  nothing, a dropped `subagent` entry, a floor of exactly `*`, and an ignored `subagent_report`
+  subtraction are config problems, so their warning appears on the first spawn that meets it, not
+  on every acknowledgment. A role's own unmatched patterns still warn on every spawn they affect.
 
 ### Adding to and subtracting from the floor
 

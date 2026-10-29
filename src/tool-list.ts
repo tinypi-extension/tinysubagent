@@ -9,13 +9,18 @@
  *
  * The rules live behind one request/result pair so later additions (the floor
  * opt-out, registry warnings) extend the vocabulary without changing the seam.
+ *
+ * The floor shares the role's `*` grammar: a configured entry is either a name
+ * or an anchored pattern, and both expand against the same registry. Only the
+ * leading `-` stays a shape error there, because a floor that subtracts reads as
+ * a policy rather than as a list.
  */
 
 import { expandToolPatterns } from "./tool-patterns.ts";
 import { REPORT_TOOL_NAME, TOOL_NAME } from "./types.ts";
 
 export interface ToolListInput {
-	/** Plain names from `defaultTools`: what every child starts from. */
+	/** `defaultTools` names and `*` patterns: what every child starts from. */
 	floor: readonly string[];
 	/** The role's raw `tools` entries, `undefined` when it declares none. */
 	declared?: readonly string[];
@@ -71,17 +76,17 @@ function reportOnce(
 }
 
 /**
- * Whether a floor entry is a plain tool name — the only shape `defaultTools`
- * accepts.
+ * Whether a configured floor entry has a shape the resolver can use.
  *
- * The floor is not a pattern language: `*` and a leading `-` are the role
- * `tools` grammar, and borrowing them here would make the ambient default a
- * policy the user cannot read. The settings loader asks this predicate so the
- * floor's shape and the resolver's grammar of the same two characters cannot
- * drift apart.
+ * The floor accepts names and `*` patterns, so the only unsupported shape left
+ * is negation: a leading `-` would turn the ambient default into a policy the
+ * user cannot read, and subtraction is a role's job (`tools: -name`). The
+ * settings loader asks this predicate so the floor's shape and the resolver's
+ * grammar of the same characters cannot drift apart; non-strings are the
+ * loader's own concern, not this predicate's.
  */
-export function isPlainToolName(name: string): boolean {
-	return !name.includes("*") && !name.startsWith("-");
+export function isFloorEntry(entry: string): boolean {
+	return !entry.startsWith("-");
 }
 
 /**
@@ -152,8 +157,10 @@ export function declaresSpawnTool(
  *
  * A floor entry naming the spawn tool is dropped with a warning: the floor is
  * ambient config written for every role at once, so one `subagent` in it must
- * not refuse every spawn in the project. A role naming it itself still refuses
- * in the spawner, because that is a mistake its author can see and fix.
+ * not refuse every spawn in the project. The rule applies to the expanded floor,
+ * so a `*` or `sub*` that reached the spawn tool is dropped the same way. A role
+ * naming it itself still refuses in the spawner, because that is a mistake its
+ * author can see and fix.
  *
  * Deny wins regardless of position, so `-write, write` and `write, -write` mean
  * the same thing. A list that positives fill and negations then empty is still
@@ -164,25 +171,31 @@ export function declaresSpawnTool(
  * that stays narrow must not grow when the floor does. It only removes the
  * floor, so a role's own positives still expand and compose normally.
  *
- * Registry-dependent warnings — an unmatched floor name, the dropped spawn-tool
- * entry, the ignored report-tool negation — go through `reportedWarnings`, so a
- * session explains them once. They describe config that does not change while
- * the session runs, and repeating them would bury the role-level warnings under
- * the same three lines on every acknowledgment. A role's own unmatched patterns
- * are not deduplicated: they name a role, and every acknowledgment they affect
+ * Registry-dependent warnings — an unmatched floor name, a floor pattern that
+ * matched nothing, a floor of exactly `*`, the dropped spawn-tool entry, the
+ * ignored report-tool negation — go through `reportedWarnings`, so a session
+ * explains them once. They describe config that does not change while the
+ * session runs, and repeating them would bury the role-level warnings under the
+ * same three lines on every acknowledgment. A role's own unmatched patterns are
+ * not deduplicated: they name a role, and every acknowledgment they affect
  * should say which role still needs fixing.
  */
 export function resolveToolList(input: ToolListInput): ToolList {
 	const warnings: string[] = [];
 
-	// Dropping the name is registry-dependent: only a registry that actually
-	// offers the spawn tool makes the entry dangerous. Without it the entry is
-	// left alone — not dropped, and not called a typo by the check below.
+	// Expand first: a literal name is kept even when the registry does not know
+	// it, while a pattern contributes only what it matches. The spawn-tool drop
+	// therefore applies to the expansion, so a floor `"*"` or `"sub*"` that
+	// reached the spawn tool is treated exactly like one that spells the name.
+	// Dropping the name is still registry-dependent: only a registry that offers
+	// the spawn tool makes the entry dangerous, and without it the literal entry is
+	// left alone rather than called a typo.
+	const floorExpansion = expandToolPatterns(input.floor, input.registry);
 	const dropsSpawnTool =
-		input.registry.includes(TOOL_NAME) && input.floor.includes(TOOL_NAME);
+		input.registry.includes(TOOL_NAME) && floorExpansion.tools.includes(TOOL_NAME);
 	const floor = dropsSpawnTool
-		? input.floor.filter((name) => name !== TOOL_NAME)
-		: [...input.floor];
+		? floorExpansion.tools.filter((name) => name !== TOOL_NAME)
+		: floorExpansion.tools;
 	if (dropsSpawnTool) {
 		reportOnce(
 			input.reportedWarnings,
@@ -192,17 +205,41 @@ export function resolveToolList(input: ToolListInput): ToolList {
 		);
 	}
 
-	// A floor name the registry does not know is kept — dropping it would narrow
-	// the child without saying so — and reported, matching the rule for a literal
-	// role name. The spawn tool is exempt: it is a name this resolver knows how
-	// to handle, so above it was either dropped with its own warning or the
-	// registry simply does not offer nesting, and neither is a typo.
-	for (const name of floor) {
-		if (name === TOOL_NAME || input.registry.includes(name)) continue;
+	// An unmatched floor entry has two shapes and the spec keeps them apart: a
+	// name stays in the allowlist and is warned about (a typo must not silently
+	// narrow the child), while a pattern contributes nothing at all and is warned
+	// about as adding nothing. `expandToolPatterns` already drew that line; `*` is
+	// read here only to choose the sentence, never to re-split the floor.
+	for (const entry of floorExpansion.unmatched) {
+		if (entry.includes("*")) {
+			reportOnce(
+				input.reportedWarnings,
+				`defaultTools:pattern:${entry}`,
+				`tinysubagent: defaultTools entry "${entry}" matched no tool — it adds nothing.`,
+				warnings,
+			);
+			continue;
+		}
+		// The spawn tool is exempt: it is a name this resolver knows how to handle,
+		// so it was either dropped with its own warning above or the registry
+		// simply does not offer nesting, and neither is a typo.
+		if (entry === TOOL_NAME) continue;
 		reportOnce(
 			input.reportedWarnings,
-			`defaultTools:unknown:${name}`,
-			`tinysubagent: defaultTools entry "${name}" matches no known tool — the child may be missing what it needs.`,
+			`defaultTools:unknown:${entry}`,
+			`tinysubagent: defaultTools entry "${entry}" matches no known tool — the child may be missing what it needs.`,
+			warnings,
+		);
+	}
+
+	// Exactly `*` reverses the key's purpose — the floor stops being a floor — so
+	// it is acknowledged once. A `*` mixed with names (`"read", "mcp__x__*"`) is
+	// ordinary configuration and says nothing.
+	if (input.floor.length === 1 && input.floor[0] === "*") {
+		reportOnce(
+			input.reportedWarnings,
+			"defaultTools:star",
+			'tinysubagent: defaultTools is "*", so the floor grants every tool and no longer narrows anything.',
 			warnings,
 		);
 	}
@@ -273,8 +310,11 @@ export function resolveToolList(input: ToolListInput): ToolList {
 	const tools = composed.filter((name) => !denied.has(name));
 	if (tools.length === 0) {
 		if (!askedForTools) return { allowlist: false, tools: [], warnings };
+		// The wording stays cause-neutral: the list is empty whether a negation
+		// removed the last name or a floor pattern matched nothing, and the
+		// once-per-session warning above already said which.
 		warnings.push(
-			`agent "${input.role}": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
+			`agent "${input.role}": the tool list is empty — only ${REPORT_TOOL_NAME} is allowed.`,
 		);
 		return { allowlist: true, tools: [REPORT_TOOL_NAME], warnings };
 	}

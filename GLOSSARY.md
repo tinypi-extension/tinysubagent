@@ -109,7 +109,7 @@ The tool list every child starts from, set once so a role need not restate it. A
 _Avoid_: base tools, global allowlist, global tools
 
 **Default tools**:
-The configured floor: the `defaultTools` setting and the names it holds.
+The configured floor: the `defaultTools` setting and the names and `*` patterns it holds.
 _Avoid_: base tools, global allowlist, global tools
 
 **Tool list**:

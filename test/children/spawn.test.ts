@@ -274,6 +274,38 @@ test("a floor naming the spawn tool is dropped with a warning instead of refusin
 	}
 });
 
+test("a floor pattern's expansion reaches the child's --tools argument", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-floor-pattern-"));
+	try {
+		const open: AgentDef = { ...worker, name: "open", tools: undefined };
+		const base = context([open], ["read", "codegraph_query", "codegraph_search"]);
+		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
+			const spawned = await spawnOne(
+				{ agent: "open", task: "x", name: "open" },
+				{
+					...base,
+					cwd: dir,
+					agentDir: dir,
+					sessionDir: dir,
+					env: {},
+					config: { ...base.config, defaultTools: ["codegraph_*"] },
+				},
+			);
+			return { spawned, script: writtenScript(dir, "sid") };
+		});
+		assert.equal(result.spawned.ok, true);
+		assert.deepEqual(result.spawned.warnings, []);
+		// The pattern's matches are concrete names on the command line, in registry
+		// order, with the report tool appended.
+		assert.match(
+			result.script,
+			new RegExp(`'--tools' 'codegraph_query,codegraph_search,${REPORT_TOOL_NAME}'`),
+		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("a role's `-*` keeps the floor out of the child's allowlist", async () => {
 	// Opting out of the floor is how a narrow role stays narrow when someone later
 	// widens `defaultTools`, so no floor name may reach the child's `--tools` list.
