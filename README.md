@@ -98,8 +98,7 @@ Notes on `tools`:
 
 ## Default tools
 
-`defaultTools` is a top-level key in the same settings file the profiles use: the floor every
-child starts from, written once instead of copied into every role.
+`defaultTools` is a top-level key in the settings file: the floor every child starts from, so roles don't repeat it.
 
 ```jsonc
 // ~/.pi/agent/tinysubagent.jsonc
@@ -108,50 +107,32 @@ child starts from, written once instead of copied into every role.
 }
 ```
 
-- **Names and `*` patterns.** An entry is a plain tool name or a pattern: the same grammar a
-  role's `tools` uses, where `*` matches any run of characters and everything else is literal,
-  so `mcp__codegraph__*` claims a whole MCP server and `codegraph_*` a whole family. There is no
-  `-` and no `+` inside the floor; a `-name` entry is dropped with a warning, and a value that is
-  not an array means no floor, also with a warning. A pattern that matches nothing contributes
-  nothing and warns once per session — the floor is for breadth, subtraction is a role's job.
-- **The nearest file wins the whole array.** Project beats global as with `profiles`, but the
-  higher-precedence file replaces the list instead of merging it name by name.
-  `"defaultTools": []` and an absent key mean the same thing: no floor.
-- **It reaches every role.** A role with its own `tools` gets the floor added underneath it; a
-  role without `tools` gets an allowlist of exactly the floor plus `subagent_report`. With no
-  floor and no `tools`, the child keeps pi's normal tool set.
-- **Problems are reported once per session.** An unknown tool name, a floor pattern that matched
-  nothing, a dropped `subagent` entry, a floor of exactly `*`, and an ignored `subagent_report`
-  subtraction are config problems, so their warning appears on the first spawn that meets it, not
-  on every acknowledgment. A role's own unmatched patterns still warn on every spawn they affect.
+- **Entries** are tool names or `*` patterns, the same grammar as a role's `tools`. No `-` or `+`: a `-name` entry is dropped with a warning. A non-array value means no floor, also with a warning. A pattern that matches nothing warns once per session.
+- **The nearest file wins the whole array.** Project replaces global; it does not merge. `[]` and an absent key both mean no floor.
+- **Every role gets it.** A role with `tools` gets the floor underneath. A role without `tools` gets exactly the floor plus `subagent_report`. With neither, the child keeps pi's normal tool set.
+- **Config problems warn once per session**: unknown names, unmatched floor patterns, dropped `subagent` entries, a floor of exactly `*`, and ignored `subagent_report` subtraction. A role's own unmatched patterns warn on every spawn.
 
-### Adding to and subtracting from the floor
+### Subtracting from the floor
 
-A role's own `tools` compose with the floor, and a `-` entry subtracts. Negation wins whatever
-the order, so `-write, write` and `write, -write` mean the same thing:
+A role's `tools` add to the floor, and `-` subtracts. Negation wins regardless of order:
 
 ```yaml
 tools: -write, -edit        # the floor, minus the two mutating tools
 ```
 
-`-*` drops the floor for that role alone, so a deliberately narrow role stays narrow when the
-floor grows. Its own positive entries still apply, which makes `-*, read, grep` exactly `read`
-and `grep` (plus `subagent_report`):
+`-*` drops the floor for that role alone. `-*, read, grep` is exactly `read` and `grep` (plus `subagent_report`):
 
 ```yaml
 tools: -*, read, grep
 ```
 
-`*` still expands over every tool the orchestrator knows, and that includes `subagent`. A role
-that lists `subagent` cannot launch, because nested delegation is unsupported. Take the breadth
-without the spawn tool:
+`*` expands over every known tool, including `subagent`, which a role cannot use because nested delegation is unsupported. To take the breadth without spawning:
 
 ```yaml
 tools: "*", -subagent
 ```
 
-A list that ends up empty after subtraction still launches, with only `subagent_report` and a
-warning — falling back to "no allowlist" would hand the child every tool the role just removed.
+A list that is empty after subtraction still launches, with only `subagent_report` and a warning. It never falls back to "no allowlist".
 
 ## Profiles
 
