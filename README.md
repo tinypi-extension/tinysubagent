@@ -187,13 +187,7 @@ instead of the model choosing `profile` itself:
   it falls back to `jev-latest`.
 - **Every failure falls back to `current`**, never delaying a spawn beyond a 2 s budget.
 
-When a subagent's turn ends without a `subagent_report` call, the child reminds it to report. The
-reminder is sent at once by default. Set `"jevCheckLastMessage": true` at the top level of a config
-file to have the routing transport judge the final message first, and remind only when the verdict is
-"forgotten". That check needs a configured `classifierModel` or `systemOneAPIKey`, and each check
-prints two lines in the child's pane (the question, then the verdict or why there was none). The key
-follows the same scope rule as `enableProfiles`, and only a literal `true` turns it on; it defaults to
-`false` when omitted.
+When a subagent's turn ends without a `subagent_report` call, the child reminds it to report. 
 
 ## Environment variables
 

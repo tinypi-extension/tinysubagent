@@ -31,7 +31,6 @@ const SYSTEM_ONE: NonNullable<TinysubagentConfig["systemOne"]> = {
 function configWith(overrides: Partial<TinysubagentConfig> = {}): TinysubagentConfig {
 	return {
 		enableProfiles: true,
-		jevCheckLastMessage: false,
 		profiles: { light: { model: "m-light", thinking: "low" } },
 		env: {},
 		systemOne: SYSTEM_ONE,

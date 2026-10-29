@@ -12,7 +12,7 @@ import {
 const PARENT = { model: "oc-openai/deepseek-flash", thinking: "medium" as const };
 
 function enabled(profiles: TinysubagentConfig["profiles"]): TinysubagentConfig {
-	return { enableProfiles: true, jevCheckLastMessage: false, profiles, env: {}, systemOne: null, classifier: null, sources: [] };
+	return { enableProfiles: true, profiles, env: {}, systemOne: null, classifier: null, sources: [] };
 }
 
 const CONFIGURED = enabled({
@@ -61,7 +61,7 @@ test("an omitted profile inherits the parent, whether or not profiles are enable
 	};
 	for (const name of [undefined, "", "   "]) {
 		const enabled = resolveProfile(CONFIGURED, name, PARENT);
-		const disabled = resolveProfile({ enableProfiles: false, jevCheckLastMessage: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] }, name, PARENT);
+		const disabled = resolveProfile({ enableProfiles: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] }, name, PARENT);
 		assert.deepEqual(enabled, inherited);
 		assert.deepEqual(disabled, inherited);
 	}
@@ -74,7 +74,7 @@ test("a profile name is trimmed rather than treated as unknown", () => {
 });
 
 test("when profiles are disabled an omitted profile inherits the parent", () => {
-	const disabled: TinysubagentConfig = { enableProfiles: false, jevCheckLastMessage: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] };
+	const disabled: TinysubagentConfig = { enableProfiles: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] };
 	assert.deepEqual(resolveProfile(disabled, undefined, PARENT), {
 		ok: true,
 		name: CURRENT_PROFILE,
@@ -86,7 +86,7 @@ test("when profiles are disabled an omitted profile inherits the parent", () => 
 test("when profiles are disabled `current` is still a harmless no-op", () => {
 	// A replayed call or a long-lived session must not fail for a request
 	// that resolves to exactly the same thing as omitting it.
-	const disabled: TinysubagentConfig = { enableProfiles: false, jevCheckLastMessage: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] };
+	const disabled: TinysubagentConfig = { enableProfiles: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] };
 	assert.deepEqual(resolveProfile(disabled, CURRENT_PROFILE, PARENT), {
 		ok: true,
 		name: CURRENT_PROFILE,
@@ -98,7 +98,6 @@ test("when profiles are disabled `current` is still a harmless no-op", () => {
 test("when profiles are disabled a named profile is refused even if configured", () => {
 	const disabled: TinysubagentConfig = {
 		enableProfiles: false,
-		jevCheckLastMessage: false,
 		profiles: { pro: { model: "m" } },
 		env: {},
 		systemOne: null,
@@ -113,7 +112,6 @@ test("when profiles are disabled a named profile is refused even if configured",
 test("the refusal names the config file that was actually loaded", () => {
 	const disabled: TinysubagentConfig = {
 		enableProfiles: false,
-		jevCheckLastMessage: false,
 		profiles: {},
 		env: {},
 		systemOne: null,
@@ -127,7 +125,7 @@ test("the refusal names the config file that was actually loaded", () => {
 
 test("availableProfileNames lists current first, then configured names sorted", () => {
 	assert.deepEqual(availableProfileNames(CONFIGURED), ["current", "light", "modelOnly", "pro"]);
-	assert.deepEqual(availableProfileNames({ enableProfiles: false, jevCheckLastMessage: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] }), ["current"]);
+	assert.deepEqual(availableProfileNames({ enableProfiles: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] }), ["current"]);
 });
 
 test("the profile parameter description enumerates the real options", () => {
@@ -138,7 +136,7 @@ test("the profile parameter description enumerates the real options", () => {
 });
 
 test("the profile description degrades honestly when nothing is configured", () => {
-	const text = profileParamDescription({ enableProfiles: true, jevCheckLastMessage: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] });
+	const text = profileParamDescription({ enableProfiles: true, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] });
 	assert.ok(text.includes("`current`"));
 	assert.equal(text.includes("Configured:"), false);
 });

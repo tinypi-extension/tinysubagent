@@ -112,19 +112,9 @@
  * orchestrator from waiting on a child that cannot start.
  */
 
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { loadConfig, type TinysubagentConfig } from "../config/config.ts";
-import type { ClassifierRegistry } from "../systemone/route.ts";
 import { REPORT_TOOL_NAME } from "../types.ts";
-import {
-	FORGOTTEN,
-	checkLine,
-	checkingLine,
-	createReportDecider,
-	type ReportCheck,
-} from "./report-check.ts";
 import { writeReportFile, writeResultReport } from "./report.ts";
 import { readFinalMessage } from "./session.ts";
 import { failureDetail, settleReason } from "./settle.ts";
@@ -133,9 +123,6 @@ import { errorText, preflightFailure, preflightRefusal } from "./preflight.ts";
 
 /** How many times one child may be nudged to report before it is left alone. */
 export const MAX_REPORT_REMINDERS = 2;
-
-/** Session entry a report check appends; rendered here, never sent to the model. */
-const REPORT_CHECK_ENTRY = "tinysubagent_report_check";
 
 /** The nudge itself: a steer, so the model sees why it is being asked again. */
 const REPORT_REMINDER =
@@ -149,14 +136,12 @@ const REPORT_REMINDER =
 	"without it sends nothing.";
 
 /**
- * Overridable bits of the child, so tests can answer the two questions
- * the reminder needs without a SystemOne endpoint or a session file.
+ * Overridable bits of the child, so tests can answer the one question
+ * the reminder needs without a session file.
  */
 export interface ChildDeps {
 	/** The child's final assistant message, or null when it wrote none. */
 	readFinal?: () => string | null;
-	/** What the check concluded about that message. */
-	decidesReport?: (message: string) => Promise<ReportCheck>;
 }
 
 export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}): void {
@@ -168,19 +153,6 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 	let runSignal: AbortSignal | undefined;
 	/** Reminders sent for unreported turn ends; capped by MAX_REPORT_REMINDERS. */
 	let remindersSent = 0;
-	/** The child's config, read on the first unreported settle so a child that always reports never pays for it. */
-	let childConfig: TinysubagentConfig | undefined;
-	/** The report-check decider, built once on the first check. */
-	let reportDecider: ((message: string) => Promise<ReportCheck>) | undefined;
-
-	// The check's lines are for the human watching this pane, so they are session
-	// entries: visible in the transcript, absent from the model's context, where a
-	// "leaving the child alone" line would just be noise on the next turn.
-	pi.registerEntryRenderer?.(REPORT_CHECK_ENTRY, (entry, _options, theme) => {
-		const data = entry.data as { text?: unknown } | undefined;
-		const text = typeof data?.text === "string" ? data.text : "";
-		return new Text(theme.fg("dim", text), 0, 0);
-	});
 
 	// The explicit hand-back: the model passes its result, this writes it, and
 	// the orchestrator delivers that exact text. This is the only path that
@@ -264,7 +236,7 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 		writeReportFile("failed", "error", refusal);
 	});
 
-	pi.on("agent_settled", async (_event, ctx) => {
+	pi.on("agent_settled", async () => {
 		if (finished) return;
 
 		// An unreported turn end is not an ending: the child stays alive at its
@@ -277,7 +249,7 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 			// The one thing worth doing with that wait: a model that finished its
 			// work in prose instead of making the call can still be nudged into
 			// it. The pane was staying open anyway.
-			await remindIfUnreported(ctx);
+			await remindIfUnreported();
 			return;
 		}
 
@@ -307,18 +279,13 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 	/**
 	 * Nudge a finished result that was never reported. The turn has ended, so
 	 * the child is idle: a steer starts one more turn, in which the model can
-	 * make the call it skipped. With `jevCheckLastMessage` on, the classifier
-	 * judges the message first and only a `forgotten` verdict sends the nudge;
-	 * with it off the nudge goes out at once, with no check and no check lines.
+	 * make the call it skipped. The nudge goes out at once, on the strength of
+	 * there being a final message at all.
 	 */
-	async function remindIfUnreported(ctx: ExtensionContext): Promise<void> {
+	async function remindIfUnreported(): Promise<void> {
 		if (remindersSent >= MAX_REPORT_REMINDERS) return;
 		const finalMessage = deps.readFinal ? deps.readFinal() : finalSessionMessage();
 		if (finalMessage === null) return;
-		childConfig ??= loadConfig(process.cwd(), getAgentDir()).config;
-		if (childConfig.jevCheckLastMessage && !(await judgedForgotten(finalMessage, childConfig, ctx))) {
-			return;
-		}
 
 		remindersSent += 1;
 		pi.sendMessage(
@@ -332,34 +299,6 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 		);
 	}
 
-	/** Ask the check about one final message, and say what it concluded in the pane. */
-	async function judgedForgotten(
-		finalMessage: string,
-		config: TinysubagentConfig,
-		ctx: ExtensionContext,
-	): Promise<boolean> {
-		reportDecider ??=
-			deps.decidesReport ??
-			createReportDecider(config, ctx.modelRegistry as unknown as ClassifierRegistry);
-
-		// The user is told what is being asked: the verdict is the only thing that
-		// decides whether this child is nudged, so it should not happen off-screen.
-		noteCheck(checkingLine(finalMessage));
-		let check: ReportCheck;
-		try {
-			check = await reportDecider(finalMessage);
-		} catch {
-			// A broken decider must not break the settle; leave the child as it is.
-			check = { verdict: "unknown", reason: "the check threw" };
-		}
-		noteCheck(checkLine(check));
-		return check.verdict === FORGOTTEN;
-	}
-
-	/** Append one dim transcript line; the check belongs to the user, not the model. */
-	function noteCheck(text: string): void {
-		pi.appendEntry?.(REPORT_CHECK_ENTRY, { text });
-	}
 }
 
 /**

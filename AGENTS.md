@@ -8,14 +8,12 @@ Index of project specs. Read the linked spec before changing the area it covers.
 ### docs/issues
 
 - [docs/issues/child-preflight-failure/spec.md](docs/issues/child-preflight-failure/spec.md): A pi refusal to start must still write a failed sidecar with an optional message, so the orchestrator is not left hanging.
-- [docs/issues/classifier-report-check/spec.md](docs/issues/classifier-report-check/spec.md): Moves the child report check from SystemOne HTTP to the in-process classifier when classifierModel is set; systemOne* keys keep working with a load-time deprecation warning.
 - [docs/issues/code-layout/spec.md](docs/issues/code-layout/spec.md): Splits index.ts and reorganizes src/ into role folders via five ordered modules; behavior-preserving, only src/paths.ts reads import.meta.url.
 - [docs/issues/config-env/spec.md](docs/issues/config-env/spec.md): Adds a top-level env map to the settings file, merged per key project-over-global and exported before launch-owned vars; values must be strings.
 - [docs/issues/agy-harness/spec.md](docs/issues/agy-harness/spec.md): Allows profiles to select pi or agy, with shared thinking levels (mapped to agy's effort flag), project-cwd execution with untouched project hooks, report-sidecar completion, and tested child outcomes.
 - [docs/issues/panel-layout/spec.md](docs/issues/panel-layout/spec.md): Orchestrator-first panel layout: the orchestrator keeps 3/5 of its rect and all live subagent panes share one right-hand column, split equally.
 - [docs/issues/project-config/spec.md](docs/issues/project-config/spec.md): Adds a project-local <cwd>/.pi/tinysubagent.jsonc layered over the global config; scope beats filename, profiles merge by name, malformed files warn and fall back.
 - [docs/issues/remove-systemone-tui-rows/spec.md](docs/issues/remove-systemone-tui-rows/spec.md): Removes the three deprecated SystemOne rows from /subagent-settings so classifierModel is the only routing control; legacy systemOne* keys still resolve and route. (status: approved)
-- [docs/issues/report-check-line/spec.md](docs/issues/report-check-line/spec.md): Every report check prints two dim lines in the child pane — the question, then the verdict or the reason no verdict came — as session entries the model never sees. (status: approved)
 - [docs/issues/report-required/spec.md](docs/issues/report-required/spec.md): A done settle with no subagent_report writes nothing and keeps the child pane open; only report, exit, failure, or close ends a wait.
 - [docs/issues/report-tool/spec.md](docs/issues/report-tool/spec.md): Defines the subagent_report tool: the payload lives in the sidecar, not the child session, and report text is authoritative over the session scrape.
 - [docs/issues/settings-tui/spec.md](docs/issues/settings-tui/spec.md): Defines /subagent-settings, a TUI editing enableProfiles and profiles in the file resolution reads; comments must survive and every change writes immediately.

@@ -11,7 +11,6 @@ import tinysubagentChild, {
 import { preflightFailure } from "../../src/children/preflight.ts";
 import { settleReason } from "../../src/children/settle.ts";
 import { writeReportFile, writeResultReport } from "../../src/children/report.ts";
-import { REPORT_CHECK_INSTRUCTIONS } from "../../src/children/report-check.ts";
 import { REPORT_TOOL_NAME } from "../../src/types.ts";
 
 interface RegisteredTool {
@@ -35,19 +34,6 @@ interface SentMessage {
 	details: unknown;
 }
 
-/** A session entry the child appended to its own transcript. */
-interface AppendedEntry {
-	customType: string;
-	data: unknown;
-}
-
-/** A registered entry renderer, kept so a test can draw the child's lines. */
-type EntryRenderer = (
-	entry: { customType: string; data: unknown },
-	options: { expanded: boolean },
-	theme: { fg: (color: string, text: string) => string },
-) => { render: (width: number) => string[] } | undefined;
-
 /** The smallest `ExtensionAPI` the child factory touches. */
 function stubChildApi(
 	overrides: {
@@ -68,8 +54,6 @@ function stubChildApi(
 		/** Whether asking about OAuth throws. */
 		isUsingOAuthThrows?: boolean;
 		oauth?: boolean;
-		/** A classifier registry whose classify answers the report-check question with `choice`. */
-		classifier?: { choice: string | null };
 	} = {},
 ) {
 	const opts = {
@@ -82,15 +66,11 @@ function stubChildApi(
 		hasConfiguredAuthThrows: false,
 		isUsingOAuthThrows: false,
 		oauth: false,
-		classifier: undefined as { choice: string | null } | undefined,
 		...overrides,
 	};
-	const classifyContexts: { questions: { profile: { instructions: string } } }[] = [];
 	const tools: RegisteredTool[] = [];
 	const listeners = new Map<string, unknown>();
 	const sent: SentMessage[] = [];
-	const entries: AppendedEntry[] = [];
-	const renderers = new Map<string, EntryRenderer>();
 	let shutdowns = 0;
 	const ctx = {
 		shutdown() {
@@ -114,27 +94,14 @@ function stubChildApi(
 				if (opts.isUsingOAuthThrows) throw new Error("cannot say");
 				return opts.oauth;
 			},
-			findOfType: (_type: string, provider: string, modelId: string) =>
-				opts.classifier ? { provider, id: modelId } : undefined,
-			classify: async (_model: unknown, context: (typeof classifyContexts)[number]) => {
-				classifyContexts.push(context);
-				return {
-					stopReason: "stop",
-					answers: { profile: { type: "choice", choice: opts.classifier?.choice ?? null } },
-				};
-			},
 		},
 	};
 	return {
 		tools,
 		listeners,
 		sent,
-		entries,
-		renderers,
 		ctx,
 		shutdowns: () => shutdowns,
-		/** The contexts the classifier was asked with, one per classify call. */
-		classifyContexts: () => classifyContexts,
 		api: {
 			registerTool(tool: RegisteredTool) {
 				tools.push(tool);
@@ -144,12 +111,6 @@ function stubChildApi(
 			},
 			sendMessage(message: SentMessage, _options?: unknown) {
 				sent.push(message);
-			},
-			registerEntryRenderer(customType: string, renderer: EntryRenderer) {
-				renderers.set(customType, renderer);
-			},
-			appendEntry(customType: string, data?: unknown) {
-				entries.push({ customType, data });
 			},
 		},
 	};
@@ -506,296 +467,6 @@ test("a done settle writes nothing and keeps the pane open", async () => {
 	});
 });
 
-test("an unreported turn end with a finished result is reminded to report", async () => {
-	await withConfigFile({ jevCheckLastMessage: true }, async () => {
-		const stub = stubChildApi();
-		const deps: ChildDeps = {
-			readFinal: () => "All 12 tables migrated.",
-			decidesReport: async () => ({ verdict: "forgotten" }),
-		};
-		tinysubagentChild(stub.api as never, deps);
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		await settled({}, stub.ctx);
-
-		assert.equal(stub.sent.length, 1);
-		assert.equal(stub.sent[0]!.customType, "tinysubagent_report_reminder");
-		assert.match(stub.sent[0]!.content, /subagent_report/);
-		assert.equal(stub.sent[0]!.display, true);
-
-		// The check speaks to the user: the question, then the verdict. Neither
-		// line is sent to the model, which is the whole point of an entry.
-		assert.deepEqual(
-			stub.entries.map((entry) => entry.customType),
-			["tinysubagent_report_check", "tinysubagent_report_check"],
-		);
-		const lines = stub.entries.map((entry) => (entry.data as { text: string }).text);
-		assert.match(lines[0] ?? "", /^report-check: asking the classifier \(\d+ chars\)…$/);
-		assert.equal(
-			lines[1],
-			"report-check: forgotten → reminding the subagent to call subagent_report",
-		);
-	});
-});
-
-test("the check's entry renderer draws the line dim", () => {
-	const stub = stubChildApi();
-	tinysubagentChild(stub.api as never);
-	const renderer = stub.renderers.get("tinysubagent_report_check");
-	assert.equal(typeof renderer, "function");
-	const component = renderer?.(
-		{ customType: "tinysubagent_report_check", data: { text: "report-check: leaving it alone" } },
-		{ expanded: false },
-		{ fg: (color: string, text: string) => `<${color}>${text}` },
-	);
-	assert.deepEqual(
-		component?.render(80).map((line) => line.trim()),
-		["<dim>report-check: leaving it alone"],
-	);
-});
-
-test("reminders are capped so a model that keeps forgetting cannot loop", async () => {
-	await withConfigFile({ jevCheckLastMessage: true }, async () => {
-		const stub = stubChildApi();
-		let asked = 0;
-		const deps: ChildDeps = {
-			readFinal: () => "Done.",
-			decidesReport: async () => {
-				asked += 1;
-				return { verdict: "forgotten" };
-			},
-		};
-		tinysubagentChild(stub.api as never, deps);
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		for (let i = 0; i < MAX_REPORT_REMINDERS + 2; i += 1) {
-			await settled({}, stub.ctx);
-		}
-
-		assert.equal(stub.sent.length, MAX_REPORT_REMINDERS);
-		// The cap is checked before asking, so a capped child stops spending decisions —
-		// and stops printing, because no check ran.
-		assert.equal(asked, MAX_REPORT_REMINDERS);
-		assert.equal(stub.entries.length, MAX_REPORT_REMINDERS * 2);
-	});
-});
-
-test("an unreported turn end judged unfinished is left alone", async () => {
-	await withConfigFile({ jevCheckLastMessage: true }, async () => {
-		const stub = stubChildApi();
-		let asked = 0;
-		const deps: ChildDeps = {
-			readFinal: () => "Which migration should I run next?",
-			decidesReport: async () => {
-				asked += 1;
-				return { verdict: "not-finished" };
-			},
-		};
-		tinysubagentChild(stub.api as never, deps);
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		await settled({}, stub.ctx);
-
-		// The verdict was asked for and lost: the message exists, the decider
-		// ran, and no reminder was sent — but the user still sees why.
-		assert.equal(asked, 1);
-		assert.equal(stub.sent.length, 0);
-		assert.equal(
-			(stub.entries[1]?.data as { text: string } | undefined)?.text,
-			"report-check: not-finished → leaving the child alone",
-		);
-	});
-});
-
-test("a turn with no final message is never checked", async () => {
-	const stub = stubChildApi();
-	let asked = 0;
-	const deps: ChildDeps = {
-		readFinal: () => null,
-		decidesReport: async () => {
-			asked += 1;
-			return { verdict: "forgotten" };
-		},
-	};
-	tinysubagentChild(stub.api as never, deps);
-	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-	const settled = stub.listeners.get("agent_settled") as (
-		event: unknown,
-		ctx: { shutdown: () => void },
-	) => void;
-
-	await settled({}, stub.ctx);
-
-	assert.equal(asked, 0);
-	assert.equal(stub.sent.length, 0);
-	// No check ran, so nothing is printed.
-	assert.equal(stub.entries.length, 0);
-});
-
-test("a decider that throws leaves the child alone", async () => {
-	await withConfigFile({ jevCheckLastMessage: true }, async () => {
-		const stub = stubChildApi();
-		const deps: ChildDeps = {
-			readFinal: () => "Done.",
-			decidesReport: async () => {
-				throw new Error("SystemOne down");
-			},
-		};
-		tinysubagentChild(stub.api as never, deps);
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		await settled({}, stub.ctx);
-
-		assert.equal(stub.sent.length, 0);
-		// The failure is visible instead of silent: the user learns the check could
-		// not answer, and that the child was left alone because of it.
-		assert.equal(
-			(stub.entries[1]?.data as { text: string } | undefined)?.text,
-			"report-check: no verdict (the check threw) → leaving the child alone",
-		);
-	});
-});
-
-/** Point the child's config at one file, for the duration of `run`. */
-async function withConfigFile(body: unknown, run: () => Promise<void>): Promise<void> {
-	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-child-config-"));
-	const file = join(dir, "tinysubagent.json");
-	writeFileSync(file, JSON.stringify(body));
-	const saved = process.env.PI_TINYSUBAGENT_CONFIG;
-	process.env.PI_TINYSUBAGENT_CONFIG = file;
-	try {
-		await run();
-	} finally {
-		if (saved === undefined) delete process.env.PI_TINYSUBAGENT_CONFIG;
-		else process.env.PI_TINYSUBAGENT_CONFIG = saved;
-		rmSync(dir, { recursive: true, force: true });
-	}
-}
-
-test("a classifier-only child is reminded when the classifier says forgotten", async () => {
-	await withConfigFile({ jevCheckLastMessage: true, classifierModel: "openrouter/typesafe/jev-latest" }, async () => {
-		const stub = stubChildApi({ classifier: { choice: "forgotten" } });
-		tinysubagentChild(stub.api as never, { readFinal: () => "All 12 tables migrated." });
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		await settled({}, stub.ctx);
-
-		assert.equal(stub.classifyContexts().length, 1);
-		assert.equal(
-			stub.classifyContexts()[0]?.questions.profile.instructions,
-			REPORT_CHECK_INSTRUCTIONS,
-		);
-		assert.equal(stub.sent.length, 1);
-		assert.equal(stub.sent[0]!.customType, "tinysubagent_report_reminder");
-	});
-});
-
-test("a classifier-only child judged not-finished is left alone", async () => {
-	await withConfigFile({ jevCheckLastMessage: true, classifierModel: "openrouter/typesafe/jev-latest" }, async () => {
-		const stub = stubChildApi({ classifier: { choice: "not-finished" } });
-		tinysubagentChild(stub.api as never, { readFinal: () => "Which migration next?" });
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		await settled({}, stub.ctx);
-
-		assert.equal(stub.classifyContexts().length, 1);
-		assert.equal(stub.sent.length, 0);
-	});
-});
-
-test("deps.decidesReport still overrides a configured classifier", async () => {
-	await withConfigFile({ jevCheckLastMessage: true, classifierModel: "openrouter/typesafe/jev-latest" }, async () => {
-		const stub = stubChildApi({ classifier: { choice: "forgotten" } });
-		tinysubagentChild(stub.api as never, {
-			readFinal: () => "All 12 tables migrated.",
-			decidesReport: async () => ({ verdict: "not-finished" }),
-		});
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		await settled({}, stub.ctx);
-
-		assert.equal(stub.classifyContexts().length, 0);
-		assert.equal(stub.sent.length, 0);
-	});
-});
-
-test("a child with no transport at all settles cleanly and silently", async () => {
-	await withConfigFile({ jevCheckLastMessage: true }, async () => {
-		const stub = stubChildApi();
-		tinysubagentChild(stub.api as never, { readFinal: () => "All 12 tables migrated." });
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		await settled({}, stub.ctx);
-
-		assert.equal(stub.classifyContexts().length, 0);
-		assert.equal(stub.sent.length, 0);
-	});
-});
-
-test("a child with no transport at all settles cleanly and says why it did not check", async () => {
-	await withConfigFile({ jevCheckLastMessage: true }, async () => {
-		const stub = stubChildApi();
-		tinysubagentChild(stub.api as never, { readFinal: () => "All 12 tables migrated." });
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
-
-		await settled({}, stub.ctx);
-
-		assert.equal(stub.classifyContexts().length, 0);
-		assert.equal(stub.sent.length, 0);
-		assert.equal(stub.shutdowns(), 0);
-		assert.equal(
-			(stub.entries[1]?.data as { text: string } | undefined)?.text,
-			"report-check: no verdict (no routing transport configured) → leaving the child alone",
-		);
-	});
-});
-
 test("a settle with no assistant message is silence too, not a failure", async () => {
 	await withReportFile((report) => {
 		const stub = stubChildApi();
@@ -1011,51 +682,39 @@ test("an interrupted child that cannot start its next run is still reported", as
 	});
 });
 
-test("with jevCheckLastMessage off, an unreported finished result is reminded without a check", async () => {
-	await withConfigFile({ classifierModel: "openrouter/typesafe/jev-latest" }, async () => {
-		const stub = stubChildApi({ classifier: { choice: "not-finished" } });
-		let asked = 0;
-		tinysubagentChild(stub.api as never, {
-			readFinal: () => "All 12 tables migrated.",
-			decidesReport: async () => {
-				asked += 1;
-				return { verdict: "not-finished" };
-			},
-		});
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
+test("an unreported finished result is reminded at once, with no check", async () => {
+	const stub = stubChildApi();
+	tinysubagentChild(stub.api as never, { readFinal: () => "All 12 tables migrated." });
+	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+	const settled = stub.listeners.get("agent_settled") as (
+		event: unknown,
+		ctx: { shutdown: () => void },
+	) => void;
 
-		await settled({}, stub.ctx);
+	await settled({}, stub.ctx);
 
-		// The flag is off by default, so the classifier and the decider are never asked:
-		// the reminder goes straight out and no check lines are printed.
-		assert.equal(asked, 0);
-		assert.equal(stub.classifyContexts().length, 0);
-		assert.equal(stub.sent.length, 1);
-		assert.equal(stub.sent[0]!.customType, "tinysubagent_report_reminder");
-		assert.equal(stub.entries.length, 0);
-	});
+	// There is no check any more: the child reads no config and asks no classifier,
+	// so the reminder goes straight out with nothing printed in the pane.
+	assert.equal(stub.sent.length, 1);
+	assert.equal(stub.sent[0]!.customType, "tinysubagent_report_reminder");
+	assert.equal(stub.sent[0]!.display, true);
+	assert.match(stub.sent[0]!.content, /subagent_report/);
 });
 
-test("with jevCheckLastMessage off, reminders still stop at the cap", async () => {
-	await withConfigFile({}, async () => {
-		const stub = stubChildApi();
-		tinysubagentChild(stub.api as never, { readFinal: () => "Done." });
-		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-		const settled = stub.listeners.get("agent_settled") as (
-			event: unknown,
-			ctx: { shutdown: () => void },
-		) => void;
+test("reminders still stop at the cap", async () => {
+	const stub = stubChildApi();
+	tinysubagentChild(stub.api as never, { readFinal: () => "Done." });
+	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+	const settled = stub.listeners.get("agent_settled") as (
+		event: unknown,
+		ctx: { shutdown: () => void },
+	) => void;
 
-		for (let i = 0; i < MAX_REPORT_REMINDERS + 2; i += 1) {
-			await settled({}, stub.ctx);
-		}
+	for (let i = 0; i < MAX_REPORT_REMINDERS + 2; i += 1) {
+		await settled({}, stub.ctx);
+	}
 
-		assert.equal(stub.sent.length, MAX_REPORT_REMINDERS);
-	});
+	assert.equal(stub.sent.length, MAX_REPORT_REMINDERS);
 });

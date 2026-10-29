@@ -34,7 +34,6 @@ const BASE_URL = "https://api.typesafe.ai";
 function routingConfig(systemOne: TinysubagentConfig["systemOne"]): TinysubagentConfig {
 	return {
 		enableProfiles: true,
-		jevCheckLastMessage: false,
 		profiles: {
 			light: { model: "m-light", thinking: "low" },
 			pro: { model: "m-pro", thinking: "high" },

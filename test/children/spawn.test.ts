@@ -144,7 +144,7 @@ function context(agents: readonly AgentDef[], allToolNames: string[] = ["read", 
 		env: {},
 		allToolNames,
 		agents,
-		config: { enableProfiles: false, jevCheckLastMessage: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] },
+		config: { enableProfiles: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] },
 	};
 }
 
@@ -186,7 +186,7 @@ test("an agy profile with a missing executable fails before opening a pane and w
 				agentDir: dir,
 				sessionDir: dir,
 				env: { PATH: "" },
-				config: { ...base.config, enableProfiles: true, jevCheckLastMessage: false, profiles: { gemini: { harness: "agy", model: "gpt-oss-120b" } } },
+				config: { ...base.config, enableProfiles: true, profiles: { gemini: { harness: "agy", model: "gpt-oss-120b" } } },
 			},
 		);
 		assert.deepEqual(result, { ok: false, error: "agy executable not found: agy" });
@@ -206,7 +206,6 @@ test("an agy profile ignores role tools with a warning and proceeds", async () =
 		const config = {
 			...base.config,
 			enableProfiles: true,
-			jevCheckLastMessage: false,
 			profiles: { gemini: { harness: "agy" as const, model: "gpt-oss-120b" } },
 		};
 		const { result } = await withHerdrStubScript([{ payload: openPayload }], async () => {
