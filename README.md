@@ -134,6 +134,7 @@ tools: "*", -subagent
 
 A list that is empty after subtraction still launches, with only `subagent_report` and a warning. It never falls back to "no allowlist".
 
+
 ## Profiles
 
 A profile selects the child CLI with `harness` (`pi`, the default, or `agy`) and supplies
@@ -257,6 +258,25 @@ When a subagent's turn ends without a `subagent_report` call, the child reminds 
 - **Collisions go to the launcher.** `PATH`, `PI_CODING_AGENT_DIR`, and the `PI_TINYSUBAGENT_*` variables
   children use to report back are written after `env`, so a config value with the same name is overwritten.
 
+## Settings file
+
+Everything `tinysubagent.jsonc` accepts:
+
+| Key | Type | Values |
+| --- | --- | --- |
+| `enableProfiles` | boolean | `true`, `false` |
+| `profiles` | object | `{ "<name>": { "harness"?, "model"?, "thinking"? } }` |
+| `defaultTools` | string[] | tool names and `*` patterns |
+| `env` | object | `{ "<VAR>": "<string>" }` |
+| `classifierModel` | string | `"<provider>/<model-id>"` |
+
+Profile fields:
+
+| Key | Type | Values |
+| --- | --- | --- |
+| `harness` | string | `pi`, `agy` |
+| `model` | string | `"<provider>/<model-id>"` or an agy model name |
+| `thinking` | string | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 ## License
 
 MIT. See [LICENSE](LICENSE). 
