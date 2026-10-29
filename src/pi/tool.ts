@@ -65,6 +65,13 @@ export interface ToolDeps {
 	columns: LiveSubPanes;
 	/** Watchers still running, so a shutdown can end them; owned by the caller. */
 	watchers: Set<AbortController>;
+	/**
+	 * Warning keys this registration has already reported. One set per
+	 * registration is the session scope: the extension registers once per pi
+	 * session, and a reload starts a new registration with a fresh set. Optional
+	 * so a caller that never wants deduplication (tests, smoke runs) can omit it.
+	 */
+	reportedWarnings?: Set<string>;
 	/** Reads the caller's shutdown flag, so delivery stops after it. */
 	isShuttingDown: () => boolean;
 	/**
@@ -155,6 +162,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				parentModel: parentModelSpec(ctx),
 				parentThinking: parentThinking(ctx),
 				columns,
+				reportedWarnings: deps.reportedWarnings,
 			};
 
 			// Launch sequentially: panes are created one at a time anyway, and a

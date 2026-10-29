@@ -254,3 +254,98 @@ test("a floor naming only the spawn tool still narrows to report-only", () => {
 		`agent "worker": the tool list is empty after negation — only ${REPORT_TOOL_NAME} is allowed.`,
 	]);
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Registry-dependent warnings: once per session, not once per spawn
+// ────────────────────────────────────────────────────────────────────────────
+
+test("an unmatched floor name stays in the allowlist and warns once per session", () => {
+	// A renamed floor tool must not silently narrow the child, so the name is
+	// kept as written. The warning is about the config, and the config does not
+	// change between spawns: a second spawn of the same session says nothing.
+	const reportedWarnings = new Set<string>();
+	const input: ToolListInput = {
+		floor: ["gone", "read"],
+		registry: REGISTRY,
+		role: "worker",
+		reportedWarnings,
+	};
+
+	const first = resolveToolList(input);
+	assert.deepEqual(first.tools, ["gone", "read", REPORT_TOOL_NAME]);
+	assert.deepEqual(first.warnings, [
+		'tinysubagent: defaultTools entry "gone" matches no known tool — the child may be missing what it needs.',
+	]);
+
+	const second = resolveToolList(input);
+	assert.deepEqual(second.tools, ["gone", "read", REPORT_TOOL_NAME]);
+	assert.deepEqual(second.warnings, []);
+});
+
+test("floor warnings share one session set while a role's own pattern warns every time", () => {
+	// The floor is ambient config, so each floor problem is reported once. A
+	// role's own pattern is that role's mistake, so it is repeated for every
+	// acknowledgment it affects — the two channels deliberately differ.
+	const reportedWarnings = new Set<string>();
+	const input: ToolListInput = {
+		floor: ["gone", TOOL_NAME, "read"],
+		declared: ["-subagent_report", "nope_*"],
+		registry: [...REGISTRY, TOOL_NAME],
+		role: "worker",
+		reportedWarnings,
+	};
+
+	const first = resolveToolList(input);
+	assert.deepEqual(first.warnings, [
+		`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+		'tinysubagent: defaultTools entry "gone" matches no known tool — the child may be missing what it needs.',
+		'agent "worker": unknown tool(s) nope_* — the child may be missing what it needs.',
+		`agent "worker": -${REPORT_TOOL_NAME} is ignored — the report tool is always allowed.`,
+	]);
+
+	const second = resolveToolList(input);
+	assert.deepEqual(second.warnings, [
+		'agent "worker": unknown tool(s) nope_* — the child may be missing what it needs.',
+	]);
+});
+
+test("a fresh session set reports the floor warnings again", () => {
+	// Absent a shared set — a new pi session, or any single-shot caller — nothing
+	// has been said yet, so the resolver must not stay quiet out of habit.
+	const floor = ["gone", TOOL_NAME, "read"];
+	const expected = [
+		`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+		'tinysubagent: defaultTools entry "gone" matches no known tool — the child may be missing what it needs.',
+	];
+	for (let session = 0; session < 2; session += 1) {
+		const resolved = resolve({
+			floor,
+			registry: [...REGISTRY, TOOL_NAME],
+			reportedWarnings: new Set<string>(),
+		});
+		assert.deepEqual(resolved.warnings, expected, `session ${session}`);
+	}
+});
+
+test("a dropped floor entry and an ignored -subagent_report are each reported once", () => {
+	// Both are facts about the contract rather than about one role, so a second
+	// role declaring the same negation is the same problem, already explained.
+	const reportedWarnings = new Set<string>();
+	for (const role of ["first", "second"]) {
+		const resolved = resolve({
+			floor: [TOOL_NAME, "read"],
+			declared: ["-subagent_report"],
+			registry: [...REGISTRY, TOOL_NAME],
+			role,
+			reportedWarnings,
+		});
+		if (role === "first") {
+			assert.deepEqual(resolved.warnings, [
+				`tinysubagent: defaultTools entry "${TOOL_NAME}" is ignored because nested delegation is not supported.`,
+				`agent "first": -${REPORT_TOOL_NAME} is ignored — the report tool is always allowed.`,
+			]);
+		} else {
+			assert.deepEqual(resolved.warnings, []);
+		}
+	}
+});

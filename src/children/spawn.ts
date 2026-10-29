@@ -81,6 +81,9 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			declared: agent.tools,
 			registry: context.allToolNames,
 			role: agent.name,
+			// Shared by every spawn of this session: the resolver uses it to report
+			// registry-dependent floor warnings once instead of on every ack.
+			reportedWarnings: context.reportedWarnings,
 		});
 		warnings.push(...resolved.warnings);
 		if (resolved.allowlist) tools = resolved.tools;

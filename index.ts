@@ -77,6 +77,15 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 	 */
 	const columns = new LiveSubPanes();
 
+	/**
+	 * Warning keys this session has already reported. One set per registration is
+	 * the session scope, which is what keeps the registry-dependent floor
+	 * warnings from repeating on every acknowledgment; it is threaded through
+	 * `ToolDeps` to every `SpawnContext` this registration builds. Role-level
+	 * warnings are exempt by design and never consult it.
+	 */
+	const reportedWarnings = new Set<string>();
+
 	const pluginFix = (ctx: ExtensionContext) => offerPluginFix(ctx, { capability, fixOffered });
 
 	registerLifecycle(pi, {
@@ -97,6 +106,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 			capability,
 			columns,
 			watchers,
+			reportedWarnings,
 			isShuttingDown: () => shuttingDown,
 			// The pinned devDependency (pi-coding-agent@0.85.1) lags the runtime pi,
 			// whose registry has `findOfType`/`classify`; one cast at the seam.
