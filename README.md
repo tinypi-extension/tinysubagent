@@ -5,7 +5,7 @@ delegate to them. Each subagent runs in a shared right-hand [herdr](https://herd
 with its own context window, and reports back as a steer message.
 
 - **Fire-and-forget:** spawns return immediately; results wake your session later.
-- **Single or parallel:** one task, or up to 4 reporting in one message. 
+- **Parallel batches:** one or more tasks (up to 4), reporting together in one message.
 - **Model profiles:** optional named profiles with a shared `model` and `thinking` setting for pi or agy.
 - **Per-child `env`:** static variables for subagents, without touching the orchestrator's env.
 

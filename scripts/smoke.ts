@@ -90,13 +90,6 @@ const context = {
 	parentThinking: chosen?.thinking,
 };
 
-const request = {
-	agent: agentName,
-	task: "Call subagent_report with the result PONG. Use no other tools. Do not explain.",
-	name: "smoke",
-	profile: config.enableProfiles ? profileName : undefined,
-};
-
 const plan = parallel
 	? [
 			{
@@ -112,7 +105,14 @@ const plan = parallel
 				profile: config.enableProfiles ? profileName : undefined,
 			},
 		]
-	: [request];
+	: [
+			{
+				agent: agentName,
+				task: "Call subagent_report with the result PONG. Use no other tools. Do not explain.",
+				name: "smoke",
+				profile: config.enableProfiles ? profileName : undefined,
+			},
+		];
 
 /**
  * Test-harness watchdog only. `waitForSubagent` waits while a child holds its

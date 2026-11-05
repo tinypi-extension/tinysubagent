@@ -274,7 +274,7 @@ test("a routing failure still spawns, on the current profile, in both failure sh
 		const h = harness(routingConfig(systemOneOn), () => route);
 		try {
 			const result = await withSpawnHerdrStub(() =>
-				executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }),
+				executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
 			);
 			const text = contentText(result);
 			assert.match(text, /\[current\]/, `${label}: the ack never named the current profile: ${text}`);
@@ -302,7 +302,7 @@ test("an unknown agent triggers no route call and still fails with the usual err
 	const h = harness(routingConfig(systemOneOn), () => route);
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { agent: "nope", task: "a brief that must not travel" }),
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "nope", task: "a brief that must not travel" }] }),
 		);
 		assert.equal(calls, 0, "routing saw the brief of an unknown agent");
 		const text = contentText(result);
@@ -323,7 +323,7 @@ test("with routing off the route function is never called", async () => {
 	const h = harness(routingConfig(null), () => route);
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }),
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
 		);
 		assert.equal(calls, 0, "routing ran without a configured key");
 		assert.match(contentText(result), /\[current\]/);
@@ -356,7 +356,7 @@ test("a never-resolving route does not block the spawn beyond the routing budget
 	try {
 		const started = Date.now();
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }),
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
 		);
 		const elapsed = Date.now() - started;
 		assert.ok(elapsed < 1000, `execute took ${elapsed}ms — the routing budget did not bound the spawn`);
@@ -386,7 +386,7 @@ test("the key and the endpoint appear in no description, schema, or result text"
 		assert.ok(!schema.includes(BASE_URL), "the parameter schema leaks the endpoint");
 
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }),
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
 		);
 		const text = contentText(result);
 		assert.ok(!text.includes(KEY), "the result text leaks the key");
@@ -409,7 +409,7 @@ test("an explicit profile overrides automatic routing", async () => {
 	});
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { agent: "worker", task: "one job", profile: "light" }),
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job", profile: "light" }] }),
 		);
 		assert.match(contentText(result), /\[light\]/);
 		assert.equal(routeCalls, 0, "the router should not be called for an explicit profile");
@@ -440,7 +440,7 @@ test("the route factory is never invoked when profiles are off", async () => {
 	});
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }),
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
 		);
 		assert.equal(factoryCalls, 0, "the route factory ran with routing off");
 		assert.equal(routeCalls, 0, "the route ran with routing off");
@@ -466,7 +466,7 @@ test("classifier routing shows an info notice when a profile is chosen automatic
 	};
 	const h = harness(config, () => async () => ({ choice: "light" }));
 	try {
-		await withSpawnHerdrStub(() => executeTool(h.tool, h.ctx, { agent: "worker", task: "one job" }));
+		await withSpawnHerdrStub(() => executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }));
 		assert.deepEqual(h.notices, [{
 			message: "tinysubagent: routing profile with classifier model openrouter/typesafe/jev-latest.",
 			level: "info",
@@ -482,7 +482,10 @@ test("tool description says subagents start immediately, not queued", () => {
 	const description = buildToolDescription([workerAgent], config);
 	assert.match(description, /starts the requested subagent\(s\) immediately/);
 	assert.match(description, /does not queue or defer them for later/);
-	assert.match(description, /parallel request starts all of them concurrently/);
+	assert.match(description, /tasks` array with one or more subagents/);
+	assert.doesNotMatch(description, /Modes: single/);
+	assert.match(description, /All requested subagents run concurrently/);
+	assert.match(description, /Subagents run concurrently and report back together/);
 });
 
 test("only classifierModel set keeps the profile list and parameter", () => {

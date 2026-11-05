@@ -23,12 +23,8 @@ export interface TaskInput {
 
 /** Shape of the tool's arguments after schema validation. */
 export interface ToolParams {
-	agent?: string;
-	task?: string;
-	name?: string;
-	tasks?: TaskInput[];
+	tasks: TaskInput[];
 	cwd?: string;
-	profile?: string;
 }
 
 export interface SpawnRequest {

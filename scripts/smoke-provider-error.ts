@@ -237,7 +237,7 @@ const tool = tools[0] as {
 
 const ack = await tool.execute(
 	"call-1",
-	{ agent: agent.name, task: "Reply with exactly the single word PONG." },
+	{ tasks: [{ agent: agent.name, task: "Reply with exactly the single word PONG." }] },
 	undefined,
 	undefined,
 	ctx,

@@ -33,7 +33,7 @@ One act of opening a pane and starting a child with a role, brief, profile, and 
 _Avoid_: launch, run, invocation
 
 **Batch**:
-All children started by a single tool call — one, or up to four in parallel — whose results are reported back together.
+All children started by a single tool call — one or more, up to four in parallel — whose results are reported back together.
 _Avoid_: group, queue, set
 
 **Steer**:

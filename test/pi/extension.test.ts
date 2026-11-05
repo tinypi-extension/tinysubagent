@@ -215,8 +215,16 @@ function tasksOfferProfile(tool: Registered): boolean {
 
 function assertSharedSchema(tool: Registered): void {
 	const properties = tool.parameters?.properties ?? {};
-	for (const key of ["agent", "task", "tasks", "cwd"]) {
+	for (const key of ["tasks", "cwd"]) {
 		assert.ok(Object.hasOwn(properties, key), `missing parameter: ${key}`);
+	}
+	for (const key of ["agent", "task", "name", "profile"]) {
+		assert.ok(!Object.hasOwn(properties, key), `unexpected top-level parameter: ${key}`);
+	}
+	const tasks = properties.tasks as { minItems?: number; items?: { properties?: Record<string, unknown> } };
+	assert.equal(tasks.minItems, 1);
+	for (const key of ["agent", "task", "name"]) {
+		assert.ok(Object.hasOwn(tasks.items?.properties ?? {}, key), `missing tasks[] parameter: ${key}`);
 	}
 }
 
@@ -256,9 +264,9 @@ test("the profile parameter exists whenever profiles are enabled, including with
 			const tool = registerWithConfig(file);
 			assertSharedSchema(tool);
 			assert.equal(
-				Object.hasOwn(tool.parameters?.properties ?? {}, "profile"),
+				Object.hasOwn((tool.parameters?.properties?.tasks as { items?: { properties?: Record<string, unknown> } })?.items?.properties ?? {}, "profile"),
 				profile,
-				`top-level profile wrong in case: ${name}`,
+				`tasks[].profile wrong in case: ${name}`,
 			);
 			assert.equal(tasksOfferProfile(tool), profile, `tasks[].profile wrong in case: ${name}`);
 
@@ -321,7 +329,7 @@ test("with routing on, the key and endpoint appear in no description, schema, or
 		const schema = JSON.stringify(tool.parameters ?? {});
 		// Routing is active, but callers can still explicitly override it.
 		assert.ok(description.includes("Profiles:"), "routing on must advertise profile choices");
-		assert.ok(schema.includes("\"profile\""), "routing on must offer the profile parameter");
+		assert.ok(schema.includes("\"profile\""), "routing on must offer a per-task profile parameter");
 		assert.ok(!description.includes(FAKE_KEY), "the description leaks the key");
 		assert.ok(!description.includes(FAKE_URL), "the description leaks the endpoint");
 		assert.ok(!schema.includes(FAKE_KEY), "the parameter schema leaks the key");
@@ -335,7 +343,7 @@ test("with routing on, the key and endpoint appear in no description, schema, or
 			ctx: unknown,
 		) => Promise<unknown>;
 		const { result } = await withSpawnHerdrStub(() =>
-			execute("call-1", { agent: "worker", task: "a brief that would travel" }, undefined, () => {}, ctx),
+			execute("call-1", { tasks: [{ agent: "worker", task: "a brief that would travel" }] }, undefined, () => {}, ctx),
 		);
 		const text = ((result as { content?: { text?: string }[] }).content ?? [])
 			.map((part) => part.text ?? "")
@@ -744,7 +752,7 @@ function executeThroughTool(tool: Registered, ctx: Record<string, unknown>): Pro
 		onUpdate: unknown,
 		ctx: unknown,
 	) => Promise<unknown>;
-	return execute("call-1", { agent: "worker", task: "do it" }, undefined, () => {}, ctx);
+	return execute("call-1", { tasks: [{ agent: "worker", task: "do it" }] }, undefined, () => {}, ctx);
 }
 
 /** The report path baked into the launch script, for a child that never ran here. */

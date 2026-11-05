@@ -35,11 +35,11 @@ export function advertiseAgents(agents: readonly AgentDef[]): string[] {
 export function buildToolDescription(agents: readonly AgentDef[], config: TinysubagentConfig): string {
 	const lines = [
 		"Delegate tasks to subagents, each running in its own herdr pane with an isolated context window.",
-		"Calling this tool starts the requested subagent(s) immediately; it does not queue or defer them for later. A single request starts one subagent, and a parallel request starts all of them concurrently.",
+		"Calling this tool starts the requested subagent(s) immediately; it does not queue or defer them for later. All requested subagents run concurrently.",
 		"",
 		"This returns as soon as the panes are open. Do nothing else after spawning: end your turn and wait for the results. Each subagent's result is delivered back to this session automatically as a steer message when it finishes — do not poll, sleep, tail logs, or start unrelated work while you wait.",
 		"",
-		`Modes: single (\`agent\` + \`task\`) or parallel (\`tasks\` array, up to ${MAX_PARALLEL_TASKS}). Parallel subagents run concurrently and report back together in a single message.`,
+		`Provide a \`tasks\` array with one or more subagents (up to ${MAX_PARALLEL_TASKS}). Subagents run concurrently and report back together in a single message. Specify \`name\` and \`profile\` per task when needed.`,
 		"",
 		"Available roles:",
 	];
@@ -75,51 +75,31 @@ export const PROMPT_GUIDELINES = [
 ];
 
 /**
- * The `profile` parameter exists whenever profiles are enabled. During
- * automatic routing, an explicitly supplied profile overrides the router.
+ * Per-task `profile` exists whenever profiles are enabled. During automatic
+ * routing, an explicitly supplied profile overrides the router.
  */
 export function buildParameters(config: TinysubagentConfig) {
 	const profileOffered = config.enableProfiles;
 	const properties: Record<string, TSchema> = {
-		agent: Type.Optional(
-			Type.String({
-				description: "Role to run, from the list in this tool's description. Use with `task`.",
+		tasks: Type.Array(
+			Type.Object({
+				agent: Type.String({ description: "Role to run." }),
+				task: Type.String({ description: "Self-contained brief for this subagent." }),
+				name: Type.Optional(Type.String({ description: "Label for this subagent." })),
+				...(profileOffered
+					? { profile: Type.Optional(Type.String({ description: "Profile for this subagent." })) }
+					: {}),
 			}),
-		),
-		task: Type.Optional(
-			Type.String({
-				description:
-					"Complete, self-contained brief. The subagent cannot see this conversation, so include all needed context and state the exact output you want.",
-			}),
-		),
-		name: Type.Optional(
-			Type.String({ description: "Label for the pane and the result. Defaults to the agent name." }),
-		),
-		tasks: Type.Optional(
-			Type.Array(
-				Type.Object({
-					agent: Type.String({ description: "Role to run." }),
-					task: Type.String({ description: "Self-contained brief for this subagent." }),
-					name: Type.Optional(Type.String({ description: "Label for this subagent." })),
-					...(profileOffered
-						? { profile: Type.Optional(Type.String({ description: "Profile for this subagent." })) }
-						: {}),
-				}),
-				{
-					maxItems: MAX_PARALLEL_TASKS,
-					description: `Parallel subagents, each with its own pane. Results come back together in one message. Maximum ${MAX_PARALLEL_TASKS}.`,
-				},
-			),
+			{
+				minItems: 1,
+				maxItems: MAX_PARALLEL_TASKS,
+				description: `Subagents, each with its own pane. Results come back together in one message. Maximum ${MAX_PARALLEL_TASKS}.`,
+			},
 		),
 		cwd: Type.Optional(
 			Type.String({ description: "Working directory for the subagents. Defaults to this session's cwd." }),
 		),
 	};
 
-	if (profileOffered) {
-		properties.profile = Type.Optional(
-			Type.String({ description: profileParamDescription(config, routingActive(config)) }),
-		);
-	}
 	return Type.Object(properties);
 }

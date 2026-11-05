@@ -11,16 +11,16 @@ import { spawnOne } from "../../src/children/spawn.ts";
 import type { SpawnContext, ToolParams } from "../../src/children/contract.ts";
 import { REPORT_TOOL_NAME, TOOL_NAME, type AgentDef } from "../../src/types.ts";
 
-test("single mode takes an agent and a task", () => {
-	const mode = collectRequests({ agent: "worker", task: "Do it." });
+test("one task in the tasks array becomes one request", () => {
+	const mode = collectRequests({ tasks: [{ agent: "worker", task: "Do it." }] });
 	assert.equal(mode.ok, true);
 	assert.deepEqual(mode.ok && mode.requests, [
 		{ agent: "worker", task: "Do it.", name: "worker", profile: undefined },
 	]);
 });
 
-test("an explicit name overrides the agent name, and whitespace is trimmed", () => {
-	const mode = collectRequests({ agent: " worker ", task: "  Do it.  ", name: "  scout  " });
+test("a per-task name overrides the agent name, and whitespace is trimmed", () => {
+	const mode = collectRequests({ tasks: [{ agent: " worker ", task: "  Do it.  ", name: "  scout  " }] });
 	assert.deepEqual(mode.ok && mode.requests[0], {
 		agent: "worker",
 		task: "Do it.",
@@ -29,12 +29,12 @@ test("an explicit name overrides the agent name, and whitespace is trimmed", () 
 	});
 });
 
-test("a missing agent or task is refused with a message naming both modes", () => {
-	const missing = collectRequests({ agent: "worker" });
+test("empty task arrays and blank task fields are refused", () => {
+	const missing = collectRequests({ tasks: [] });
 	assert.equal(missing.ok, false);
-	assert.match(missing.ok === false ? missing.error : "", /provide `agent` and `task`.*or `tasks`/);
+	assert.match(missing.ok === false ? missing.error : "", /at least one task in `tasks`/);
 
-	const blank = collectRequests({ agent: "worker", task: "   " });
+	const blank = collectRequests({ tasks: [{ agent: "worker", task: "   " }] });
 	assert.equal(blank.ok, false);
 	assert.match(blank.ok === false ? blank.error : "", /non-empty/);
 });
@@ -69,21 +69,7 @@ test("two children in a batch can never share a label", () => {
 	);
 });
 
-test("mixing both modes is refused rather than silently preferred", () => {
-	const mode = collectRequests({
-		agent: "worker",
-		task: "one",
-		tasks: [{ agent: "worker", task: "two" }],
-	});
-	assert.equal(mode.ok, false);
-	assert.match(mode.ok === false ? mode.error : "", /not both/);
-});
 
-test("an empty tasks array falls back to the single-task error", () => {
-	const mode = collectRequests({ tasks: [] });
-	assert.equal(mode.ok, false);
-	assert.match(mode.ok === false ? mode.error : "", /provide `agent` and `task`/);
-});
 
 test("a batch larger than the cap is refused, and the cap is the only reason", () => {
 	const tasks = Array.from({ length: MAX_PARALLEL_TASKS }, (_value, index) => ({

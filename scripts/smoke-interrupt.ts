@@ -97,8 +97,10 @@ const tool = tools[0] as {
 const ack = await tool.execute(
 	"call-1",
 	{
-		agent: agent.name,
-		task: "Run the bash command `sleep 120`, wait for it to finish, then reply with exactly the single word SLOW.",
+		tasks: [{
+			agent: agent.name,
+			task: "Run the bash command `sleep 120`, wait for it to finish, then reply with exactly the single word SLOW.",
+		}],
 	},
 	undefined,
 	undefined,
