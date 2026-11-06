@@ -154,7 +154,9 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// by the loop below exactly as before, with no brief sent for a spawn
 			// that will not happen.
 			const routeWarnings: string[] = [];
-			if (routingActive(config)) {
+			let context: SpawnContext;
+			try {
+				if (routingActive(config)) {
 				const hasAutoRoutedRequests = accepted.some(
 					(request) => !request.profile?.trim() && discovered.agents.some((agent) => agent.name === request.agent),
 				);
@@ -186,7 +188,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 
 			const sessionFile = ctx.sessionManager.getSessionFile();
 			const projectAgentDir = resolveProjectAgentDir(cwd);
-			const context: SpawnContext = {
+			context = {
 				cwd,
 				agentDir: projectAgentDir ?? baseAgentDir,
 				agentDirOverride: projectAgentDir,
@@ -200,7 +202,11 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				parentThinking: parentThinking(ctx),
 				columns,
 				reportedWarnings: deps.reportedWarnings,
-			};
+				};
+			} catch (error) {
+				releaseAll(accepted);
+				throw error;
+			}
 
 			// Launch sequentially: panes are created one at a time anyway, and a
 			// partly-failed batch reports exactly which children did start.
@@ -280,7 +286,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					failed: failures,
 					skipped,
 				},
-				isError: runnings.length === 0 && skipped.length === 0,
+				isError: runnings.length === 0 && (failures.length > 0 || skipped.length === 0),
 			};
 		},
 
@@ -299,7 +305,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				// A call that started nothing because every requested Label is already
 				// running is an answer, not a failure: the pane keeps that notice
 				// readable without colouring it as an error. A real refusal stays red.
-				const informational = (details?.skipped?.length ?? 0) > 0 && (details?.failed?.length ?? 0) === 0;
+				const informational = details?.status === "skipped";
 				return new Text(theme.fg(informational ? "muted" : "error", raw), 0, 0);
 			}
 

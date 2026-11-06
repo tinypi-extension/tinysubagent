@@ -57,8 +57,8 @@ export function ackParts(ack: SpawnAck): AckParts {
  * child by that Label is still going, so the orchestrator should wait for it
  * rather than start a second one.
  */
-export function skipNotice(name: string): string {
-	return `skipped ${name}: a subagent with this label is already running.`;
+export function skipNotice(label: string): string {
+	return `skipped ${label}: a subagent with this label is already running.`;
 }
 
 /** The plain line: what the model reads, with nothing to parse and no escapes. */

@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Duplicate detection uses exact, case-sensitive matching of each request's effective Label, including the existing Role-derived default when no Label is provided.
 - [ ] Duplicate checks include subagents started by earlier calls that are still running in this extension instance.

@@ -579,6 +579,29 @@ test("a mixed batch skips only the duplicate and starts the rest", async () => {
 	}
 });
 
+test("a skipped request does not hide a refused spawn in the same batch", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
+			});
+			const result = await executeTool(h.tool, h.ctx, {
+				tasks: [
+					{ agent: "worker", task: "duplicate", name: "alpha" },
+					{ agent: "missing-role", task: "refused", name: "beta" },
+				],
+			});
+			assert.match(contentText(result), /skipped alpha/);
+			assert.match(contentText(result), /failed missing-role/);
+			assert.equal(isErrorFlag(result), true, "the refused spawn was hidden by the skipped request");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
 test("a call whose every label is already running is informational, not a tool error", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
