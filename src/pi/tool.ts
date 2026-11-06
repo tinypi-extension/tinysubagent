@@ -19,8 +19,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { ackLine } from "../present/ack.ts";
+import { ackLine, skipNotice } from "../present/ack.ts";
 import {
+	NOTE_ALL_SKIPPED,
 	NOTE_NOTHING,
 	NOTE_STARTED,
 	renderAck,
@@ -33,8 +34,9 @@ import { type TinysubagentConfig } from "../config/config.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { collectRequests, resolveCwd, resolveProjectAgentDir } from "../children/requests.ts";
 import { parentModelSpec, parentThinking, spawnOne } from "../children/spawn.ts";
+import type { RunningLabels } from "../children/running-labels.ts";
 import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.ts";
-import type { SpawnContext, ToolParams } from "../children/contract.ts";
+import type { SpawnContext, SpawnRequest, ToolParams } from "../children/contract.ts";
 import type { RunningSubagent } from "../children/watcher.ts";
 import { TOOL_NAME, type AgentDef } from "../types.ts";
 import type { LiveSubPanes } from "../herdr/layout.ts";
@@ -63,6 +65,13 @@ export interface ToolDeps {
 	capability: Pick<CapabilityCheck, "ensureReady">;
 	/** The sub panes this registration opened, tracked for the layout planner. */
 	columns: LiveSubPanes;
+	/**
+	 * The Labels this registration's running subagents hold. One instance per
+	 * registration is the scope of duplicate prevention: a Label reserved by an
+	 * earlier call still blocks a later one, and nothing is claimed across
+	 * extension instances.
+	 */
+	runningLabels: RunningLabels;
 	/** Watchers still running, so a shutdown can end them; owned by the caller. */
 	watchers: Set<AbortController>;
 	/**
@@ -84,7 +93,17 @@ export interface ToolDeps {
 }
 
 export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> {
-	const { pi, config, parameters, advertisedAgents, capability, columns, watchers, isShuttingDown } = deps;
+	const {
+		pi,
+		config,
+		parameters,
+		advertisedAgents,
+		capability,
+		columns,
+		watchers,
+		runningLabels,
+		isShuttingDown,
+	} = deps;
 
 	return {
 		name: TOOL_NAME,
@@ -113,6 +132,21 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			const mode = collectRequests(params);
 			if (!mode.ok) return failure(mode.error);
 
+			// Claim each request's effective Label before anything else looks at it,
+			// so a request that would run a second child under a Label already in use
+			// is skipped here — before routing, before a Brief is written, before a
+			// pane exists. Claim and check are one synchronous pass, which is what
+			// stops two overlapping calls from both passing the check.
+			const accepted: SpawnRequest[] = [];
+			const skipped: string[] = [];
+			const releaseAll = (batch: readonly SpawnRequest[]): void => {
+				for (const request of batch) runningLabels.release(request.name);
+			};
+			for (const request of mode.requests) {
+				if (runningLabels.reserve(request.name)) accepted.push(request);
+				else skipped.push(request.name);
+			}
+
 			// Routing rewrites each request's profile before the validation loop
 			// runs. It never fails a spawn: every transport failure, rejection, or
 			// incoherent answer lands on `current` inside routeProfiles, and
@@ -121,7 +155,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// that will not happen.
 			const routeWarnings: string[] = [];
 			if (routingActive(config)) {
-				const hasAutoRoutedRequests = mode.requests.some(
+				const hasAutoRoutedRequests = accepted.some(
 					(request) => !request.profile?.trim() && discovered.agents.some((agent) => agent.name === request.agent),
 				);
 				if (config.classifier && hasAutoRoutedRequests) {
@@ -130,7 +164,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 						"info",
 					);
 				}
-				await routeProfiles(mode.requests, config, {
+				await routeProfiles(accepted, config, {
 					route: deps.route(ctx),
 					agents: discovered.agents,
 					warn: (message) => routeWarnings.push(message),
@@ -139,12 +173,15 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 
 			// Validate every profile before opening any pane, so a bad batch fails
 			// whole rather than halfway.
-			for (const request of mode.requests) {
+			for (const request of accepted) {
 				const profile = resolveProfile(config, request.profile, {
 					model: parentModelSpec(ctx),
 					thinking: parentThinking(ctx),
 				});
-				if (!profile.ok) return failure(profile.error);
+				if (!profile.ok) {
+					releaseAll(accepted);
+					return failure(profile.error);
+				}
 			}
 
 			const sessionFile = ctx.sessionManager.getSessionFile();
@@ -171,29 +208,49 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			const failures: { agent: string; error: string }[] = [];
 			const runnings: RunningSubagent[] = [];
 
-			for (const request of mode.requests) {
-				const result = await spawnOne(request, context);
-				if (result.ok) {
-					runnings.push(result.running);
-					spawned.push({
-						// `running.agent` is null only for a child that was never launched,
-						// which cannot reach here — fall back to the request anyway.
-						agent: result.running.agent ?? request.agent,
-						name: result.running.name,
-						paneId: result.running.paneId,
-						profile: result.running.profile,
-						warnings: result.warnings,
-					});
-				} else {
-					failures.push({ agent: request.agent, error: result.error });
+			try {
+				for (const request of accepted) {
+					const result = await spawnOne(request, context);
+					if (result.ok) {
+						runnings.push(result.running);
+						spawned.push({
+							// `running.agent` is null only for a child that was never launched,
+							// which cannot reach here — fall back to the request anyway.
+							agent: result.running.agent ?? request.agent,
+							name: result.running.name,
+							paneId: result.running.paneId,
+							profile: result.running.profile,
+							warnings: result.warnings,
+						});
+					} else {
+						failures.push({ agent: request.agent, error: result.error });
+					}
+				}
+			} finally {
+				// Only a running child keeps its Label. A refused Spawn frees the name at
+				// once, so the same request can be retried as it was written.
+				const started = new Set(runnings.map((running) => running.name));
+				for (const request of accepted) {
+					if (!started.has(request.name)) runningLabels.release(request.name);
 				}
 			}
 
-			if (runnings.length > 0) void watchBatch(runnings, { pi, watchers, isShuttingDown, columns });
+			if (runnings.length > 0) {
+				void watchBatch(runnings, {
+					pi,
+					watchers,
+					isShuttingDown,
+					columns,
+					// The Label is held for exactly as long as its child is running: a
+					// settled child — reported, failed, or gone — frees the name again.
+					releaseLabel: (label) => runningLabels.release(label),
+				});
+			}
 
 			const lines = [
 				...spawned.map((entry) => ackLine(entry)),
 				...failures.map((entry) => `failed ${entry.agent}: ${entry.error}`),
+				...skipped.map((label) => skipNotice(label)),
 				// Routing warnings are diagnostic text for the model — the choice
 				// fell back to `current` and the model should know why. `renderResult`
 				// stays as-is deliberately: it is the same parts with a theme, so
@@ -202,16 +259,28 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				...routeWarnings,
 			];
 
-			const note = runnings.length === 0 ? NOTE_NOTHING : NOTE_STARTED;
+			// A skip is an answer, not a failure: nothing was refused, the work the
+			// orchestrator asked for is already running under that label. Only a
+			// batch that started nothing and refused nothing is the plain nothing.
+			const note =
+				runnings.length > 0
+					? NOTE_STARTED
+					: failures.length === 0 && skipped.length > 0
+						? NOTE_ALL_SKIPPED
+						: NOTE_NOTHING;
+			// `skipped` is its own status so a caller can tell "already running"
+			// from a refusal without re-reading the text.
+			const status = runnings.length > 0 ? "started" : failures.length === 0 && skipped.length > 0 ? "skipped" : "error";
 
 			return {
 				content: [{ type: "text" as const, text: `${lines.join("\n")}\n\n${note}` }],
 				details: {
-					status: runnings.length > 0 ? "started" : "error",
+					status,
 					spawned,
 					failed: failures,
+					skipped,
 				},
-				isError: runnings.length === 0,
+				isError: runnings.length === 0 && skipped.length === 0,
 			};
 		},
 
@@ -227,7 +296,11 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			if (spawned.length === 0) {
 				const first = result.content[0];
 				const raw = first && first.type === "text" ? first.text : "(no output)";
-				return new Text(theme.fg("error", raw), 0, 0);
+				// A call that started nothing because every requested Label is already
+				// running is an answer, not a failure: the pane keeps that notice
+				// readable without colouring it as an error. A real refusal stays red.
+				const informational = (details?.skipped?.length ?? 0) > 0 && (details?.failed?.length ?? 0) === 0;
+				return new Text(theme.fg(informational ? "muted" : "error", raw), 0, 0);
 			}
 
 			const lines = [
@@ -235,6 +308,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				...(details?.failed ?? []).map((entry) =>
 					theme.fg("error", `failed ${entry.agent}: ${entry.error}`),
 				),
+				...(details?.skipped ?? []).map((label) => theme.fg("muted", skipNotice(label))),
 				...spawned.flatMap((entry) => entry.warnings.map((warning) => theme.fg("warning", warning))),
 				"",
 				theme.fg("muted", NOTE_STARTED),

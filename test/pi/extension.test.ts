@@ -500,6 +500,41 @@ test("failures and warnings keep their own colour under the spawns", () => {
 	assert.equal(lines[2], '<warning>agent "worker": unknown tool(s) bash</warning>');
 });
 
+test("a skipped label is shown as information, next to the subagents that did start", () => {
+	const lines = renderAck(
+		{
+			status: "started",
+			spawned: [
+				{
+					agent: "worker",
+					name: "beta",
+					paneId: "w1:p2",
+					profile: { name: "light", model: "m", thinking: "low" },
+					warnings: [],
+				},
+			],
+			failed: [],
+			skipped: ["alpha"],
+		},
+		"Worker (beta) [light] m (low)\nskipped alpha: a subagent with this label is already running.",
+	);
+
+	assert.match(lines[0] ?? "", /<accent>beta<\/accent>/);
+	assert.equal(lines[1], "<muted>skipped alpha: a subagent with this label is already running.</muted>");
+});
+
+test("an all-skipped acknowledgment is informational text, not an error", () => {
+	const content =
+		"skipped alpha: a subagent with this label is already running.\n\n" +
+		"Nothing was launched: every requested label is already running.";
+	const lines = renderAck({ status: "skipped", spawned: [], failed: [], skipped: ["alpha"] }, content);
+	const joined = lines.join("\n");
+
+	assert.ok(!joined.includes("<error>"), `an expected skip was painted as a failure: ${joined}`);
+	assert.match(joined, /<muted>/, "the skip notice carried no informational colour");
+	assert.match(joined, /skipped alpha: a subagent with this label is already running\./);
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // The session-start plugin offer
 // ────────────────────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import { test } from "node:test";
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type TinysubagentConfig } from "../../src/config/config.ts";
 import { LiveSubPanes } from "../../src/herdr/layout.ts";
+import { RunningLabels } from "../../src/children/running-labels.ts";
 import { buildParameters, buildToolDescription } from "../../src/present/describe.ts";
 import { createTool } from "../../src/pi/tool.ts";
 import { createRouteFn, type RouteFn, type RouteInput } from "../../src/systemone/route.ts";
@@ -74,6 +75,7 @@ const workerAgent: AgentDef = {
  */
 function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => RouteFn) {
 	let shuttingDown = false;
+	const watchers = new Set<AbortController>();
 	const tool = createTool({
 		pi: stubPi(),
 		config,
@@ -81,7 +83,8 @@ function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => R
 		advertisedAgents: [workerAgent],
 		capability: { ensureReady: async () => null },
 		columns: new LiveSubPanes(),
-		watchers: new Set(),
+		runningLabels: new RunningLabels(),
+		watchers,
 		isShuttingDown: () => shuttingDown,
 		route,
 	});
@@ -124,6 +127,10 @@ function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => R
 		notices,
 		stop: () => {
 			shuttingDown = true;
+		},
+		/** End every running child's wait, as a shutdown or a vanished pane would. */
+		settleAll: () => {
+			for (const controller of watchers) controller.abort();
 		},
 		cleanup: () => {
 			for (const [key, value] of saved) {
@@ -505,4 +512,294 @@ test("only classifierModel set keeps the profile list and parameter", () => {
 	assert.match(buildToolDescription([workerAgent], routed), /Profiles:/);
 	assert.match(buildToolDescription([workerAgent], routed), /choose automatically/);
 	assert.ok(JSON.stringify(buildParameters(routed)).includes('"profile"'));
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// A Label that is already running is never spawned twice
+// ────────────────────────────────────────────────────────────────────────────
+
+/** The child's report sidecar, read back off the generated launch script. */
+function reportFileFrom(script: string): string {
+	const match = script.match(/export PI_TINYSUBAGENT_REPORT='((?:[^']|'\\'')*)'/);
+	assert.ok(match, `no report path in the launch script:\n${script}`);
+	return (match[1] ?? "").replaceAll("'\\''", "'");
+}
+
+function isErrorFlag(result: unknown): boolean | undefined {
+	return (result as { isError?: boolean }).isError;
+}
+
+test("a later call reusing a running label is skipped and launches nothing", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			const first = await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
+			});
+			assert.match(contentText(first), /\(alpha\)/, "the first spawn never started");
+			assert.equal(writtenScripts(h.cwd).length, 1, "the first spawn wrote no launch script");
+
+			const second = await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "a duplicate job", name: "alpha" }],
+			});
+			const text = contentText(second);
+			assert.match(text, /alpha/, `the skip notice never named the running label: ${text}`);
+			assert.equal(writtenScripts(h.cwd).length, 1, "the duplicate request launched a second child");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a mixed batch skips only the duplicate and starts the rest", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
+			});
+			assert.equal(writtenScripts(h.cwd).length, 1, "the first spawn wrote no launch script");
+
+			const result = await executeTool(h.tool, h.ctx, {
+				tasks: [
+					{ agent: "worker", task: "a duplicate job", name: "alpha" },
+					{ agent: "worker", task: "a fresh job", name: "beta" },
+				],
+			});
+			const text = contentText(result);
+			assert.match(text, /skipped alpha/, `the skip notice never named the running label: ${text}`);
+			assert.match(text, /\(beta\)/, `the fresh request never started: ${text}`);
+			assert.equal(writtenScripts(h.cwd).length, 2, "the batch launched the wrong number of children");
+			assert.notEqual(isErrorFlag(result), true, "a partly skipped batch was reported as an error");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a call whose every label is already running is informational, not a tool error", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			await executeTool(h.tool, h.ctx, {
+				tasks: [
+					{ agent: "worker", task: "the first job", name: "alpha" },
+					{ agent: "worker", task: "the second job", name: "beta" },
+				],
+			});
+			assert.equal(writtenScripts(h.cwd).length, 2, "the first batch wrote the wrong number of scripts");
+
+			const result = await executeTool(h.tool, h.ctx, {
+				tasks: [
+					{ agent: "worker", task: "a duplicate job", name: "alpha" },
+					{ agent: "worker", task: "another duplicate job", name: "beta" },
+				],
+			});
+			const text = contentText(result);
+			assert.match(text, /skipped alpha/, `the notice never named the first running label: ${text}`);
+			assert.match(text, /skipped beta/, `the notice never named the second running label: ${text}`);
+			assert.equal(writtenScripts(h.cwd).length, 2, "an all-skipped call launched a child");
+			assert.notEqual(isErrorFlag(result), true, "an all-skipped call was reported as a tool error");
+			const details = (result as { details?: { status?: string } }).details;
+			assert.notEqual(details?.status, "error", "an all-skipped call carried the error status");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+/** The Briefs written to disk, read back off the artifact directory. */
+function writtenBriefs(cwd: string): string[] {
+	const dir = join(cwd, "sessions", "artifacts", "sid", "context");
+	return readdirSync(dir).map((file) => readFileSync(join(dir, file), "utf8"));
+}
+
+test("a skipped request is never routed and never gets a Brief", async () => {
+	const routed: string[] = [];
+	const route: RouteFn = async (input) => {
+		routed.push(input.task);
+		return { choice: "light" };
+	};
+	const h = harness(routingConfig(systemOneOn), () => route);
+	try {
+		await withSpawnHerdrStub(async () => {
+			await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
+			});
+			routed.length = 0;
+
+			await executeTool(h.tool, h.ctx, {
+				tasks: [
+					{ agent: "worker", task: "a duplicate brief", name: "alpha" },
+					{ agent: "worker", task: "a fresh brief", name: "beta" },
+				],
+			});
+
+			assert.deepEqual(routed, ["a fresh brief"], "the skipped request was routed");
+			const briefs = writtenBriefs(h.cwd);
+			assert.equal(briefs.length, 2, "the skipped request wrote a Brief");
+			assert.ok(!briefs.some((brief) => brief.includes("a duplicate brief")), "the skipped brief reached disk");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+/** Poll a check that only becomes true once a child's wait has settled. */
+async function until(check: () => Promise<boolean>, what: string, timeoutMs = 4_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (await check()) return;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	assert.fail(what);
+}
+
+/** Whether one more `alpha` spawn gets through; a skipped call writes nothing. */
+async function spawnsAlphaAgain(h: ReturnType<typeof harness>): Promise<boolean> {
+	const before = writtenScripts(h.cwd).length;
+	await executeTool(h.tool, h.ctx, {
+		tasks: [{ agent: "worker", task: "work after the label was released", name: "alpha" }],
+	});
+	return writtenScripts(h.cwd).length > before;
+}
+
+test("a label is free again once its subagent's wait ends", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
+			});
+			const blocked = await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "a duplicate job", name: "alpha" }],
+			});
+			assert.match(contentText(blocked), /skipped alpha/, "the label was not held while the child ran");
+
+			h.settleAll();
+			await until(() => spawnsAlphaAgain(h), "the label was still held after its subagent stopped");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a label is free again after its subagent reports", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
+			});
+			const script = writtenScripts(h.cwd)[0] ?? assert.fail("no launch script was written");
+			writeFileSync(reportFileFrom(script), JSON.stringify({ type: "done", result: "the first job is done" }));
+
+			await until(() => spawnsAlphaAgain(h), "the label was still held after its subagent reported");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a refused spawn gives its label back at once", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			const refused = await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "nope", task: "a role that does not exist", name: "alpha" }],
+			});
+			assert.equal(isErrorFlag(refused), true, "an unknown agent was not reported as a failure");
+
+			const retried = await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the real job", name: "alpha" }],
+			});
+			const text = contentText(retried);
+			assert.match(text, /\(alpha\)/, `the refused spawn kept its label: ${text}`);
+			assert.equal(writtenScripts(h.cwd).length, 1, "the retry launched the wrong number of children");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("labels match exactly and case-sensitively", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			const both = await executeTool(h.tool, h.ctx, {
+				tasks: [
+					{ agent: "worker", task: "the upper job", name: "Alpha" },
+					{ agent: "worker", task: "the lower job", name: "alpha" },
+				],
+			});
+			const text = contentText(both);
+			assert.doesNotMatch(text, /skipped/, `two distinct labels were treated as one: ${text}`);
+			assert.equal(writtenScripts(h.cwd).length, 2, "a batch with two distinct labels did not start both children");
+
+			const exact = await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the duplicate job", name: "alpha" }],
+			});
+			assert.match(contentText(exact), /skipped alpha/, "an exact reuse of a running label was not skipped");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("an omitted label is checked by the role-derived default", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			const first = await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the first job" }],
+			});
+			assert.match(contentText(first), /\(worker\)/, "the default label was not the role name");
+
+			const second = await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "a duplicate job" }],
+			});
+			assert.match(
+				contentText(second),
+				/skipped worker/,
+				"a default-labelled spawn was not checked against the running label",
+			);
+			assert.equal(writtenScripts(h.cwd).length, 1, "the default-labelled duplicate was launched");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("suffixing inside a batch still works around a running label", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async () => {
+			await executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
+			});
+
+			const result = await executeTool(h.tool, h.ctx, {
+				tasks: [
+					{ agent: "worker", task: "a duplicate job", name: "alpha" },
+					{ agent: "worker", task: "a suffixed job", name: "alpha" },
+				],
+			});
+			const text = contentText(result);
+			assert.match(text, /skipped alpha/, `the first request was not skipped: ${text}`);
+			assert.match(text, /\(alpha-2\)/, `the suffixed request never started: ${text}`);
+			assert.equal(writtenScripts(h.cwd).length, 2, "the batch launched the wrong number of children");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
 });

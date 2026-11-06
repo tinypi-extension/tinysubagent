@@ -27,6 +27,7 @@ import { discoverAgents } from "./src/config/agents.ts";
 import { loadConfig } from "./src/config/config.ts";
 import { isInsideHerdr } from "./src/herdr/cli.ts";
 import { LiveSubPanes } from "./src/herdr/layout.ts";
+import { RunningLabels } from "./src/children/running-labels.ts";
 import { buildParameters } from "./src/present/describe.ts";
 import { createCapabilityCheck } from "./src/pi/capability.ts";
 import { registerLifecycle } from "./src/pi/lifecycle.ts";
@@ -78,6 +79,14 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 	const columns = new LiveSubPanes();
 
 	/**
+	 * The Labels running subagents hold, one instance per registration. The tool
+	 * claims a Label before preparing a Spawn and the watcher gives it back when
+	 * that child's wait settles, so a Label is spoken for exactly as long as a
+	 * child by that name is running.
+	 */
+	const runningLabels = new RunningLabels();
+
+	/**
 	 * Warning keys this session has already reported. One set per registration is
 	 * the session scope, which is what keeps the registry-dependent floor
 	 * warnings from repeating on every acknowledgment; it is threaded through
@@ -105,6 +114,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 			advertisedAgents,
 			capability,
 			columns,
+			runningLabels,
 			watchers,
 			reportedWarnings,
 			isShuttingDown: () => shuttingDown,
