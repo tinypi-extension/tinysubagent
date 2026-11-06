@@ -22,6 +22,12 @@ export interface WatchBatchDeps {
 	isShuttingDown: () => boolean;
 	/** The sub panes this registration opened; a completed child is dropped here. */
 	columns: LiveSubPanes;
+	/**
+	 * Called once per child as its wait settles, whatever the outcome, so the
+	 * Label it held can be claimed again. Optional: a caller with nothing to
+	 * release simply omits it.
+	 */
+	releaseLabel?: (label: string) => void;
 }
 
 /** Send one steer message for a settled batch. Silent when shutting down or empty. */
@@ -55,6 +61,9 @@ export async function watchBatch(runnings: readonly RunningSubagent[], deps: Wat
 			const controller = controllers[index];
 			const outcome = await waitForSubagent(running, controller?.signal);
 			if (controller) watchers.delete(controller);
+			// The wait is over however it ended — reported, failed, cancelled, or
+			// aborted — so the Label this child held is free again.
+			deps.releaseLabel?.(running.name);
 
 			// The child's pi is gone by the time a completion lands, so this only
 			// reaps a pane that outlived it. A failure is left on screen instead,

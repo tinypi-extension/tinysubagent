@@ -26,11 +26,15 @@ export interface AckDetails {
 	error?: string;
 	spawned?: SpawnedEntry[];
 	failed?: { agent: string; error: string }[];
+	/** Labels skipped because a subagent already holds them. Informational. */
+	skipped?: string[];
 }
 
 export const NOTE_STARTED =
 	"Results arrive as a steer message when the subagents finish. Wait for that message — do nothing else: end your turn, and do not poll or start unrelated work.";
 export const NOTE_NOTHING = "Nothing was launched.";
+export const NOTE_ALL_SKIPPED =
+	"Nothing was launched: every requested label is already running. Wait for those subagents' results instead of starting new ones.";
 
 /** Thinking levels carry their own theme colours, so the level is readable at a glance. */
 export const THINKING_COLORS: Record<ThinkingLevel, ThemeColor> = {

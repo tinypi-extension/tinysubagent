@@ -51,6 +51,16 @@ export function ackParts(ack: SpawnAck): AckParts {
 	};
 }
 
+/**
+ * The notice for a request that was skipped because its Label is already
+ * running. Informational, not a failure: the work was refused only because a
+ * child by that Label is still going, so the orchestrator should wait for it
+ * rather than start a second one.
+ */
+export function skipNotice(name: string): string {
+	return `skipped ${name}: a subagent with this label is already running.`;
+}
+
 /** The plain line: what the model reads, with nothing to parse and no escapes. */
 export function ackLine(ack: SpawnAck): string {
 	const parts = ackParts(ack);
