@@ -8,7 +8,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 
 import { piHarness } from "./harness/index.ts";
@@ -115,5 +115,19 @@ export function writeLaunchFiles(files: LaunchFile[]): void {
 	for (const file of files) {
 		mkdirSync(path.dirname(file.path), { recursive: true });
 		writeFileSync(file.path, file.content, "utf8");
+	}
+}
+
+/** Write a report atomically without replacing one already delivered. */
+export function writeReportFile(filePath: string, content: string): void {
+	mkdirSync(path.dirname(filePath), { recursive: true });
+	const stagingPath = `${filePath}.${randomBytes(8).toString("hex")}.tmp`;
+	try {
+		writeFileSync(stagingPath, content, { encoding: "utf8", flag: "wx" });
+		// A hard link publishes the complete file atomically and fails if the
+		// report already exists, unlike rename which would replace it.
+		linkSync(stagingPath, filePath);
+	} finally {
+		rmSync(stagingPath, { force: true });
 	}
 }

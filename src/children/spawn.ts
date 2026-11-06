@@ -9,11 +9,9 @@
  * Nothing here waits for a child. Waiting is the watcher's job.
  */
 
-import { buildLaunchPaths, buildLaunchScript, buildTaskMarkdown, resolveLaunchPrefix, runId, writeLaunchFiles } from "./launch.ts";
+import { buildLaunchPaths, buildLaunchScript, buildTaskMarkdown, resolveLaunchPrefix, runId, writeLaunchFiles, writeReportFile } from "./launch.ts";
 import { harnessFor } from "./harness/index.ts";
 import { agyBinAvailable } from "./harness/agy.ts";
-import { mkdirSync, writeFileSync } from "node:fs";
-import * as path from "node:path";
 import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "../herdr/cli.ts";
@@ -48,9 +46,8 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		const paths = buildLaunchPaths({ sessionDir: context.sessionDir, sessionId: context.sessionId, agentDir: context.agentDir, cwd: context.cwd, name: request.name, id: runId() });
 		writeLaunchFiles([{ path: paths.taskFile, content: buildTaskMarkdown({ body: agent.body, task: request.task, harness: profile.harness }) }]);
 		try {
-			mkdirSync(path.dirname(paths.reportFile), { recursive: true });
-			writeFileSync(paths.reportFile, JSON.stringify({ type: "failed", reason: "error", message: `agy executable not found: ${binary}` }), { flag: "wx" });
-		} catch { /* Preserve an existing report; the direct tool error remains sufficient. */ }
+			writeReportFile(paths.reportFile, JSON.stringify({ type: "failed", reason: "error", message: `agy executable not found: ${binary}` }));
+		} catch { /* Report persistence is best-effort; the direct tool error remains sufficient. */ }
 		return { ok: false, error: `agy executable not found: ${binary}` };
 	}
 	const warnings: string[] = [];

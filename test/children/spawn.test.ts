@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,6 +8,7 @@ import { PLUGIN_ENTRYPOINT, PLUGIN_ID, type Rect, type TabLayout } from "../../s
 import { LiveSubPanes, planResizes } from "../../src/herdr/layout.ts";
 import { MAX_PARALLEL_TASKS, collectRequests, resolveCwd, uniqueName } from "../../src/children/requests.ts";
 import { spawnOne } from "../../src/children/spawn.ts";
+import { piHarness } from "../../src/children/harness/index.ts";
 import type { SpawnContext, ToolParams } from "../../src/children/contract.ts";
 import { REPORT_TOOL_NAME, TOOL_NAME, type AgentDef } from "../../src/types.ts";
 
@@ -182,6 +183,33 @@ test("an agy profile with a missing executable fails before opening a pane and w
 		assert.deepEqual(JSON.parse(contents), { type: "failed", reason: "error", message: "agy executable not found: agy" });
 		assert.equal(existsSync(join(dir, "artifacts", "sid", "subagent-scripts")), false, "pane launch files should not be created");
 	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a failure-report write error does not replace the agy-unavailable result", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-agy-report-error-"));
+	const originalSessionFileFor = piHarness.sessionFileFor;
+	try {
+		const reportPath = join(dir, "report");
+		mkdirSync(`${reportPath}.done`);
+		piHarness.sessionFileFor = () => reportPath;
+
+		const base = context([{ ...worker, tools: undefined }]);
+		const result = await spawnOne(
+			{ agent: "worker", task: "x", name: "worker", profile: "gemini" },
+			{
+				...base,
+				cwd: dir,
+				agentDir: dir,
+				sessionDir: dir,
+				env: { PATH: "" },
+				config: { ...base.config, enableProfiles: true, profiles: { gemini: { harness: "agy", model: "gpt-oss-120b" } } },
+			},
+		);
+		assert.deepEqual(result, { ok: false, error: "agy executable not found: agy" });
+	} finally {
+		piHarness.sessionFileFor = originalSessionFileFor;
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("an agy profile ignores role tools with a warning and proceeds", async () => {

@@ -5,7 +5,7 @@
  */
 export {
 	runId, safeName, timestampForArtifacts, timestampForSession, childSessionDirFor,
-	buildLaunchPaths, writeLaunchFiles,
+	buildLaunchPaths, writeLaunchFiles, writeReportFile,
 	type LaunchPaths, type LaunchPathsInput, type LaunchFile,
 } from "./launch-paths.ts";
 export {

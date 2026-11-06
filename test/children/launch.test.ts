@@ -15,8 +15,23 @@ import {
 	resolvePiBin,
 	safeName,
 	shellEscape,
+	writeReportFile,
 } from "../../src/children/launch.ts";
 import { REPORT_TOOL_NAME } from "../../src/types.ts";
+
+test("failure reports create their parent directory and preserve an existing report", () => {
+	const dir = mkdtempSync(path.join(tmpdir(), "tinysubagent-report-write-"));
+	try {
+		const report = path.join(dir, "nested", "child.done");
+		writeReportFile(report, '{"type":"failed"}');
+		assert.equal(readFileSync(report, "utf8"), '{"type":"failed"}');
+
+		assert.throws(() => writeReportFile(report, '{"type":"done"}'), { code: "EEXIST" });
+		assert.equal(readFileSync(report, "utf8"), '{"type":"failed"}');
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 test("shell escaping keeps a string as one word", () => {
 	// Always quoted: an unquoted `plain` would still be correct, but quoting
