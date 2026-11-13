@@ -24,3 +24,23 @@ The relay trigger lives in the batch watcher, as the spec's Implementation Decis
 Tests at the tool seam assert the exact herdr argv: one `send-keys … esc` per live child, none for a dropped pane, no `pane close`, silent failure, second Esc as a no-op, and the mid-spawn case. The relay module's own tests are in `test/children/interrupt.test.ts`.
 
 Commits `7e794b6` then the spec-alignment rework `e65d46e`; merges `f79a8f4`, `491b91e`.
+
+## Comments
+
+### 2026-11-13
+
+The operator reversed the leave-open rule after this ticket was resolved, so the relay now closes as
+well as stops.
+
+Superseded: the acceptance line "No `pane close` and no process kill happens anywhere on this path",
+and the same claim inside the test line that asserts the herdr commands received ("no `pane close`"),
+together with the "Nothing is closed, nothing is killed" half of the `What to build` paragraph and
+the "No `pane close` and no kill exists on the path" sentence in the `## Answer`. Those stay as the
+record of what was first decided.
+
+What holds instead: one Esc is still relayed into every live sub pane this registration holds, idle
+children included, and the call still returns immediately without awaiting a relay; the panes of the
+children whose wait ends this way are then closed. So a `pane close` is now expected on this path,
+and no process is killed — the close is what ends the child. The escalation refusal stands: a second
+Esc, or an Esc after the abort, is still a no-op and closes nothing further. Silent, best-effort
+delivery, the mid-spawn abort, and the untouched Label lifecycle are unchanged.

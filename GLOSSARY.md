@@ -63,7 +63,7 @@ A settle with no report. The child is reminded to report, up to a fixed budget; 
 _Avoid_: silent completion, implicit done
 
 **Interrupt**:
-An operator stopping the child's current turn without ending the child, so it can be redirected. Also not an ending. It reaches the whole batch: an interrupt in the orchestrator's pane is relayed to every live child, so the operator stops the work from where they are instead of visiting each pane.
+An operator stopping the whole batch rather than one child: an interrupt in the orchestrator's pane is relayed to every live child, each turn stops where it is, and every pane stopped that way is then closed, so the operator stops the work from where they are instead of visiting each pane. Nothing is salvaged from a stopped turn.
 _Avoid_: cancel, abort, kill (to cancel is to lose the pane)
 
 **Outcome**:
@@ -71,11 +71,11 @@ What finally ended a wait: completed, failed, cancelled, or interrupted — plus
 _Avoid_: status, state, verdict (a verdict is the internal reading that produces an outcome)
 
 **Cancelled**:
-A wait ended because the pane disappeared without leaving any signal — no report, no exit code. It is the one outcome that says the pane is gone, and the one that says nothing about the work.
+A wait ended because the pane disappeared without leaving any signal — no report, no exit code. It is the one outcome that says the pane went unexpectedly — never that the extension closed it, which is what an interrupt does on purpose — and the one that says nothing about the work.
 _Avoid_: interrupted, aborted, stopped
 
 **Interrupted**:
-A wait ended before the batch settled — by the operator's interrupt, in the sense above, or by the session ending under the wait; nothing in the result tells the two apart. It is an outcome of its own, not a kind of cancelled: it says nothing about the pane except that nothing here closed it, and the child's work is left where it stood. Nothing is salvaged from it, so it carries no summary.
+A wait ended by that interrupt: the child's turn stopped where it was, its pane was then closed, and it carries no summary, so half a report is never read as a report. A session shutting down under a wait ends the wait the same way but leaves the pane open, and the outcome says which of the two happened rather than leaving it to be guessed.
 _Avoid_: cancelled, stopped, killed
 
 **Refusal**:

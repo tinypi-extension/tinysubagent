@@ -21,3 +21,24 @@ Stop detection was extracted to `scripts/pane-state.ts` (`runningTurn`, `atPromp
 The live smoke was not run here (it needs real herdr panes and would abort the harness's own turn); Phases A and B are unchanged in intent and every script is standalone-typechecked under the project flags.
 
 Commit `568ab39`, merged by `5a61f12`.
+
+## Comments
+
+### 2026-11-13
+
+The operator reversed the leave-open rule after this ticket was resolved: an interrupt closes the
+panes it stopped.
+
+Superseded: the acceptance line "Every child stays alive at its prompt and every pane remains open; no
+pane is closed", and the stopped-turn proof as this ticket framed it — the proof that read a child's
+pane to see the turn had stopped, in both the `What to build` paragraph ("every child pane shows a
+stopped turn with the child still at its prompt") and the failing-loudly line "if a child is left
+running a turn, if a pane closed". The `## Answer`'s Phase C description is superseded for the same
+reason.
+
+What holds instead: the smoke interrupts from the orchestrator's pane and still asserts interrupted
+rows with no summaries and no error status, but the stopped turn is now proven from the returned rows
+rather than from a surviving pane, and the phase fails loudly if a pane did *not* close — a pane still
+open after an interrupt is the regression. Reading a child's pane after the interrupt is no longer
+possible, so no check may depend on it. The rest of the phase stands: launched panes are still counted,
+the 30s return bound still applies, and the existing phases still have to pass.
