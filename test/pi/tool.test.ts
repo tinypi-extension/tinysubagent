@@ -128,12 +128,13 @@ function harness(
 		ctx,
 		notices,
 		stop: () => {
-			// A shutdown ends the blocking waits; the panes are left open.
-			for (const controller of watchers) controller.abort();
+			// A shutdown ends the blocking waits and leaves the panes open, exactly as
+			// `session_shutdown` does, reason included.
+			for (const controller of watchers) controller.abort("shutdown");
 		},
 		/** End every running child's wait, as a shutdown or a vanished pane would. */
 		settleAll: () => {
-			for (const controller of watchers) controller.abort();
+			for (const controller of watchers) controller.abort("shutdown");
 		},
 		/** How many waits are registered, so a test can settle once they exist. */
 		watching: () => watchers.size,
@@ -1042,7 +1043,7 @@ test("a failed child is content, not a tool error", async () => {
 	}
 });
 
-test("aborting the call interrupts the batch and leaves the pane open", async () => {
+test("aborting the call interrupts the batch and closes the pane", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async (calls) => {
@@ -1061,17 +1062,20 @@ test("aborting the call interrupts the batch and leaves the pane open", async ()
 			const text = contentText(result);
 			assert.match(
 				text,
-				/## alpha — interrupted \(pane left open\)/,
+				/## alpha — interrupted \(pane closed\)/,
 				`the aborted child was not reported as interrupted: ${text}`,
 			);
 			assert.equal(text.includes("cancelled"), false, `an interrupted child was reported as cancelled: ${text}`);
 			assert.notEqual(isErrorFlag(result), true, "interrupting a call was reported as a tool error");
-			// Give a stray close the chance to happen before asserting it never did.
-			await new Promise((resolve) => setTimeout(resolve, 100));
-			assert.ok(
-				!calls().some((line) => line.startsWith("pane close")),
-				"aborting the call closed the child's pane",
-			);
+			// The row still names the pane it came from, even though that pane is gone.
+			const row = (result as { details?: { results?: { paneId?: string; cause?: string }[] } }).details
+				?.results?.[0];
+			assert.equal(row?.paneId, "w1:p1Z", "the interrupted row lost the pane it came from");
+			assert.equal(row?.cause, "interrupt", `the row did not carry the interrupt as its cause: ${String(row?.cause)}`);
+			// The relay closes the pane it just interrupted, once, without escalating.
+			await until(async () => closeCalls(calls()).length >= 1, "the interrupted child's pane was left open");
+			await quiet(calls);
+			assert.deepEqual(closeCalls(calls()), ["pane close w1:p1Z"]);
 			assert.equal(writtenScripts(h.cwd).length, 1, "the aborted call launched another child");
 		});
 	} finally {
@@ -1175,12 +1179,17 @@ test("a spawn that throws after opening a pane degrades to a partial batch", asy
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// An interrupt relays Esc into every live child pane
+// An interrupt relays Esc into every live child pane, then closes it
 // ────────────────────────────────────────────────────────────────────────────
 
 /** The `pane send-keys` commands the tool issued, in order. */
 function sendKeyCalls(calls: readonly string[]): string[] {
 	return calls.filter((line) => line.startsWith("pane send-keys"));
+}
+
+/** The `pane close` commands the tool issued, in order. */
+function closeCalls(calls: readonly string[]): string[] {
+	return calls.filter((line) => line.startsWith("pane close"));
 }
 
 /**
@@ -1214,16 +1223,14 @@ test("aborting a waiting call relays exactly one Esc into its child's pane", asy
 			await waitLaunched(h.cwd, 1);
 
 			controller.abort();
-			assert.match(contentText(await pending), /alpha — interrupted \(pane left open\)/);
+			assert.match(contentText(await pending), /alpha — interrupted \(pane closed\)/);
 
 			// The relay is issued without await, so poll for it rather than racing it.
 			await until(async () => sendKeyCalls(calls()).length >= 1, "the interrupt never reached the child's pane");
 			await quiet(calls);
 			assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
-			assert.ok(
-				!calls().some((line) => line.startsWith("pane close")),
-				"the relay closed a pane instead of only interrupting it",
-			);
+			// Every id the Esc went into is closed behind it, once.
+			assert.deepEqual(closeCalls(calls()), ["pane close w1:p1Z"]);
 		});
 	} finally {
 		h.stop();
@@ -1231,7 +1238,7 @@ test("aborting a waiting call relays exactly one Esc into its child's pane", asy
 	}
 });
 
-test("an abort relays into every live child pane, including an earlier call's", async () => {
+test("an abort closes every live child pane, including an earlier call's", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async (calls) => {
@@ -1261,10 +1268,9 @@ test("an abort relays into every live child pane, including an earlier call's", 
 				"pane send-keys w1:p1Z esc",
 				"pane send-keys w1:p2Z esc",
 			]);
-			assert.ok(
-				!calls().some((line) => line.startsWith("pane close")),
-				"the relay closed a pane instead of only interrupting it",
-			);
+			// The earlier call's child was interrupted too, so its pane is closed by the
+			// same relay — not left alive with nothing driving it.
+			assert.deepEqual(closeCalls(calls()).sort(), ["pane close w1:p1Z", "pane close w1:p2Z"]);
 
 			h.settleAll();
 			await earlier;
@@ -1275,7 +1281,7 @@ test("an abort relays into every live child pane, including an earlier call's", 
 	}
 });
 
-test("a pane dropped from the tracker is not relayed to", async () => {
+test("a pane dropped from the tracker is neither relayed to nor closed", async () => {
 	const columns = new LiveSubPanes();
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }), { columns });
 	try {
@@ -1301,6 +1307,8 @@ test("a pane dropped from the tracker is not relayed to", async () => {
 			await until(async () => sendKeyCalls(calls()).length >= 1, "the live child was never relayed to");
 			await quiet(calls);
 			assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
+			// A pane this registration already forgot is not ours to close either.
+			assert.deepEqual(closeCalls(calls()), ["pane close w1:p1Z"]);
 		});
 	} finally {
 		h.stop();
@@ -1337,6 +1345,8 @@ test("a relay that fails is silent and does not stop the rest of the fan-out", a
 					"pane send-keys w1:p1Z esc",
 					"pane send-keys w1:p2Z esc",
 				]);
+				// A failed Esc does not stop the close: both interrupted panes are closed.
+				assert.deepEqual(closeCalls(calls()).sort(), ["pane close w1:p1Z", "pane close w1:p2Z"]);
 
 				const text = contentText(result);
 				assert.match(text, /alpha — interrupted/, "the failed relay changed the result");
@@ -1353,7 +1363,7 @@ test("a relay that fails is silent and does not stop the rest of the fan-out", a
 	}
 });
 
-test("a second Esc is a no-op and never escalates to closing the pane", async () => {
+test("a second Esc is a no-op: no second relay and no second close", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async (calls) => {
@@ -1375,10 +1385,8 @@ test("a second Esc is a no-op and never escalates to closing the pane", async ()
 			await quiet(calls);
 
 			assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
-			assert.ok(
-				!calls().some((line) => line.startsWith("pane close")),
-				"the second Esc escalated to closing the pane",
-			);
+			// One interrupt, one close: the second Esc adds nothing, and nothing re-closes.
+			assert.deepEqual(closeCalls(calls()), ["pane close w1:p1Z"]);
 		});
 	} finally {
 		h.stop();
@@ -1417,6 +1425,7 @@ test("an abort mid-spawn leaves the remaining requests unlaunched and their labe
 				await until(async () => sendKeyCalls(calls()).length >= 1, "the child that opened during the abort got no Esc");
 				await quiet(calls);
 				assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
+				assert.deepEqual(closeCalls(calls()), ["pane close w1:p1Z"]);
 				assert.match(contentText(result), /alpha — interrupted/);
 
 				// The unlaunched request's Label is free: a later call can reserve it.

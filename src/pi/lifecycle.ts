@@ -7,7 +7,9 @@
  *
  * Shutdown aborts every running watcher, which is also what ends a blocking tool
  * call: the call returns its batch as `interrupted` rather than outliving the
- * session that asked for it. The children's panes are left open.
+ * session that asked for it. The abort carries `"shutdown"` as its reason, so
+ * those waits are reported as interrupted-with-the-pane-left-open: nothing was
+ * relayed to the children and nothing is closed on the way out.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -35,7 +37,9 @@ export function registerLifecycle(pi: ExtensionAPI, deps: LifecycleDeps): void {
 	});
 
 	pi.on("session_shutdown", () => {
-		for (const watcher of deps.watchers) watcher.abort();
+		// The reason is what tells a shutdown apart from the operator's interrupt: the
+		// wait ends as `interrupted` either way, but only an interrupt closes panes.
+		for (const watcher of deps.watchers) watcher.abort("shutdown");
 		deps.watchers.clear();
 	});
 }

@@ -403,8 +403,9 @@ test("aborting resolves the wait as interrupted, not as a cancellation", async (
 		controller.abort();
 		const outcome = await pending;
 		// The human's own turn ending is not the pane going away: `cancelled` is
-		// reserved for a pane that vanished, and an interrupt says so instead.
-		assert.deepEqual(outcome, { kind: "interrupted" });
+		// reserved for a pane that vanished, and an interrupt says so instead — with
+		// the operator's own interrupt as the cause.
+		assert.deepEqual(outcome, { kind: "interrupted", cause: "interrupt" });
 	} finally {
 		s.cleanup();
 	}
@@ -416,7 +417,7 @@ test("an already-aborted signal resolves immediately as interrupted", async () =
 		const controller = new AbortController();
 		controller.abort();
 		const outcome = await waitForSubagent(s.running, controller.signal, s.deps);
-		assert.deepEqual(outcome, { kind: "interrupted" });
+		assert.deepEqual(outcome, { kind: "interrupted", cause: "interrupt" });
 	} finally {
 		s.cleanup();
 	}
@@ -432,8 +433,24 @@ test("an interrupted child carries no summary, even with partial assistant text"
 		// The session really does hold assistant text, but a turn stopped by an
 		// interrupt never handed anything back: scraping the partial turn would pass
 		// half a thought off as the child's report.
-		assert.deepEqual(outcome, { kind: "interrupted" });
+		assert.deepEqual(outcome, { kind: "interrupted", cause: "interrupt" });
 		assert.equal("summary" in outcome, false, "an interrupted child grew a summary");
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a shutdown abort is the same ending with the shutdown as its cause", async () => {
+	const s = scenario({ session: "half an answer, cut off mid-" });
+	try {
+		const controller = new AbortController();
+		const pending = waitForSubagent(s.running, controller.signal, s.deps);
+		// What `session_shutdown` does: the wait ends, the panes are left open, and the
+		// result has to say which of the two interrupts ended it.
+		controller.abort("shutdown");
+		const outcome = await pending;
+		assert.deepEqual(outcome, { kind: "interrupted", cause: "shutdown" });
+		assert.equal("summary" in outcome, false, "a shutdown-interrupted child grew a summary");
 	} finally {
 		s.cleanup();
 	}
