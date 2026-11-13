@@ -63,12 +63,20 @@ A settle with no report. The child is reminded to report, up to a fixed budget; 
 _Avoid_: silent completion, implicit done
 
 **Interrupt**:
-An operator stopping the child's current turn without ending the child, so it can be redirected. Also not an ending.
+An operator stopping the child's current turn without ending the child, so it can be redirected. Also not an ending. It reaches the whole batch: an interrupt in the orchestrator's pane is relayed to every live child, so the operator stops the work from where they are instead of visiting each pane.
 _Avoid_: cancel, abort, kill (to cancel is to lose the pane)
 
 **Outcome**:
-What finally ended a wait: completed, failed, or cancelled — plus how that was learned (a result report, an exit code, a legacy `failed` payload, or a vanished pane).
+What finally ended a wait: completed, failed, cancelled, or interrupted — plus how that was learned (a result report, an exit code, a legacy `failed` payload, or a vanished pane).
 _Avoid_: status, state, verdict (a verdict is the internal reading that produces an outcome)
+
+**Cancelled**:
+A wait ended because the pane disappeared without leaving any signal — no report, no exit code. It is the one outcome that says the pane is gone, and the one that says nothing about the work.
+_Avoid_: interrupted, aborted, stopped
+
+**Interrupted**:
+A wait ended by the operator's interrupt, in the sense above. It is an outcome of its own, not a kind of cancelled: it says nothing about the pane except that the pane is still there, holding a child that stopped its turn. Nothing is salvaged from the stopped turn, so it carries no summary.
+_Avoid_: cancelled, stopped, killed
 
 **Refusal**:
 pi declining to run the prompt at all — no usable model or credentials. Nothing is reported and the child stays at its prompt, so a human can log in and drive it on. The wait ends on it only as a never-started failure, after the grace.
