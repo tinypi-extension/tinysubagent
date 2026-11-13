@@ -573,12 +573,16 @@ test("a batch of two announces both children, one line each", async () => {
 	const h = harness(config, () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(() =>
-			executeSettled(h, {
-				tasks: [
-					{ agent: "worker", task: "one job", name: "first" },
-					{ agent: "worker", task: "another job", name: "second" },
-				],
-			}),
+			executeSettled(
+				h,
+				{
+					tasks: [
+						{ agent: "worker", task: "one job", name: "first" },
+						{ agent: "worker", task: "another job", name: "second" },
+					],
+				},
+				{ count: 2 },
+			),
 		);
 		assert.deepEqual(h.notices, [{
 			message: [
@@ -710,7 +714,7 @@ async function executeSettled(
 ): Promise<unknown> {
 	const pending = executeTool(h.tool, h.ctx, params);
 	// Wait for the launch BEFORE settling: a report written while the call is still
-	// reserving labels would release them mid-batch and make the skip tests racy.
+	// opening panes would settle a child mid-batch and change what it returns.
 	await settleSpawned(h.cwd, options.count ?? 1, options.text);
 	return pending;
 }
@@ -778,16 +782,19 @@ test("a refused spawn remains reported", async () => {
 				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
 			});
 			await waitLaunched(h.cwd, 1);
-			const result = await executeTool(h.tool, h.ctx, {
-				tasks: [
-					{ agent: "worker", task: "another alpha job", name: "alpha" },
-					{ agent: "missing-role", task: "refused", name: "beta" },
-				],
-			});
+			const result = await executeSettled(
+				h,
+				{
+					tasks: [
+						{ agent: "worker", task: "another alpha job", name: "alpha" },
+						{ agent: "missing-role", task: "refused", name: "beta" },
+					],
+				},
+				{ count: 2 },
+			);
 			assert.match(contentText(result), /failed missing-role/);
-			assert.equal(isErrorFlag(result), true, "the refused spawn was not reported as an error");
+			assert.notEqual(isErrorFlag(result), true, "a batch that launched a child was reported as a tool error");
 
-			await settleSpawned(h.cwd, 1);
 			await first;
 		});
 	} finally {
@@ -808,16 +815,19 @@ test("a call with names matching running subagents still launches them", async (
 			});
 			await waitLaunched(h.cwd, 2);
 
-			const result = await executeTool(h.tool, h.ctx, {
-				tasks: [
-					{ agent: "worker", task: "another alpha job", name: "alpha" },
-					{ agent: "worker", task: "another beta job", name: "beta" },
-				],
-			});
+			const result = await executeSettled(
+				h,
+				{
+					tasks: [
+						{ agent: "worker", task: "another alpha job", name: "alpha" },
+						{ agent: "worker", task: "another beta job", name: "beta" },
+					],
+				},
+				{ count: 4 },
+			);
 			assert.equal(writtenScripts(h.cwd).length, 4, "the batch launched the wrong number of children");
 			assert.notEqual(isErrorFlag(result), true, "the same-name batch was reported as an error");
 
-			await settleSpawned(h.cwd, 4);
 			await first;
 		});
 	} finally {
@@ -1466,7 +1476,7 @@ test("an abort mid-spawn leaves the remaining requests unlaunched and their labe
 				assert.deepEqual(closeCalls(calls()), ["pane close w1:p1Z"]);
 				assert.match(contentText(result), /alpha — interrupted/);
 
-				// The unlaunched request's Label is free: a later call can reserve it.
+				// Nothing reserved the unlaunched request's name: a later call can use it.
 				const retry = await executeSettled(
 					h,
 					{ tasks: [{ agent: "worker", task: "the retried job", name: "beta" }] },

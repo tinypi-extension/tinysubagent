@@ -24,13 +24,11 @@ export interface SpawnedEntry {
 
 /** Every part of a call's outcome the TUI renders: spawn lines or a finished report. */
 export interface AckDetails {
-	/** `started`, `finished`, `skipped`, or `error`. */
+	/** `started`, `finished`, or `error`. */
 	status?: string;
 	error?: string;
 	spawned?: SpawnedEntry[];
 	failed?: { agent: string; error: string }[];
-	/** Labels skipped because a subagent already holds them. Informational. */
-	skipped?: string[];
 	/** Role warnings and routing warnings, in the order the model reads them. */
 	warnings?: string[];
 	/** A finished batch's results, so the report can be drawn with colour. */
@@ -38,8 +36,6 @@ export interface AckDetails {
 }
 
 export const NOTE_NOTHING = "Nothing was launched.";
-export const NOTE_ALL_SKIPPED =
-	"Nothing was launched: every requested label is already running. Those children's reports come back in the result of the call that started them — nothing is delivered here, and nothing arrives later.";
 
 /** Thinking levels carry their own theme colours, so the level is readable at a glance. */
 export const THINKING_COLORS: Record<ThinkingLevel, ThemeColor> = {

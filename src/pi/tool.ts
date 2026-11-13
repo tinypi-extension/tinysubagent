@@ -182,7 +182,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// by the loop below exactly as before, with no brief sent for a spawn
 			// that will not happen.
 			const routeWarnings: string[] = [];
-			// Labels whose profile the caller left open: if one carries a profile after
+			// Requests whose profile the caller left open: if one carries a profile after
 			// routing, routing is what put it there, and the notice should say so.
 			const unrouted = new Set(
 				accepted.filter((request) => !request.profile?.trim()).map((request) => request.name),
@@ -245,16 +245,16 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			const runnings: RunningSubagent[] = [];
 
 			for (const request of accepted) {
-					// An interrupt stops the rest of the batch from launching: the `finally`
-					// below releases the Labels of the requests that never did, while the
-					// children that started keep theirs. The Esc into the panes that do exist
-					// is the watcher's, once this loop is done.
+					// An interrupt stops the rest of the batch from launching: the requests that
+					// never started are never attempted, while the children that did start are
+					// settled below. The Esc into the panes that do exist is the watcher's,
+					// once this loop is done.
 					if (signal?.aborted) break;
 					// A throw is a spawn refusal like any other, and this loop is the seam
 					// that keeps one from taking the batch with it: `spawnOne` can fail after
 					// a pane is already open, and letting that escape `execute` would strand
-					// the children that did start — their Labels held, their panes open, and
-					// no watcher to end their wait.
+					// the children that did start — their panes open, and no watcher to end
+					// their wait.
 					try {
 						const result = await spawnOne(request, context);
 						if (result.ok) {

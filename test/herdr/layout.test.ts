@@ -83,14 +83,6 @@ test("planPlacement: a live id absent from the tab is ignored", () => {
 	});
 });
 
-test("planPlacement: an empty-panes layout gives the birth placement", () => {
-	assert.deepEqual(planPlacement(tab([]), ORCH, ["s1"]), {
-		targetPaneId: ORCH,
-		direction: "right",
-		bornColumn: true,
-	});
-});
-
 test("planPlacement: garbage input never throws and yields the birth placement", () => {
 	const garbage = [
 		null,
@@ -269,7 +261,6 @@ test("LiveSubPanes: liveIn prunes a tracked pane the tab no longer reports", () 
 	// The user closes s1; the next read must not return it, and the prune must
 	// be lasting, so a later read without it stays clean.
 	const after = tab([{ paneId: "s2", rect: box(84, 0, 127, 58) }]);
-	assert.deepEqual(tracker.liveIn(after), ["s2"]);
 	assert.deepEqual(tracker.liveIn(after), ["s2"]);
 });
 

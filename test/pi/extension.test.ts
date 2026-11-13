@@ -19,7 +19,6 @@ import { loadConfig } from "../../src/config/config.ts";
 import { PLUGIN_ID, type TabLayout } from "../../src/herdr/cli.ts";
 import { LiveSubPanes } from "../../src/herdr/layout.ts";
 import { MAX_PARALLEL_TASKS } from "../../src/children/requests.ts";
-import { NOTE_ALL_SKIPPED } from "../../src/present/ack-render.ts";
 import { TOOL_NAME } from "../../src/types.ts";
 
 interface Registered {
@@ -510,41 +509,6 @@ test("failures and warnings keep their own colour under the spawns", () => {
 	assert.equal(lines[2], '<warning>agent "worker": unknown tool(s) bash</warning>');
 });
 
-test("a skipped label is shown as information, next to the subagents that did start", () => {
-	const lines = renderAck(
-		{
-			status: "started",
-			spawned: [
-				{
-					agent: "worker",
-					name: "beta",
-					paneId: "w1:p2",
-					profile: { name: "light", model: "m", thinking: "low" },
-					warnings: [],
-				},
-			],
-			failed: [],
-			skipped: ["alpha"],
-		},
-		"Worker (beta) [light] m (low)\nskipped alpha: a subagent with this label is already running.",
-	);
-
-	assert.match(lines[0] ?? "", /<accent>beta<\/accent>/);
-	assert.equal(lines[1], "<muted>skipped alpha: a subagent with this label is already running.</muted>");
-});
-
-test("an all-skipped acknowledgment is informational text, not an error", () => {
-	const content =
-		"skipped alpha: a subagent with this label is already running.\n\n" +
-		"Nothing was launched: every requested label is already running.";
-	const lines = renderAck({ status: "skipped", spawned: [], failed: [], skipped: ["alpha"] }, content);
-	const joined = lines.join("\n");
-
-	assert.ok(!joined.includes("<error>"), `an expected skip was painted as a failure: ${joined}`);
-	assert.match(joined, /<muted>/, "the skip notice carried no informational colour");
-	assert.match(joined, /skipped alpha: a subagent with this label is already running\./);
-});
-
 test("an interrupted child is drawn as interrupted, with the pane the interrupt closed", () => {
 	const lines = renderAck(
 		{
@@ -613,14 +577,6 @@ test("a shutdown under the wait is drawn as interrupted with the pane left open"
 	assert.match(plain, /interrupted \(pane left open\)/, `the shutdown was not named: ${plain}`);
 	assert.match(plain, /pane was left open/, `the open pane was not mentioned: ${plain}`);
 	assert.doesNotMatch(plain, /pane was closed|pane closed/, `a shutdown claimed a closed pane: ${plain}`);
-});
-
-test("the all-skipped note does not promise a later delivery", () => {
-	// Nothing is delivered after a call returns any more: the note has to say the
-	// reports are in the other call's result, not that they will arrive.
-	assert.match(NOTE_ALL_SKIPPED, /result of the call that started them/);
-	assert.match(NOTE_ALL_SKIPPED, /nothing arrives later/);
-	assert.doesNotMatch(NOTE_ALL_SKIPPED, /arrive when/);
 });
 
 // ────────────────────────────────────────────────────────────────────────────

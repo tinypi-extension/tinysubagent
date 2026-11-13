@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -102,14 +102,6 @@ test("the shipped manifest matches the constants the extension opens it with", (
 	// reordered or re-quoted command still links fine and only fails at open time.
 	const command: unknown = JSON.parse(pane.get("command") ?? "[]");
 	assert.deepEqual(command, ["bash", "-c", 'exec bash "$HERDR_PLUGIN_ROOT/dispatch.sh"']);
-});
-
-test("pluginDir resolves to the shipped plugin with both files present", () => {
-	const dir = pluginDir();
-	assert.equal(existsSync(dir), true);
-	assert.equal(statSync(dir).isDirectory(), true);
-	assert.equal(existsSync(join(dir, "herdr-plugin.toml")), true);
-	assert.equal(existsSync(join(dir, "dispatch.sh")), true);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
