@@ -64,7 +64,7 @@ _Avoid_: silent completion, implicit done
 
 **Interrupt**:
 An operator stopping the whole batch rather than one child: an interrupt in the orchestrator's pane is relayed to every live child, each turn stops where it is, and every pane stopped that way is then closed, so the operator stops the work from where they are instead of visiting each pane. Nothing is salvaged from a stopped turn.
-_Avoid_: cancel, abort, kill (to cancel is to lose the pane)
+_Avoid_: cancel, abort, stop (an interrupt closes the pane it stopped)
 
 **Outcome**:
 What finally ended a wait: completed, failed, cancelled, or interrupted — plus how that was learned (a result report, an exit code, a legacy `failed` payload, or a vanished pane).

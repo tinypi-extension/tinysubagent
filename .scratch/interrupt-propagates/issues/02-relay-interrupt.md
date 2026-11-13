@@ -40,7 +40,7 @@ record of what was first decided.
 
 What holds instead: one Esc is still relayed into every live sub pane this registration holds, idle
 children included, and the call still returns immediately without awaiting a relay; the panes of the
-children whose wait ends this way are then closed. So a `pane close` is now expected on this path,
-and no process is killed — the close is what ends the child. The escalation refusal stands: a second
+children whose wait ends this way are then closed, and that close is what ends the child. So a
+`pane close` is now expected on this path, and an escalation is still refused: a second
 Esc, or an Esc after the abort, is still a no-op and closes nothing further. Silent, best-effort
 delivery, the mid-spawn abort, and the untouched Label lifecycle are unchanged.
