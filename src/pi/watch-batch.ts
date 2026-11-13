@@ -13,15 +13,19 @@
  * session exited. A completion that came from a settle leaves the child alive at
  * its prompt and its pane open, as does every failure and cancellation.
  *
- * An interrupt of the call's turn is relayed to the children elsewhere, before
- * this wait is even reached: one Esc into every live child pane, and nothing is
- * closed. What this module does with the call's signal is narrower — it ends the
- * waits, so the call can return while every pane stays exactly where the human
- * can still use it.
+ * An interrupt of the call's turn is relayed from here. The wait is the trigger:
+ * when it starts, or when the signal aborts under it, one Esc goes into every
+ * live child pane — the batch's own children and any earlier call's still open,
+ * idle ones included — and then every wait ends as `cancelled`. The interrupt
+ * closes nothing; each child's wait ends, so the call can return while every
+ * pane stays exactly where the human can still use it. (`cancelled` is the
+ * ending the waits report for now; a dedicated `interrupted` outcome arrives
+ * with ticket 03.)
  */
 
 import { herdrPaneClose } from "../herdr/cli.ts";
 import type { LiveSubPanes } from "../herdr/layout.ts";
+import { relayInterrupt } from "../children/interrupt.ts";
 import { waitForSubagent, type RunningSubagent } from "../children/watcher.ts";
 import type { SubagentResult } from "../present/result.ts";
 
@@ -43,10 +47,10 @@ export interface WatchBatchDeps {
  * spawned. Each child gets its own controller, added to the caller's watcher
  * set and removed again as soon as it settles.
  *
- * `signal` is the tool call's own: when the human interrupts the turn, every
- * in-flight wait resolves as cancelled so the call can return. A cancelled
- * child is never closed — its pane is left exactly where the human can still
- * use it, with the interrupt's Esc already delivered by the caller.
+ * `signal` is the tool call's own: when the human interrupts the turn, this wait
+ * relays one Esc into every live sub pane and then lets every in-flight wait
+ * resolve as cancelled, so the call can return. No child is closed: its pane is
+ * left exactly where the human can still use it, with the Esc already delivered.
  */
 export async function watchBatch(
 	runnings: readonly RunningSubagent[],
@@ -60,12 +64,24 @@ export async function watchBatch(
 		return controller;
 	});
 
-	// The call's signal is not a pane's fate: forwarding it only ends the waits,
-	// never the children. Each child's controller is what the watcher listens to.
+	// The call's signal is not a pane's fate: forwarding it relays the interrupt
+	// and then ends the waits, never the children. Each child's controller is what
+	// the watcher listens to. The relay is the Esc the human's interrupt stands
+	// for — into every tracked pane, this batch's and any earlier call's — and it
+	// closes nothing.
+	//
+	// `forwarded` is what stops a second relay: the initial `aborted` check and the
+	// listener can both reach here, and an abort can only send one Esc.
+	let forwarded = false;
 	const forward = (): void => {
+		if (forwarded) return;
+		forwarded = true;
+		relayInterrupt(columns.trackedIds());
 		for (const controller of controllers) controller.abort();
 	};
 	signal?.addEventListener("abort", forward, { once: true });
+	// An abort that landed before this wait was reached still relays: the listener
+	// would never fire for it.
 	if (signal?.aborted) forward();
 
 	try {
