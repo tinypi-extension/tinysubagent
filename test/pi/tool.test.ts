@@ -1042,7 +1042,7 @@ test("a failed child is content, not a tool error", async () => {
 	}
 });
 
-test("aborting the call cancels the batch and leaves the pane open", async () => {
+test("aborting the call interrupts the batch and leaves the pane open", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async (calls) => {
@@ -1059,8 +1059,13 @@ test("aborting the call cancels the batch and leaves the pane open", async () =>
 			const result = await pending;
 
 			const text = contentText(result);
-			assert.match(text, /## alpha — cancelled/, `the aborted child was not reported as cancelled: ${text}`);
-			assert.notEqual(isErrorFlag(result), true, "cancelling a call was reported as a tool error");
+			assert.match(
+				text,
+				/## alpha — interrupted \(pane left open\)/,
+				`the aborted child was not reported as interrupted: ${text}`,
+			);
+			assert.equal(text.includes("cancelled"), false, `an interrupted child was reported as cancelled: ${text}`);
+			assert.notEqual(isErrorFlag(result), true, "interrupting a call was reported as a tool error");
 			// Give a stray close the chance to happen before asserting it never did.
 			await new Promise((resolve) => setTimeout(resolve, 100));
 			assert.ok(
@@ -1209,7 +1214,7 @@ test("aborting a waiting call relays exactly one Esc into its child's pane", asy
 			await waitLaunched(h.cwd, 1);
 
 			controller.abort();
-			assert.match(contentText(await pending), /alpha — cancelled/);
+			assert.match(contentText(await pending), /alpha — interrupted \(pane left open\)/);
 
 			// The relay is issued without await, so poll for it rather than racing it.
 			await until(async () => sendKeyCalls(calls()).length >= 1, "the interrupt never reached the child's pane");
@@ -1334,8 +1339,8 @@ test("a relay that fails is silent and does not stop the rest of the fan-out", a
 				]);
 
 				const text = contentText(result);
-				assert.match(text, /alpha — cancelled/, "the failed relay changed the result");
-				assert.match(text, /beta — cancelled/, "the failed relay changed the result");
+				assert.match(text, /alpha — interrupted/, "the failed relay changed the result");
+				assert.match(text, /beta — interrupted/, "the failed relay changed the result");
 				assert.notEqual(isErrorFlag(result), true, "a pane that is gone turned the interrupt into a failure");
 				assert.deepEqual(h.notices, [], "a failed relay warned the operator");
 				assert.equal(writtenScripts(h.cwd).length, 2, "a failed relay changed what was spawned");
@@ -1412,7 +1417,7 @@ test("an abort mid-spawn leaves the remaining requests unlaunched and their labe
 				await until(async () => sendKeyCalls(calls()).length >= 1, "the child that opened during the abort got no Esc");
 				await quiet(calls);
 				assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
-				assert.match(contentText(result), /alpha — cancelled/);
+				assert.match(contentText(result), /alpha — interrupted/);
 
 				// The unlaunched request's Label is free: a later call can reserve it.
 				const retry = await executeSettled(

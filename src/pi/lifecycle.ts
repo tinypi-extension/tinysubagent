@@ -6,8 +6,8 @@
  * shutdown, both before the tool is registered.
  *
  * Shutdown aborts every running watcher, which is also what ends a blocking tool
- * call: the call returns its batch as cancelled rather than outliving the session
- * that asked for it. The children's panes are left open.
+ * call: the call returns its batch as `interrupted` rather than outliving the
+ * session that asked for it. The children's panes are left open.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";

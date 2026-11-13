@@ -45,6 +45,10 @@ export function statusLabel(outcome: SubagentOutcome): string {
 			return outcome.reason === "exit" ? `failed (exit ${outcome.exitCode})` : `failed (${outcome.reason})`;
 		case "cancelled":
 			return "cancelled (pane closed without reporting)";
+		case "interrupted":
+			// The human stopped the turn. Nothing was closed and nothing reported, so
+			// the label says what is true: the pane is still there to keep driving.
+			return "interrupted (pane left open)";
 	}
 }
 
@@ -70,7 +74,9 @@ function header(results: readonly SubagentResult[]): string {
  * A failed child's pane is worth pointing at — the error is on screen there. A
  * completion without a summary never reported at all, and how the wait ended
  * decides where to look: a turn-end leaves the child alive at its prompt with its
- * pane open, while a session exit is gone and there is nothing to inspect.
+ * pane open, while a session exit is gone and there is nothing to inspect. An
+ * interrupt is the human's own doing, and what it left behind is a live child at
+ * its prompt: no summary is owed, and the pane is where to pick the work up.
  */
 export function emptySummaryText(
 	outcome: { kind: SubagentOutcome["kind"]; via?: string },
@@ -81,11 +87,16 @@ export function emptySummaryText(
 			? "_(no summary: the child never reported — its turn ended without one, and its pane is still open)_"
 			: "_(no summary: the child never reported before its session exited)_";
 	}
+	if (outcome.kind === "interrupted") {
+		return "_(no summary: the child was interrupted, and its pane was left open)_";
+	}
 	return `_(no output captured — inspect pane \`${paneId}\`)_`;
 }
 
 function section(result: SubagentResult, index: number, total: number): string {
-	const summary = result.outcome.summary?.trim() ?? "";
+	// `interrupted` has no summary field at all, so the narrowing here is the
+	// type's, not a check against a value that could go stale.
+	const summary = result.outcome.kind === "interrupted" ? "" : (result.outcome.summary?.trim() ?? "");
 	// A failed child's summary is an error message, not a report — say so. Without
 	// the label it reads as the subagent's own account of its work.
 	const body =
@@ -168,7 +179,7 @@ export function buildResultDetails(results: readonly SubagentResult[]): ResultDe
 				via: outcome.kind === "completed" ? outcome.via : undefined,
 				reason: outcome.kind === "failed" ? outcome.reason : undefined,
 				exitCode: outcome.kind === "failed" ? outcome.exitCode : undefined,
-				summary: outcome.summary,
+				summary: outcome.kind === "interrupted" ? null : outcome.summary,
 			} satisfies ResultDetail;
 		}),
 	};

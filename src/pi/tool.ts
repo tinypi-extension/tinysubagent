@@ -4,8 +4,8 @@
  *
  * The call returns when the whole batch has finished: every child's report is
  * carried in the one tool result, so nothing is delivered afterwards. A human
- * interrupting the turn stops the remaining spawns and ends the wait with a
- * cancelled result; the interrupt itself is relayed to the children by
+ * interrupting the turn stops the remaining spawns and ends the waits with an
+ * `interrupted` result; the interrupt itself is relayed to the children by
  * `watchBatch`, which types one Esc into every live sub pane and closes nothing.
  *
  * Registration itself stays in `index.ts`: this module only builds the object
@@ -70,7 +70,7 @@ function renderReport(details: AckDetails, theme: Theme): string[] {
 	for (const entry of details.results ?? []) {
 		if (lines.length > 0) lines.push("");
 		// Green for a child that handed work back, red for a failure, yellow for a
-		// cancellation — the ending the reader has to act on.
+		// cancellation or an interrupt — the endings the reader has to act on.
 		const color = entry.outcome === "completed" ? "success" : entry.outcome === "failed" ? "error" : "warning";
 		lines.push(
 			[
@@ -342,7 +342,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 
 			// The call blocks here until every child has settled. A human interrupting
 			// the turn is relayed by this wait: one Esc into every live sub pane, then
-			// every wait ends as `cancelled`. Nothing is closed and no child is killed,
+			// every wait ends as `interrupted`. Nothing is closed and no child is killed,
 			// so the panes stay exactly where the human can keep driving them.
 			const results = await watchBatch(runnings, signal, {
 				watchers,
@@ -352,9 +352,9 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				releaseLabel: (label) => runningLabels.release(label),
 			});
 
-			// The batch ran, so its report is content whatever it says: a failed or
-			// cancelled child is an ending the orchestrator has to read, not an error
-			// of this call.
+			// The batch ran, so its report is content whatever it says: a failed,
+			// cancelled or interrupted child is an ending the orchestrator has to read,
+			// not an error of this call.
 			return {
 				content: [
 					{

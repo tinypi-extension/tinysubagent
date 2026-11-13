@@ -147,6 +147,7 @@ test("a report's own message outranks the session's older failure note", async (
 			'{"type":"failed","reason":"error","message":"new failure"}',
 		);
 		const outcome = await waitForSubagent(s.running, undefined, s.deps);
+		assert.equal(outcome.kind, "failed");
 		assert.equal(outcome.summary, "new failure");
 	} finally {
 		s.cleanup();
@@ -202,6 +203,7 @@ test("an over-long report message is clipped, not dropped", async () => {
 			JSON.stringify({ type: "failed", reason: "error", message: "x".repeat(1_200) }),
 		);
 		const outcome = await waitForSubagent(s.running, undefined, s.deps);
+		assert.equal(outcome.kind, "failed");
 		assert.equal(outcome.summary?.length, 1_000);
 		assert.ok(outcome.summary?.endsWith("…"));
 	} finally {
@@ -393,26 +395,45 @@ test("an unknown pane answer is not treated as death", async () => {
 	}
 });
 
-test("aborting resolves the wait instead of leaving it open", async () => {
+test("aborting resolves the wait as interrupted, not as a cancellation", async () => {
 	const s = scenario();
 	try {
 		const controller = new AbortController();
 		const pending = waitForSubagent(s.running, controller.signal, s.deps);
 		controller.abort();
 		const outcome = await pending;
-		assert.equal(outcome.kind, "cancelled");
+		// The human's own turn ending is not the pane going away: `cancelled` is
+		// reserved for a pane that vanished, and an interrupt says so instead.
+		assert.deepEqual(outcome, { kind: "interrupted" });
 	} finally {
 		s.cleanup();
 	}
 });
 
-test("an already-aborted signal resolves immediately", async () => {
+test("an already-aborted signal resolves immediately as interrupted", async () => {
 	const s = scenario();
 	try {
 		const controller = new AbortController();
 		controller.abort();
 		const outcome = await waitForSubagent(s.running, controller.signal, s.deps);
-		assert.equal(outcome.kind, "cancelled");
+		assert.deepEqual(outcome, { kind: "interrupted" });
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("an interrupted child carries no summary, even with partial assistant text", async () => {
+	const s = scenario({ session: "half an answer, cut off mid-" });
+	try {
+		const controller = new AbortController();
+		const pending = waitForSubagent(s.running, controller.signal, s.deps);
+		controller.abort();
+		const outcome = await pending;
+		// The session really does hold assistant text, but a turn stopped by an
+		// interrupt never handed anything back: scraping the partial turn would pass
+		// half a thought off as the child's report.
+		assert.deepEqual(outcome, { kind: "interrupted" });
+		assert.equal("summary" in outcome, false, "an interrupted child grew a summary");
 	} finally {
 		s.cleanup();
 	}

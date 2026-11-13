@@ -69,7 +69,15 @@ export type SubagentOutcome =
 	 */
 	| { kind: "failed"; reason: FailureReason; exitCode: number | null; summary: string | null }
 	/** The pane vanished without leaving any signal. */
-	| { kind: "cancelled"; summary: string | null };
+	| { kind: "cancelled"; summary: string | null }
+	/**
+	 * The wait was ended by the tool call's interrupt (its abort signal): the human
+	 * stopped the turn, one Esc reached every live child, and every pane was left
+	 * open. Deliberately carries no summary — a turn stopped mid-flight has
+	 * nothing to hand back, and any partial assistant text in the session is not
+	 * the child's report.
+	 */
+	| { kind: "interrupted" };
 
 export interface RunningSubagent {
 	id: string;
@@ -266,7 +274,9 @@ export interface WatcherDeps {
 /**
  * Resolve when the subagent is finished. Never rejects, never hangs while the
  * process is alive: a pane that disappears without a signal is reported as
- * cancelled, and an abort resolves the same way.
+ * cancelled, while an abort — the tool call's turn being interrupted — is
+ * reported as `interrupted`. The two are distinct because only one of them says
+ * anything about the pane: an interrupt leaves it open at the child's prompt.
  */
 export function waitForSubagent(
 	running: RunningSubagent,
@@ -296,7 +306,10 @@ export function waitForSubagent(
 		};
 
 		const onAbort = (): void => {
-			finish({ kind: "cancelled", summary: readFinalMessage(running.sessionFile) });
+			// No summary is read here, not even from a session that holds partial
+			// assistant text: an interrupted turn was cut off, and half an answer is not
+			// a result the child handed back. Its pane is still open for the human.
+			finish({ kind: "interrupted" });
 		};
 
 		const check = async (): Promise<void> => {
