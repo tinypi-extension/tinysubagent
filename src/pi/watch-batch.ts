@@ -11,16 +11,15 @@
  *
  * A pane is closed only when the child is gone anyway — it reported, or its
  * session exited. A completion that came from a settle leaves the child alive at
- * its prompt and its pane open, as does every failure and cancellation.
+ * its prompt and its pane open, as does every failure, cancellation and
+ * interrupt.
  *
  * An interrupt of the call's turn is relayed from here. The wait is the trigger:
  * when it starts, or when the signal aborts under it, one Esc goes into every
  * live child pane — the batch's own children and any earlier call's still open,
- * idle ones included — and then every wait ends as `cancelled`. The interrupt
+ * idle ones included — and then every wait ends as `interrupted`. The interrupt
  * closes nothing; each child's wait ends, so the call can return while every
- * pane stays exactly where the human can still use it. (`cancelled` is the
- * ending the waits report for now; a dedicated `interrupted` outcome arrives
- * with ticket 03.)
+ * pane stays exactly where the human can still use it.
  */
 
 import { herdrPaneClose } from "../herdr/cli.ts";
@@ -49,8 +48,9 @@ export interface WatchBatchDeps {
  *
  * `signal` is the tool call's own: when the human interrupts the turn, this wait
  * relays one Esc into every live sub pane and then lets every in-flight wait
- * resolve as cancelled, so the call can return. No child is closed: its pane is
- * left exactly where the human can still use it, with the Esc already delivered.
+ * resolve as `interrupted`, so the call can return. No child is closed: its pane
+ * is left exactly where the human can still use it, with the Esc already
+ * delivered.
  */
 export async function watchBatch(
 	runnings: readonly RunningSubagent[],
@@ -90,16 +90,16 @@ export async function watchBatch(
 				const controller = controllers[index];
 				const outcome = await waitForSubagent(running, controller?.signal);
 				if (controller) watchers.delete(controller);
-				// The wait is over however it ended — reported, failed, cancelled, or
-				// aborted — so the Label this child held is free again.
+				// The wait is over however it ended — reported, failed, cancelled,
+				// interrupted, or gone — so the Label this child held is free again.
 				deps.releaseLabel?.(running.name);
 
 				// Only a wait that ended *because* the child is over may close its pane.
 				// A report and a session exit are both the child leaving: nothing is left
 				// to read there. A turn-end completion is different — the child is alive at
 				// its prompt with no summary to hand back, so the pane is the only evidence
-				// of what it did and is deliberately left open. A failure or a
-				// cancellation is left on screen too: there is a reason to read, or a
+				// of what it did and is deliberately left open. A failure, a cancellation
+				// or an interrupt is left on screen too: there is a reason to read, or a
 				// human to keep driving it. No rebalance runs here: the layout is set at
 				// spawn time and a close never revisits it.
 				if (outcome.kind === "completed" && outcome.via !== "turn-end") {

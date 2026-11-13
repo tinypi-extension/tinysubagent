@@ -65,6 +65,9 @@ test("each ending gets a label that says which kind of ending it was", () => {
 		"failed (never-started)",
 	);
 	assert.equal(statusLabel({ kind: "cancelled", summary: null }), "cancelled (pane closed without reporting)");
+	// An interrupt is the human stopping the turn, not the pane going away: the
+	// label must not claim a closed pane, and must say the pane is still there.
+	assert.equal(statusLabel({ kind: "interrupted" }), "interrupted (pane left open)");
 });
 
 test("a reported completion says so, so it is not read as a turn-end guess", () => {
@@ -114,6 +117,31 @@ test("a partial batch says how many did not finish", () => {
 	assert.match(text, /^3 subagents finished \(1 completed, 2 did not\)\./);
 	assert.match(text, /## 2\. broken — failed \(error\)/);
 	assert.match(text, /## 3\. gamma — cancelled \(pane closed without reporting\)/);
+});
+
+test("an interrupted child is reported as interrupted, with its pane still open", () => {
+	const text = buildResultText([result("beta", { kind: "interrupted" })]);
+
+	assert.match(text, /## beta — interrupted \(pane left open\), 4s/);
+	assert.match(text, /no summary: the child was interrupted, and its pane was left open/);
+	// The interrupt is not a vanished pane and not a missing report: the text must
+	// not repeat either claim. A turn stopped by the human was never going to
+	// report, so a "never reported" body would send the reader looking for one.
+	assert.equal(text.includes("cancelled"), false, `an interrupted child was reported as cancelled: ${text}`);
+	assert.equal(text.includes("pane closed"), false, `an interrupted child claimed a closed pane: ${text}`);
+	assert.doesNotMatch(text, /report/i);
+});
+
+test("the structured detail of an interrupted child is the kind and nothing else", () => {
+	const [row] = buildResultDetails([result("beta", { kind: "interrupted" })]).results;
+
+	assert.equal(row?.outcome, "interrupted");
+	assert.equal(row?.status, "interrupted (pane left open)");
+	// No summary, even though the child's session may hold partial text: an
+	// interrupted turn handed nothing back.
+	assert.equal(row?.summary, null);
+	assert.equal(row?.via, undefined);
+	assert.equal(row?.reason, undefined);
 });
 
 test("a failure shows its error, not as if it were the subagent's own report", () => {

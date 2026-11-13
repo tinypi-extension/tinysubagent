@@ -9,8 +9,8 @@
  * pane, because the child is gone.
  *
  * Phase B — Esc in the orchestrator. Aborting the call's own signal ends the
- * wait as `cancelled`; the child is left running with its pane open, and nothing
- * is delivered later.
+ * wait as `interrupted`; the child is left running with its pane open, and
+ * nothing is delivered later.
  *
  * Usage: node scripts/smoke-interrupt.ts [agent]
  */
@@ -273,13 +273,13 @@ await waitBusy(paneB);
 controller.abort();
 const resultB = await callB;
 const textB = resultB.content[0]?.text ?? "";
-assert.ok(textB.includes("cancelled"), `the aborted call did not report a cancellation:\n${textB}`);
-assert.equal(resultB.details.results?.[0]?.outcome, "cancelled", "the aborted child was reported as finished");
+assert.ok(textB.includes("interrupted"), `the aborted call did not report an interrupt:\n${textB}`);
+assert.equal(resultB.details.results?.[0]?.outcome, "interrupted", "the aborted child was reported as finished");
 
 // The call's signal is not the pane's fate: the child keeps running.
 await sleep(2_000);
 const aliveB = await herdrPaneExists(paneB);
-console.log(`cancelled child's pane still open: ${aliveB}`);
+console.log(`interrupted child's pane still open: ${aliveB}`);
 if (aliveB !== true) fail("aborting the call closed the child's pane");
 
 if (sent.length !== 0) {
@@ -290,6 +290,6 @@ console.log("no orchestrator message was sent in either phase");
 reap();
 rmSync(sessionDir, { recursive: true, force: true });
 console.log(
-	"\nPASS an interrupt held the call open and the redirect reported; aborting the call cancelled the batch and left its pane open",
+	"\nPASS an interrupt held the call open and the redirect reported; aborting the call interrupted the batch and left its pane open",
 );
 process.exit(0);

@@ -545,6 +545,42 @@ test("an all-skipped acknowledgment is informational text, not an error", () => 
 	assert.match(joined, /skipped alpha: a subagent with this label is already running\./);
 });
 
+test("an interrupted child is drawn as interrupted, without claiming a closed pane or a report", () => {
+	const lines = renderAck(
+		{
+			status: "finished",
+			results: [
+				{
+					name: "alpha",
+					agent: "worker",
+					profile: null,
+					paneId: "w1:p2",
+					sessionFile: "/sessions/alpha.jsonl",
+					task: "a job the human stopped",
+					elapsedMs: 4_000,
+					elapsed: "4s",
+					status: "interrupted (pane left open)",
+					outcome: "interrupted",
+					summary: null,
+				},
+			],
+		},
+		"1 subagent finished",
+	);
+	const joined = lines.join("\n");
+	// Strip the theme markup the marking stub leaves behind: what matters is the
+	// words the human reads, not the colour each part carries.
+	const plain = joined.replace(/<\/?[a-zA-Z]+>/g, "");
+
+	assert.match(plain, /alpha/, `the child vanished from the report: ${plain}`);
+	assert.match(plain, /interrupted \(pane left open\)/, `the interrupt was not named: ${plain}`);
+	assert.match(plain, /pane was left open/, `the open pane was not mentioned: ${plain}`);
+	// Neither lie survives: an interrupt closes nothing and reports nothing.
+	assert.doesNotMatch(plain, /cancelled/, `an interrupted child was drawn as cancelled: ${plain}`);
+	assert.doesNotMatch(plain, /pane closed/, `an interrupted child claimed a closed pane: ${plain}`);
+	assert.doesNotMatch(plain, /report/i, `an interrupted child implied a Report: ${plain}`);
+});
+
 test("the all-skipped note does not promise a later delivery", () => {
 	// Nothing is delivered after a call returns any more: the note has to say the
 	// reports are in the other call's result, not that they will arrive.
