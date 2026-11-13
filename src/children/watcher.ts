@@ -71,13 +71,16 @@ export type SubagentOutcome =
 	/** The pane vanished without leaving any signal. */
 	| { kind: "cancelled"; summary: string | null }
 	/**
-	 * The wait was ended by the tool call's interrupt (its abort signal): the human
-	 * stopped the turn, one Esc reached every live child, and every pane was left
-	 * open. Deliberately carries no summary — a turn stopped mid-flight has
-	 * nothing to hand back, and any partial assistant text in the session is not
-	 * the child's report.
+	 * The wait was ended by an abort signal rather than by the child: the human
+	 * stopped the turn, one Esc reached every live child, and the pane's fate then
+	 * depends on why the wait was aborted. `interrupt` is the operator's own
+	 * interrupt — its pane is closed by the relay that ended the wait. `shutdown`
+	 * is the session going away under the wait — its pane is left open, because no
+	 * relay ran and nobody is left to close it. Deliberately carries no summary —
+	 * a turn stopped mid-flight has nothing to hand back, and any partial assistant
+	 * text in the session is not the child's report.
 	 */
-	| { kind: "interrupted" };
+	| { kind: "interrupted"; cause: "interrupt" | "shutdown" };
 
 export interface RunningSubagent {
 	id: string;
@@ -274,9 +277,11 @@ export interface WatcherDeps {
 /**
  * Resolve when the subagent is finished. Never rejects, never hangs while the
  * process is alive: a pane that disappears without a signal is reported as
- * cancelled, while an abort — the tool call's turn being interrupted — is
- * reported as `interrupted`. The two are distinct because only one of them says
- * anything about the pane: an interrupt leaves it open at the child's prompt.
+ * cancelled, while an abort — the tool call's turn being interrupted, or the
+ * session shutting down under the wait — is reported as `interrupted`, carrying
+ * which of the two it was. The two are distinct because only one of them says
+ * anything about the pane: a shutdown leaves it open at the child's prompt, an
+ * operator's interrupt has its pane closed by the relay.
  */
 export function waitForSubagent(
 	running: RunningSubagent,
@@ -308,8 +313,9 @@ export function waitForSubagent(
 		const onAbort = (): void => {
 			// No summary is read here, not even from a session that holds partial
 			// assistant text: an interrupted turn was cut off, and half an answer is not
-			// a result the child handed back. Its pane is still open for the human.
-			finish({ kind: "interrupted" });
+			// a result the child handed back. Only the reason the wait was aborted is
+			// recorded, because it decides whether the pane is closed or left open.
+			finish({ kind: "interrupted", cause: signal?.reason === "shutdown" ? "shutdown" : "interrupt" });
 		};
 
 		const check = async (): Promise<void> => {

@@ -10,16 +10,18 @@
  * controllers it creates.
  *
  * A pane is closed only when the child is gone anyway — it reported, or its
- * session exited. A completion that came from a settle leaves the child alive at
- * its prompt and its pane open, as does every failure, cancellation and
- * interrupt.
+ * session exited — or when the human interrupted the batch: the relay that
+ * stops the children closes the panes it typed into. A completion that came from
+ * a settle leaves the child alive at its prompt and its pane open, as does every
+ * failure and cancellation. A shutdown leaves every pane open too: nothing was
+ * relayed, and the waits simply end.
  *
  * An interrupt of the call's turn is relayed from here. The wait is the trigger:
  * when it starts, or when the signal aborts under it, one Esc goes into every
  * live child pane — the batch's own children and any earlier call's still open,
- * idle ones included — and then every wait ends as `interrupted`. The interrupt
- * closes nothing; each child's wait ends, so the call can return while every
- * pane stays exactly where the human can still use it.
+ * idle ones included — every wait ends as `interrupted`, and then each of those
+ * panes is closed. The Esc is what stops the turn; the close is what stops the
+ * child from being left behind with nobody waiting on it.
  */
 
 import { herdrPaneClose } from "../herdr/cli.ts";
@@ -47,10 +49,9 @@ export interface WatchBatchDeps {
  * set and removed again as soon as it settles.
  *
  * `signal` is the tool call's own: when the human interrupts the turn, this wait
- * relays one Esc into every live sub pane and then lets every in-flight wait
- * resolve as `interrupted`, so the call can return. No child is closed: its pane
- * is left exactly where the human can still use it, with the Esc already
- * delivered.
+ * relays one Esc into every live sub pane, ends every in-flight wait as
+ * `interrupted` and closes those panes, so the call can return with nothing left
+ * running behind it.
  */
 export async function watchBatch(
 	runnings: readonly RunningSubagent[],
@@ -64,11 +65,17 @@ export async function watchBatch(
 		return controller;
 	});
 
-	// The call's signal is not a pane's fate: forwarding it relays the interrupt
-	// and then ends the waits, never the children. Each child's controller is what
-	// the watcher listens to. The relay is the Esc the human's interrupt stands
-	// for — into every tracked pane, this batch's and any earlier call's — and it
-	// closes nothing.
+	// The call's signal is not a pane's fate on its own: forwarding it relays the
+	// interrupt, ends every wait, and then closes the panes it interrupted. Each
+	// child's controller is what the watcher listens to. The relay is the Esc the
+	// human's interrupt stands for — into every tracked pane, this batch's and any
+	// earlier call's.
+	//
+	// The order matters: Esc, then abort, then close. Aborting first ends every wait
+	// before a pane disappears, so no watcher can observe a vanished pane and file
+	// the child as `cancelled` instead of `interrupted`. Closing is last and best
+	// effort — a pane that is already gone is not an error, and a failure to close
+	// one changes neither the result nor the operator's notices.
 	//
 	// `forwarded` is what stops a second relay: the initial `aborted` check and the
 	// listener can both reach here, and an abort can only send one Esc.
@@ -76,8 +83,13 @@ export async function watchBatch(
 	const forward = (): void => {
 		if (forwarded) return;
 		forwarded = true;
-		relayInterrupt(columns.trackedIds());
-		for (const controller of controllers) controller.abort();
+		const paneIds = columns.trackedIds();
+		relayInterrupt(paneIds);
+		for (const controller of controllers) controller.abort("interrupt");
+		for (const paneId of paneIds) {
+			columns.drop(paneId);
+			void herdrPaneClose(paneId);
+		}
 	};
 	signal?.addEventListener("abort", forward, { once: true });
 	// An abort that landed before this wait was reached still relays: the listener
@@ -94,14 +106,14 @@ export async function watchBatch(
 				// interrupted, or gone — so the Label this child held is free again.
 				deps.releaseLabel?.(running.name);
 
-				// Only a wait that ended *because* the child is over may close its pane.
-				// A report and a session exit are both the child leaving: nothing is left
-				// to read there. A turn-end completion is different — the child is alive at
-				// its prompt with no summary to hand back, so the pane is the only evidence
-				// of what it did and is deliberately left open. A failure, a cancellation
-				// or an interrupt is left on screen too: there is a reason to read, or a
-				// human to keep driving it. No rebalance runs here: the layout is set at
-				// spawn time and a close never revisits it.
+				// A wait that ended because the child is over closes its pane: a report and a
+				// session exit are both the child leaving, so nothing is left to read there.
+				// A turn-end completion is different — the child is alive at its prompt with no
+				// summary to hand back, so the pane is the only evidence of what it did and is
+				// deliberately left open. A failure or a cancellation is left on screen too:
+				// there is a reason to read. An interrupt is not closed here either: it was
+				// already closed by the relay that ended it. No rebalance runs here: the layout
+				// is set at spawn time and a close never revisits it.
 				if (outcome.kind === "completed" && outcome.via !== "turn-end") {
 					columns.drop(running.paneId);
 					void herdrPaneClose(running.paneId);

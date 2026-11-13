@@ -10,20 +10,24 @@
  *
  * Phase B — aborting the call's own signal, which is what pi does when the turn
  * is interrupted. The wait ends as `interrupted`, and the relay that ends it types
- * one Esc into the child's pane, so the child's turn stops where it was: the phase
- * waits for the status line to clear and the prompt to come back, and checks the
- * pane is still open for the human to redirect.
+ * one Esc into the child's pane before closing it: the phase waits for the pane to
+ * be gone, which is the proof the child stopped, and checks the row comes back as
+ * `interrupted (pane closed)` with no summary.
  *
  * Phase C — Esc in the orchestrator's pane, with two children in the batch. This
  * is the relay itself: the human's own keystroke is typed into the orchestrator's
- * pane, then the call's signal is aborted as pi would, and every live child pane
- * is shown to have stopped its turn while the call comes back with interrupted
- * rows, no summaries, no error, and every pane still open.
+ * pane, then the call's signal is aborted as pi would, and the call comes back
+ * with interrupted rows, no summaries, no error, and both panes closed.
+ *
+ * The closed pane is also the end of the operator's access: an interrupted child
+ * can no longer be redirected by hand, because there is no pane left to type into.
+ * Nothing is left running once an interrupt returns the call.
  *
  * Run this from a plain shell in a herdr pane, not from pi's bash tool: phase C
  * types Esc into the orchestrator's own pane — the keystroke a human presses to
  * interrupt a turn — so a pi running there would have its own turn aborted
- * underneath the script.
+ * underneath the script. Phases B and C also close the panes their interrupt
+ * stopped, so the pane this script runs in must not be one of them.
  *
  * Usage: node scripts/smoke-interrupt.ts [agent]
  */
@@ -39,7 +43,7 @@ import tinysubagent from "../index.ts";
 import { discoverAgents } from "../src/config/agents.ts";
 import { currentPaneId, herdrPaneExists, herdrPaneLayout, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
 import { TOOL_NAME } from "../src/types.ts";
-import { atPrompt, readPane, runningTurn } from "./pane-state.ts";
+import { readPane } from "./pane-state.ts";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -138,6 +142,8 @@ const tool = tools[0] as {
 				outcome: string;
 				status?: string;
 				via?: string;
+				/** Which interrupt ended the wait: the operator's own, or a shutdown. */
+				cause?: "interrupt" | "shutdown";
 				/** `null` whenever the child left nothing to hand back, which an interrupt always is. */
 				summary?: string | null;
 			}[];
@@ -177,25 +183,14 @@ async function waitUntil(check: () => Promise<boolean>, ms: number): Promise<boo
 }
 
 /**
- * Wait until the child's turn has stopped and pi's prompt is back, and return the
- * screen that proves it. Polled, because the Esc is relayed fire-and-forget: the
- * child stops in its own time and a slow stop must not flake. The visible screen
- * is what is read, not the scrollback: the transcript keeps showing the call that
- * was aborted, and only the live status line says whether the turn is running.
+ * Wait until the pane is gone, and fail loudly with its id if it stays open. A
+ * closed pane is the proof the child stopped: the relay closes every pane it
+ * interrupts, so a pane still there after the call returned is an interrupt that
+ * left a child running with nobody waiting on it.
  */
-async function waitStopped(paneId: string): Promise<string> {
-	let screen = "";
-	const stopped = await waitUntil(async () => {
-		screen = await readPane(paneId, { visible: true });
-		return !runningTurn(screen) && atPrompt(screen);
-	}, 20_000);
-	if (!stopped) fail(`the child in pane ${paneId} is still running its turn after the interrupt:\n\n${screen}`);
-	return screen;
-}
-
-/** The bottom of a pane read: the status line and the prompt, as the operator sees them. */
-function tail(text: string, lines = 4): string {
-	return text.trimEnd().split("\n").slice(-lines).join("\n");
+async function waitClosed(paneId: string): Promise<void> {
+	const closed = await waitUntil(async () => (await herdrPaneExists(paneId)) === false, 20_000);
+	if (!closed) fail(`pane ${paneId} is still open after the interrupt — the interrupted child was left behind`);
 }
 
 // This harness must never leave a live child behind, however it dies — including
@@ -316,25 +311,24 @@ const resultB = await callB;
 const textB = resultB.content[0]?.text ?? "";
 const rowB = resultB.details.results?.[0];
 assert.equal(rowB?.outcome, "interrupted", `the aborted child was reported as ${String(rowB?.outcome)}`);
-// The same wording phase C asserts: an interrupt closes nothing, so the label has
-// to say the pane is still there — not that it was closed, and not `cancelled`.
+// The same wording phase C asserts: the operator's interrupt closes the pane it
+// stopped, so the label says so — not that it was left open, and not `cancelled`.
 assert.equal(
 	rowB?.status,
-	"interrupted (pane left open)",
-	`the aborted child is not shown as interrupted with its pane left open: ${String(rowB?.status)}`,
+	"interrupted (pane closed)",
+	`the aborted child is not shown as interrupted with its pane closed: ${String(rowB?.status)}`,
 );
+assert.equal(rowB?.cause, "interrupt", `the aborted child's cause is ${String(rowB?.cause)}, not interrupt`);
+assert.equal(rowB?.paneId, paneB, `the aborted child reported pane ${String(rowB?.paneId)}, not ${paneB}`);
 assert.equal(rowB?.summary, null, `an interrupted child carried a summary: ${JSON.stringify(rowB?.summary)}`);
-assert.ok(textB.includes("interrupted (pane left open)"), `the aborted call did not report an interrupt:\n${textB}`);
+assert.ok(textB.includes("interrupted (pane closed)"), `the aborted call did not report an interrupt:\n${textB}`);
 
-// Aborting the call is not the pane's fate: the relay it triggered typed one Esc
-// into the child's pane, so the turn stops and the prompt comes back while the
-// pane stays open. Waiting for the stopped turn is what proves the relay reached
-// the child — a pane that merely still exists would pass a stop that never landed.
-const screenB = await waitStopped(paneB);
-console.log(`\nchild beta — turn stopped, prompt back:\n${tail(screenB)}`);
-const aliveB = await herdrPaneExists(paneB);
-console.log(`interrupted child's pane still open: ${aliveB}`);
-if (aliveB !== true) fail("aborting the call closed the child's pane");
+// Aborting the call is the pane's fate: the relay it triggered typed one Esc into
+// the child's pane and then closed it. The close is what proves the turn stopped —
+// there is no screen left to read — and it is polled, because the close is issued
+// fire-and-forget and a slow close must not flake.
+await waitClosed(paneB);
+console.log(`\nchild beta's pane ${paneB} is closed`);
 
 // ── Phase C: Esc in the orchestrator's pane ─────────────────────────────────
 // Phase B aborted the signal and let the relay it triggers type the Esc into the
@@ -398,8 +392,11 @@ rowsC.forEach((row, index) => {
 	if (row.outcome !== "interrupted") {
 		fail(`child ${row.name} came back as ${row.outcome}, not interrupted:\n\n${textC}`);
 	}
-	if (row.status !== "interrupted (pane left open)") {
-		fail(`child ${row.name} is not shown as interrupted with its pane left open: ${String(row.status)}`);
+	if (row.status !== "interrupted (pane closed)") {
+		fail(`child ${row.name} is not shown as interrupted with its pane closed: ${String(row.status)}`);
+	}
+	if (row.cause !== "interrupt") {
+		fail(`child ${row.name} is interrupted for ${String(row.cause)}, not the operator's interrupt`);
 	}
 	if (row.summary !== null) {
 		fail(
@@ -417,18 +414,14 @@ if (returnedC.size !== 2 || !returnedC.has(paneC1) || !returnedC.has(paneC2)) {
 	fail(`the batch did not report the two panes it opened (${paneC1}, ${paneC2}): ${[...returnedC].join(", ")}`);
 }
 
-// Each pane must still be there and its child's turn must have stopped: a pane
-// that merely exists would pass a stop that never landed, and a turn still running
-// would mean the Esc reached nobody.
+// Each pane must be closed: the relay typed into every live child and then closed
+// it, so a pane still open would be a child left running with nobody waiting on
+// it, and a pane still showing a running turn would mean the Esc reached nobody.
 for (const row of rowsC) {
-	const alive = await herdrPaneExists(row.paneId);
-	console.log(`child ${row.name}'s pane ${row.paneId} still open: ${alive}`);
-	if (alive !== true) fail(`child ${row.name}'s pane ${row.paneId} closed on interrupt — the human cannot redirect it`);
-
-	const screen = await waitStopped(row.paneId);
-	console.log(`\nchild ${row.name} — turn stopped, prompt back:\n${tail(screen)}`);
+	await waitClosed(row.paneId);
+	console.log(`child ${row.name}'s pane ${row.paneId} is closed`);
 }
-console.log("\nthe orchestrator's esc reached every child: both turns stopped and both panes stayed open");
+console.log("\nthe orchestrator's esc reached every child: both panes were closed behind it");
 
 if (sent.length !== 0) {
 	fail(`the orchestrator was messaged although results arrive as the tool result:\n\n${sent.join("\n\n")}`);
@@ -438,6 +431,6 @@ console.log("no orchestrator message was sent in any phase");
 reap();
 rmSync(sessionDir, { recursive: true, force: true });
 console.log(
-	"\nPASS an interrupt held the call open and the redirect reported; aborting the signal stopped its child's turn and left the pane open; the orchestrator's own esc stopped both children, returned interrupted rows with no summaries, and closed nothing",
+	"\nPASS an interrupt held the call open and the redirect reported; aborting the signal stopped its child's turn and closed its pane; the orchestrator's own esc stopped both children and closed both panes, returning interrupted rows with no summaries",
 );
 process.exit(0);

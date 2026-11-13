@@ -545,7 +545,7 @@ test("an all-skipped acknowledgment is informational text, not an error", () => 
 	assert.match(joined, /skipped alpha: a subagent with this label is already running\./);
 });
 
-test("an interrupted child is drawn as interrupted, without claiming a closed pane or a report", () => {
+test("an interrupted child is drawn as interrupted, with the pane the interrupt closed", () => {
 	const lines = renderAck(
 		{
 			status: "finished",
@@ -559,8 +559,9 @@ test("an interrupted child is drawn as interrupted, without claiming a closed pa
 					task: "a job the human stopped",
 					elapsedMs: 4_000,
 					elapsed: "4s",
-					status: "interrupted (pane left open)",
+					status: "interrupted (pane closed)",
 					outcome: "interrupted",
+					cause: "interrupt",
 					summary: null,
 				},
 			],
@@ -573,12 +574,45 @@ test("an interrupted child is drawn as interrupted, without claiming a closed pa
 	const plain = joined.replace(/<\/?[a-zA-Z]+>/g, "");
 
 	assert.match(plain, /alpha/, `the child vanished from the report: ${plain}`);
-	assert.match(plain, /interrupted \(pane left open\)/, `the interrupt was not named: ${plain}`);
-	assert.match(plain, /pane was left open/, `the open pane was not mentioned: ${plain}`);
-	// Neither lie survives: an interrupt closes nothing and reports nothing.
+	assert.match(plain, /interrupted \(pane closed\)/, `the interrupt was not named: ${plain}`);
+	assert.match(plain, /pane was closed/, `the closed pane was not mentioned: ${plain}`);
+	// Neither lie survives: an interrupt of the turn is not a vanished pane and not a
+	// hand-back, and this one left no pane behind to redirect.
 	assert.doesNotMatch(plain, /cancelled/, `an interrupted child was drawn as cancelled: ${plain}`);
-	assert.doesNotMatch(plain, /pane closed/, `an interrupted child claimed a closed pane: ${plain}`);
+	assert.doesNotMatch(plain, /left open/, `an interrupt that closed the pane claimed it was open: ${plain}`);
 	assert.doesNotMatch(plain, /report/i, `an interrupted child implied a Report: ${plain}`);
+});
+
+test("a shutdown under the wait is drawn as interrupted with the pane left open", () => {
+	const lines = renderAck(
+		{
+			status: "finished",
+			results: [
+				{
+					name: "alpha",
+					agent: "worker",
+					profile: null,
+					paneId: "w1:p2",
+					sessionFile: "/sessions/alpha.jsonl",
+					task: "a job the session ended under",
+					elapsedMs: 4_000,
+					elapsed: "4s",
+					status: "interrupted (pane left open)",
+					outcome: "interrupted",
+					cause: "shutdown",
+					summary: null,
+				},
+			],
+		},
+		"1 subagent finished",
+	);
+	const plain = lines.join("\n").replace(/<\/?[a-zA-Z]+>/g, "");
+
+	// Nothing was relayed on a shutdown, so nothing was closed: the label and body
+	// have to say the pane outlived the call.
+	assert.match(plain, /interrupted \(pane left open\)/, `the shutdown was not named: ${plain}`);
+	assert.match(plain, /pane was left open/, `the open pane was not mentioned: ${plain}`);
+	assert.doesNotMatch(plain, /pane was closed|pane closed/, `a shutdown claimed a closed pane: ${plain}`);
 });
 
 test("the all-skipped note does not promise a later delivery", () => {

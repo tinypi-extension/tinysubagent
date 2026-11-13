@@ -46,9 +46,10 @@ export function statusLabel(outcome: SubagentOutcome): string {
 		case "cancelled":
 			return "cancelled (pane closed without reporting)";
 		case "interrupted":
-			// The human stopped the turn. Nothing was closed and nothing reported, so
-			// the label says what is true: the pane is still there to keep driving.
-			return "interrupted (pane left open)";
+			// The human stopped the turn and nothing reported. Which interrupt it was
+			// decides the pane's fate: the operator's own closes the pane it stopped,
+			// while a shutdown under the wait leaves it open.
+			return outcome.cause === "shutdown" ? "interrupted (pane left open)" : "interrupted (pane closed)";
 	}
 }
 
@@ -73,16 +74,26 @@ function header(results: readonly SubagentResult[]): string {
  *
  * The operator stopped the batch, not one child, and that is a fact about the
  * whole result rather than any section. It reports the panes as they really are:
- * an interrupt closes nothing, so every interrupted child's pane is left open,
- * while a completed child's pane is gone and is not claimed here. `null` when no
- * child was interrupted, because an uninterrupted batch needs no note.
+ * an operator's interrupt closes every pane it relayed to, while a batch ended by
+ * a shutdown had nothing relayed and left every pane open. A completed child's
+ * pane is gone either way and is not claimed here. The cause is read from the
+ * interrupted rows, since the whole batch shares it. `null` when no child was
+ * interrupted, because an uninterrupted batch needs no note.
  */
 function interruptNote(results: readonly SubagentResult[]): string | null {
-	const interrupted = results.filter((result) => result.outcome.kind === "interrupted").length;
-	if (interrupted === 0) return null;
-	if (interrupted === results.length) return "The batch was interrupted: every child's pane was left open.";
-	if (interrupted === 1) return "The batch was interrupted: the interrupted child's pane was left open.";
-	return "The batch was interrupted: the interrupted children's panes were left open.";
+	const interrupted = results.filter((result) => result.outcome.kind === "interrupted");
+	if (interrupted.length === 0) return null;
+	const leftOpen = interrupted.some(
+		(result) => result.outcome.kind === "interrupted" && result.outcome.cause === "shutdown",
+	);
+	const fate = leftOpen ? "left open" : "closed";
+	if (interrupted.length === results.length) {
+		return `The batch was interrupted: every child's pane was ${fate}.`;
+	}
+	if (interrupted.length === 1) {
+		return `The batch was interrupted: the interrupted child's pane was ${fate}.`;
+	}
+	return `The batch was interrupted: the interrupted children's panes were ${fate}.`;
 }
 
 /**
@@ -92,11 +103,11 @@ function interruptNote(results: readonly SubagentResult[]): string | null {
  * completion without a summary never reported at all, and how the wait ended
  * decides where to look: a turn-end leaves the child alive at its prompt with its
  * pane open, while a session exit is gone and there is nothing to inspect. An
- * interrupt is the human's own doing, and what it left behind is a live child at
- * its prompt: no summary is owed, and the pane is where to pick the work up.
+ * interrupt is the human's own doing, and its cause says what became of the pane:
+ * the operator's interrupt closed it, a shutdown left it open.
  */
 export function emptySummaryText(
-	outcome: { kind: SubagentOutcome["kind"]; via?: string },
+	outcome: { kind: SubagentOutcome["kind"]; via?: string; cause?: "interrupt" | "shutdown" },
 	paneId: string,
 ): string {
 	if (outcome.kind === "completed") {
@@ -105,7 +116,9 @@ export function emptySummaryText(
 			: "_(no summary: the child never reported before its session exited)_";
 	}
 	if (outcome.kind === "interrupted") {
-		return "_(no summary: the child was interrupted, and its pane was left open)_";
+		return outcome.cause === "shutdown"
+			? "_(no summary: the child was interrupted and its pane was left open)_"
+			: "_(no summary: the child was interrupted and its pane was closed)_";
 	}
 	return `_(no output captured — inspect pane \`${paneId}\`)_`;
 }
@@ -168,6 +181,8 @@ export interface ResultDetail {
 	status: string;
 	outcome: SubagentOutcome["kind"];
 	via?: string;
+	/** Which interrupt ended the wait, for an `interrupted` row. */
+	cause?: "interrupt" | "shutdown";
 	reason?: string;
 	exitCode?: number | null;
 	summary: string | null;
@@ -196,6 +211,7 @@ export function buildResultDetails(results: readonly SubagentResult[]): ResultDe
 				status: statusLabel(outcome),
 				outcome: outcome.kind,
 				via: outcome.kind === "completed" ? outcome.via : undefined,
+				cause: outcome.kind === "interrupted" ? outcome.cause : undefined,
 				reason: outcome.kind === "failed" ? outcome.reason : undefined,
 				exitCode: outcome.kind === "failed" ? outcome.exitCode : undefined,
 				summary: outcome.kind === "interrupted" ? null : outcome.summary,

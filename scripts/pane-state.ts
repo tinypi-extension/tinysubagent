@@ -1,21 +1,15 @@
 /**
  * Reading a live pi pane from its text.
  *
- * The interrupt smoke has to tell a child that is still working from one that has
- * stopped at its prompt, using only what `herdr pane read` hands back. Two things
- * on screen carry it:
+ * The interrupt smoke needs the pane's text for one thing only: knowing a child is
+ * mid-work, so the keystroke it sends lands on a running turn rather than on an
+ * idle prompt. `readPane` is that read, and `waitBusy` in the smoke is what uses
+ * it — the child's bash call has to be visible before anything is interrupted.
  *
- *   - pi draws its working status line — `── ⠸ Working ──…` — while a turn runs
- *     and clears it when the turn stops. Nothing else changes on an interrupt:
- *     the transcript keeps the aborted call, so the status line is the only
- *     signal that distinguishes a stopped child from a busy one.
- *   - pi's footer, with its token counters and the model, is drawn whenever pi is
- *     showing its editor. A pane still showing it is a live child at its prompt;
- *     a pane where pi has gone shows a shell prompt instead.
- *
- * Both readings take a `readPane` result, and both fail towards a visible failure:
- * a screen that still says `Working` counts as running, so a stop that did not
- * happen is a timeout with the pane printed, never a silent pass.
+ * Whether the turn *stopped* is no longer read off the screen: an interrupt closes
+ * the pane, and a closed pane is the proof the child is gone and its turn with
+ * it. A screen that still says `Working` would only be evidence of a stop that did
+ * not land, and there is nothing left to read it from once the pane is closed.
  */
 
 import { execFile } from "node:child_process";
@@ -35,11 +29,10 @@ export interface ReadPaneOptions {
 /**
  * Read a pane's text, or `""` if herdr could not read it.
  *
- * The default read is the scrollback, which is where an earlier call still shows;
- * `visible` asks for the screen as it stands, which is the only place a running
- * turn can be told from a stopped one. A failed read is an empty screen rather
- * than a throw: every caller is polling, and a pane slow to answer is not a
- * verdict on what the pane is doing.
+ * The default read is the scrollback, which is where the child's bash call still
+ * shows after pi has scrolled past its start. A failed read is an empty screen
+ * rather than a throw: every caller is polling, and a pane slow to answer is not
+ * a verdict on what the pane is doing.
  */
 export async function readPane(paneId: string, options: ReadPaneOptions = {}): Promise<string> {
 	const source = options.visible ? ["--source", "visible"] : ["--lines", String(SCROLLBACK_LINES)];
@@ -56,14 +49,4 @@ export async function readPane(paneId: string, options: ReadPaneOptions = {}): P
 	} catch {
 		return "";
 	}
-}
-
-/** Whether the pane still shows pi's working status line. */
-export function runningTurn(text: string): boolean {
-	return /\bWorking\b/.test(text);
-}
-
-/** Whether the pane still shows pi's footer — a live child at its prompt. */
-export function atPrompt(text: string): boolean {
-	return /↑[^\n]*↓/.test(text);
 }

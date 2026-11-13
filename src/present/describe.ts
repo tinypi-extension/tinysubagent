@@ -37,7 +37,7 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 		"Delegate tasks to subagents, each running in its own herdr pane with an isolated context window.",
 		"Calling this tool starts the requested subagent(s) immediately; it does not queue or defer them for later. All requested subagents run concurrently.",
 		"",
-		"This call returns when every subagent has finished, with all their reports in one result. Do nothing else while it runs: you cannot start a second batch until it returns. A human may interrupt the turn: the interrupt is relayed to every live subagent, stopping each turn where it is, and the wait returns at once with the subagents' panes left open.",
+		"This call returns when every subagent has finished, with all their reports in one result. Do nothing else while it runs: you cannot start a second batch until it returns. A human may interrupt the turn: the interrupt is relayed to every live subagent, stopping each turn where it is, the wait returns at once, and the subagents' panes are closed.",
 		"",
 		`Provide a \`tasks\` array with one or more subagents (up to ${MAX_PARALLEL_TASKS}). Subagents run concurrently and their reports come back together in a single result. Specify \`name\` and \`profile\` per task when needed.`,
 		"",

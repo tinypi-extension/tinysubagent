@@ -6,7 +6,8 @@
  * carried in the one tool result, so nothing is delivered afterwards. A human
  * interrupting the turn stops the remaining spawns and ends the waits with an
  * `interrupted` result; the interrupt itself is relayed to the children by
- * `watchBatch`, which types one Esc into every live sub pane and closes nothing.
+ * `watchBatch`, which types one Esc into every live sub pane and then closes the
+ * panes it interrupted, so nothing is left running behind the returned call.
  *
  * Registration itself stays in `index.ts`: this module only builds the object
  * `pi.registerTool` is handed, so the register-or-not guard lives in one place.
@@ -93,7 +94,7 @@ function renderReport(details: AckDetails, theme: Theme): string[] {
 		const summary = entry.summary?.trim() ?? "";
 		lines.push(
 			summary === ""
-				? theme.fg("muted", emptySummaryText({ kind: entry.outcome, via: entry.via }, entry.paneId))
+				? theme.fg("muted", emptySummaryText({ kind: entry.outcome, via: entry.via, cause: entry.cause }, entry.paneId))
 				: entry.outcome === "failed"
 					? theme.fg("error", `Error: ${summary}`)
 					: summary,
@@ -341,9 +342,9 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			}
 
 			// The call blocks here until every child has settled. A human interrupting
-			// the turn is relayed by this wait: one Esc into every live sub pane, then
-			// every wait ends as `interrupted`. Nothing is closed and no child is killed,
-			// so the panes stay exactly where the human can keep driving them.
+			// the turn is relayed by this wait: one Esc into every live sub pane, every
+			// wait ends as `interrupted`, and the panes the relay typed into are closed
+			// behind it. Nothing is left running once the call returns.
 			const results = await watchBatch(runnings, signal, {
 				watchers,
 				columns,
