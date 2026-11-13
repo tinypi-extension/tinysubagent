@@ -12,6 +12,12 @@
  * A pane is closed only when the child is gone anyway — it reported, or its
  * session exited. A completion that came from a settle leaves the child alive at
  * its prompt and its pane open, as does every failure and cancellation.
+ *
+ * An interrupt of the call's turn is relayed to the children elsewhere, before
+ * this wait is even reached: one Esc into every live child pane, and nothing is
+ * closed. What this module does with the call's signal is narrower — it ends the
+ * waits, so the call can return while every pane stays exactly where the human
+ * can still use it.
  */
 
 import { herdrPaneClose } from "../herdr/cli.ts";
@@ -40,7 +46,7 @@ export interface WatchBatchDeps {
  * `signal` is the tool call's own: when the human interrupts the turn, every
  * in-flight wait resolves as cancelled so the call can return. A cancelled
  * child is never closed — its pane is left exactly where the human can still
- * use it.
+ * use it, with the interrupt's Esc already delivered by the caller.
  */
 export async function watchBatch(
 	runnings: readonly RunningSubagent[],

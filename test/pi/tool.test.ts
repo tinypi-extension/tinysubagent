@@ -148,41 +148,71 @@ function harness(
 }
 
 const STATUS_OK = JSON.stringify({ id: "cli:status", result: { running: true, version: "0.8.2" } });
-const STUB_LAYOUT = JSON.stringify({
-	id: "cli:pane",
-	result: {
-		layout: {
-			tab_id: "tab-1",
-			panes: [{ pane_id: "w1:p1", rect: { x: 0, y: 0, width: 211, height: 58 } }],
-		},
-	},
-});
-const STUB_OPENED = JSON.stringify({
-	id: "cli:plugin",
-	result: { plugin_pane: { pane: { pane_id: "w1:p1Z" } } },
-});
 const STUB_OK = '{"id":"cli:pane","result":{"ok":true}}';
+
+interface HerdrStubOptions {
+	/** Pane ids whose `pane send-keys` fails, the way a pane that is already gone does. */
+	readonly failSendKeys?: readonly string[];
+	/**
+	 * Hold `plugin pane open` until this path exists. That is the deterministic
+	 * gate for catching an abort while a spawn is genuinely in flight: no sleep
+	 * decides the ordering, the test does.
+	 */
+	readonly holdPaneOpenUntil?: string;
+}
 
 /**
  * A herdr binary that answers the whole spawn path, so no pane is really opened.
  *
+ * It is stateful on purpose: every `plugin pane open` hands out the next pane id
+ * (`w1:p1Z`, `w1:p2Z`, …) and `pane layout` reports the orchestrator plus every
+ * pane opened so far. A stateless stub that re-reports one id would let
+ * `applySpawnResizes` prune the tracker empty after every spawn, so a fan-out
+ * test would prove nothing.
+ *
  * Every invocation is appended to a log beside the stub, so a test can assert on
- * what the tool did not ask herdr to do: a cancelled child's pane must stay open.
+ * what the tool asked herdr to do — and on what it did not: a cancelled child's
+ * pane must stay open.
  */
-async function withSpawnHerdrStub<T>(fn: (calls: () => string[]) => Promise<T>): Promise<T> {
+async function withSpawnHerdrStub<T>(
+	fn: (calls: () => string[]) => Promise<T>,
+	options: HerdrStubOptions = {},
+): Promise<T> {
 	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-tool-herdr-"));
 	const stub = join(dir, "herdr");
 	const log = `${stub}.log`;
+	const state = `${stub}.state`;
+	const failSendKeys = ["", ...(options.failSendKeys ?? []), ""].join(" ");
 	writeFileSync(
 		stub,
 		[
 			"#!/usr/bin/env bash",
-			`printf '%s\\n' "$*" >> ${JSON.stringify(log)}`,
+			`printf '%s\\n' "$*" >> ${shellQuote(log)}`,
 			'case "$1 $2" in',
-			`  "status server") printf '%s' ${JSON.stringify(STATUS_OK).replaceAll("'", `'\\''`)} ;;`,
-			`  "plugin pane") printf '%s' ${JSON.stringify(STUB_OPENED).replaceAll("'", `'\\''`)} ;;`,
-			`  "pane layout") printf '%s' ${JSON.stringify(STUB_LAYOUT).replaceAll("'", `'\\''`)} ;;`,
-			'  "pane resize"|"pane rename"|"pane close") printf \'%s\' \'{"id":"cli:pane","result":{"ok":true}}\' ;;',
+			`  "status server") printf '%s' ${shellQuote(STATUS_OK)} ;;`,
+			`  "plugin pane")`,
+			`    gate=${shellQuote(options.holdPaneOpenUntil ?? "")}`,
+			'    if [ -n "$gate" ] && [ ! -f "$gate" ]; then while [ ! -f "$gate" ]; do sleep 0.01; done; fi',
+			// `mkdir` is the atomic part: two concurrent calls each get their own id,
+			// so a fan-out test cannot accidentally have both land on one pane.
+			"    n=1",
+			`    while ! mkdir ${shellQuote(state)}.$n 2>/dev/null; do n=$((n + 1)); done`,
+			'    printf \'{"id":"cli:plugin","result":{"plugin_pane":{"pane":{"pane_id":"w1:p%sZ"}}}}\' "$n" ;;',
+			'  "pane layout")',
+			`    n=$(ls -d ${shellQuote(state)}.* 2>/dev/null | wc -l | tr -d ' ')`,
+			'    panes=\'{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":211,"height":58}}\'',
+			'    i=1',
+			'    while [ "$i" -le "$n" ]; do',
+			'      panes="$panes,{\\"pane_id\\":\\"w1:p${i}Z\\",\\"rect\\":{\\"x\\":211,\\"y\\":$(((i - 1) * 29)),\\"width\\":100,\\"height\\":29}}"',
+			'      i=$((i + 1))',
+			'    done',
+			'    printf \'{"id":"cli:pane","result":{"layout":{"tab_id":"tab-1","panes":[%s]}}}\' "$panes" ;;',
+			'  "pane send-keys")',
+			`    case ${shellQuote(failSendKeys)} in`, // ` esc ` — the pane id is $3
+			'      *" $3 "*) printf \'{"error":{"code":"pane_not_found"}}\' >&2; exit 1 ;;',
+			'    esac',
+			`    printf '%s' ${shellQuote(STUB_OK)} ;;`,
+			`  "pane resize"|"pane rename"|"pane close") printf '%s' ${shellQuote(STUB_OK)} ;;`,
 			"esac",
 			"",
 		].join("\n"),
@@ -207,6 +237,11 @@ async function withSpawnHerdrStub<T>(fn: (calls: () => string[]) => Promise<T>):
 		else process.env.HERDR_BIN_PATH = saved;
 		rmSync(dir, { recursive: true, force: true });
 	}
+}
+
+/** Quote a value so the generated bash stub reads it back literally. */
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function executeTool(
@@ -1131,5 +1166,271 @@ test("a spawn that throws after opening a pane degrades to a partial batch", asy
 	} finally {
 		h.stop();
 		h.cleanup();
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// An interrupt relays Esc into every live child pane
+// ────────────────────────────────────────────────────────────────────────────
+
+/** The `pane send-keys` commands the tool issued, in order. */
+function sendKeyCalls(calls: readonly string[]): string[] {
+	return calls.filter((line) => line.startsWith("pane send-keys"));
+}
+
+/**
+ * Wait until the relay's fire-and-forget sends have all landed: the command log
+ * must stay unchanged for a quiet window before the test reads it. A fixed sleep
+ * would be either flaky or slow, since a cold `execFile` takes a while.
+ */
+async function quiet(calls: () => string[], timeoutMs = 4_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	let seen = -1;
+	while (Date.now() < deadline) {
+		const now = calls().length;
+		if (now === seen) return;
+		seen = now;
+		await new Promise((resolve) => setTimeout(resolve, 150));
+	}
+	throw new Error("the herdr command log never stopped changing");
+}
+
+test("aborting a waiting call relays exactly one Esc into its child's pane", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async (calls) => {
+			const controller = new AbortController();
+			const pending = executeTool(
+				h.tool,
+				h.ctx,
+				{ tasks: [{ agent: "worker", task: "a job whose turn ends early", name: "alpha" }] },
+				controller.signal,
+			);
+			await waitLaunched(h.cwd, 1);
+
+			controller.abort();
+			assert.match(contentText(await pending), /alpha — cancelled/);
+
+			// The relay is issued without await, so poll for it rather than racing it.
+			await until(async () => sendKeyCalls(calls()).length >= 1, "the interrupt never reached the child's pane");
+			await quiet(calls);
+			assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
+			assert.ok(
+				!calls().some((line) => line.startsWith("pane close")),
+				"the relay closed a pane instead of only interrupting it",
+			);
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("an abort relays into every live child pane, including an earlier call's", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async (calls) => {
+			const earlier = executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "the earlier call's job", name: "alpha" }],
+			});
+			await waitLaunched(h.cwd, 1);
+
+			const controller = new AbortController();
+			const later = executeTool(
+				h.tool,
+				h.ctx,
+				{ tasks: [{ agent: "worker", task: "the later call's job", name: "beta" }] },
+				controller.signal,
+			);
+			await waitLaunched(h.cwd, 2);
+			// Both calls are past their spawn loop and blocking, so both panes are
+			// tracked: the fan-out below is the interrupt's, not a spawn race.
+			await until(async () => h.watching() >= 2, "the two calls never reached their waits");
+
+			controller.abort();
+			await later;
+
+			await until(async () => sendKeyCalls(calls()).length >= 2, "the fan-out never reached both children");
+			await quiet(calls);
+			assert.deepEqual(sendKeyCalls(calls()).sort(), [
+				"pane send-keys w1:p1Z esc",
+				"pane send-keys w1:p2Z esc",
+			]);
+			assert.ok(
+				!calls().some((line) => line.startsWith("pane close")),
+				"the relay closed a pane instead of only interrupting it",
+			);
+
+			h.settleAll();
+			await earlier;
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a pane dropped from the tracker is not relayed to", async () => {
+	const columns = new LiveSubPanes();
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }), { columns });
+	try {
+		await withSpawnHerdrStub(async (calls) => {
+			const controller = new AbortController();
+			const pending = executeTool(
+				h.tool,
+				h.ctx,
+				{ tasks: [{ agent: "worker", task: "a job nobody waits for", name: "alpha" }] },
+				controller.signal,
+			);
+			await waitLaunched(h.cwd, 1);
+			await until(async () => h.watching() >= 1, "the child's wait was never registered");
+
+			// A pane this registration has forgotten: the relay must read the
+			// tracker, not rediscover the tab, so a gone child is never typed into.
+			columns.place("w1:p7Z");
+			columns.drop("w1:p7Z");
+
+			controller.abort();
+			await pending;
+
+			await until(async () => sendKeyCalls(calls()).length >= 1, "the live child was never relayed to");
+			await quiet(calls);
+			assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a relay that fails is silent and does not stop the rest of the fan-out", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(
+			async (calls) => {
+				const controller = new AbortController();
+				const pending = executeTool(
+					h.tool,
+					h.ctx,
+					{
+						tasks: [
+							{ agent: "worker", task: "the first job", name: "alpha" },
+							{ agent: "worker", task: "the second job", name: "beta" },
+						],
+					},
+					controller.signal,
+				);
+				await waitLaunched(h.cwd, 2);
+				await until(async () => h.watching() >= 2, "the batch never reached its wait");
+
+				controller.abort();
+				const result = await pending;
+
+				await until(async () => sendKeyCalls(calls()).length >= 2, "a failed relay stopped the fan-out");
+				await quiet(calls);
+				assert.deepEqual(sendKeyCalls(calls()).sort(), [
+					"pane send-keys w1:p1Z esc",
+					"pane send-keys w1:p2Z esc",
+				]);
+
+				const text = contentText(result);
+				assert.match(text, /alpha — cancelled/, "the failed relay changed the result");
+				assert.match(text, /beta — cancelled/, "the failed relay changed the result");
+				assert.notEqual(isErrorFlag(result), true, "a pane that is gone turned the interrupt into a failure");
+				assert.deepEqual(h.notices, [], "a failed relay warned the operator");
+				assert.equal(writtenScripts(h.cwd).length, 2, "a failed relay changed what was spawned");
+			},
+			{ failSendKeys: ["w1:p1Z"] },
+		);
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a second Esc is a no-op and never escalates to closing the pane", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async (calls) => {
+			const controller = new AbortController();
+			const pending = executeTool(
+				h.tool,
+				h.ctx,
+				{ tasks: [{ agent: "worker", task: "a job with two Escapes", name: "alpha" }] },
+				controller.signal,
+			);
+			await waitLaunched(h.cwd, 1);
+			await until(async () => h.watching() >= 1, "the child's wait was never registered");
+
+			controller.abort();
+			await pending;
+			// The call has already aborted; a second Esc asks for nothing new.
+			controller.abort();
+			h.settleAll();
+			await quiet(calls);
+
+			assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
+			assert.ok(
+				!calls().some((line) => line.startsWith("pane close")),
+				"the second Esc escalated to closing the pane",
+			);
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("an abort mid-spawn leaves the remaining requests unlaunched and their labels free", async () => {
+	const gateDir = mkdtempSync(join(tmpdir(), "tinysubagent-tool-gate-"));
+	const gate = join(gateDir, "open");
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(
+			async (calls) => {
+				const controller = new AbortController();
+				const pending = executeTool(
+					h.tool,
+					h.ctx,
+					{
+						tasks: [
+							{ agent: "worker", task: "the job that starts", name: "alpha" },
+							{ agent: "worker", task: "the job that never starts", name: "beta" },
+						],
+					},
+					controller.signal,
+				);
+
+				// The stub holds `plugin pane open` until the gate exists, so the abort
+				// lands while the first spawn is genuinely in flight — not on a sleep.
+				await waitLaunched(h.cwd, 1);
+				controller.abort();
+				writeFileSync(gate, "");
+				const result = await pending;
+
+				assert.equal(writtenScripts(h.cwd).length, 1, "the aborted batch launched its remaining request");
+				await until(async () => sendKeyCalls(calls()).length >= 1, "the child that opened during the abort got no Esc");
+				await quiet(calls);
+				assert.deepEqual(sendKeyCalls(calls()), ["pane send-keys w1:p1Z esc"]);
+				assert.match(contentText(result), /alpha — cancelled/);
+
+				// The unlaunched request's Label is free: a later call can reserve it.
+				const retry = await executeSettled(
+					h,
+					{ tasks: [{ agent: "worker", task: "the retried job", name: "beta" }] },
+					{ count: 2 },
+				);
+				assert.match(
+					contentText(retry),
+					/## beta — completed/,
+					"the unlaunched request's label was never released",
+				);
+			},
+			{ holdPaneOpenUntil: gate },
+		);
+	} finally {
+		h.stop();
+		h.cleanup();
+		rmSync(gateDir, { recursive: true, force: true });
 	}
 });
