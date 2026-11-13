@@ -20,8 +20,12 @@
  *
  * `--no-auth` drops the child's credentials instead, so pi refuses the prompt
  * before any run starts. A refusal is not an ending either: nothing reaches the
- * orchestrator while the pane is open, and closing that pane by hand is what
- * ends the batch — as `cancelled`.
+ * orchestrator while the pane is open, and no run ever begins — so the watcher's
+ * never-started grace is what ends the call, as `failed (never-started)`, with
+ * the pane left open for the `/login` that is still the fix.
+ *
+ * Both shapes are read from the *returned tool result*, because that is where a
+ * batch's reports arrive: nothing is ever steered into the orchestrator.
  */
 
 import { strict as assert } from "node:assert";
@@ -36,7 +40,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import tinysubagent from "../index.ts";
 import { discoverAgents } from "../src/config/agents.ts";
-import { herdrPaneExists, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
+import { currentPaneId, herdrPaneExists, herdrPaneLayout, herdrPluginInfo, PLUGIN_ID } from "../src/herdr/cli.ts";
 import { TOOL_NAME } from "../src/types.ts";
 
 const run = promisify(execFile);
@@ -235,21 +239,46 @@ const tool = tools[0] as {
 	) => Promise<{ content: { text: string }[]; details: Record<string, unknown> }>;
 };
 
-const ack = await tool.execute(
+// The child's pane is found by diffing the tab's layout against this pane: a
+// blocking call returns no details until the whole batch is over, so the ack is
+// not available while the child is held.
+const orchestratorPaneId = currentPaneId(process.env);
+if (!orchestratorPaneId) {
+	cleanup();
+	fail("not running inside a herdr pane (HERDR_PANE_ID is unset)");
+}
+
+/** The one child pane beside the orchestrator. */
+async function childPane(): Promise<string | null> {
+	const layout = await herdrPaneLayout(orchestratorPaneId!);
+	return (layout?.panes.map((pane) => pane.paneId) ?? []).find((id) => id !== orchestratorPaneId) ?? null;
+}
+
+async function waitChildPane(): Promise<string> {
+	const deadline = Date.now() + 30_000;
+	while (Date.now() < deadline) {
+		const found = await childPane();
+		if (found) return found;
+		await sleep(500);
+	}
+	cleanup();
+	return fail("no child pane appeared beside the orchestrator");
+}
+
+let finished = false;
+const call = tool.execute(
 	"call-1",
 	{ tasks: [{ agent: agent.name, task: "Reply with exactly the single word PONG." }] },
 	undefined,
 	undefined,
 	ctx,
-);
-const paneId = (ack.details.spawned as { paneId: string }[] | undefined)?.[0]?.paneId;
-if (!paneId) {
-	process.env.PI_HERDR_LAUNCH_PREFIX = previousPrefix;
-	cleanup();
-	fail(`nothing was spawned: ${JSON.stringify(ack.details)}`);
-}
+).then((result) => {
+	finished = true;
+	return result;
+});
+
+const paneId = await waitChildPane();
 console.log(`spawned pane ${paneId} against ${endpoint}`);
-console.log(ack.content[0]?.text ?? "(no ack text)");
 
 // Never leave a live child behind, however this harness dies.
 let reaped = false;
@@ -283,27 +312,41 @@ async function waitUntil(ready: () => boolean | Promise<boolean>, ms: number): P
 	return ready();
 }
 
-const bodyText = () => sent.map((entry) => entry.message.content).join("\n\n");
+/** Every detail line the child reported, for assertions on the returned result. */
+function detail(): { outcome?: string; via?: string; reason?: string; summary?: string | null } {
+	return ((callResult?.details?.results as { outcome?: string; via?: string; reason?: string }[]) ?? [])[0] ?? {};
+}
+
+/** The tool result, once the call has returned. */
+let callResult: Awaited<ReturnType<typeof tool.execute>> | null = null;
+const raceFinished = () => finished;
+
+/** Hold, then complain if the call returned or the orchestrator heard anything. */
+async function hold(ms: number, why: string): Promise<void> {
+	console.log(`\n── holding ${ms / 1000}s ${why} ──`);
+	await sleep(ms);
+	if (raceFinished()) {
+		callResult = await call;
+		assert.fail(`the blocking call returned ${why}: ${callResult.content[0]?.text ?? ""}`);
+	}
+	if (sent.length !== 0) {
+		fail(
+			`the orchestrator was messaged ${why} — that is not an ending.\n\n` +
+				sent.map((entry) => entry.message.content).join("\n\n"),
+		);
+	}
+	const alive = await herdrPaneExists(paneId);
+	console.log(`no message after ${ms / 1000}s; child pane still open: ${alive}`);
+	if (alive !== true) fail(`the child pane closed ${why} — the human cannot fix and drive it`);
+}
 
 if (noAuth) {
 	// ── The refused shape: a prompt pi will not start holds the pane ─────────
 	// The child has no usable credentials, so pi refuses the prompt before any
 	// run starts. Nothing may reach the orchestrator: a refusal is not an ending,
 	// and the pane is where the human runs /login and drives the child on.
-	const holdMs = 15_000;
-	console.log(`\n── holding ${holdMs / 1000}s with no usable credentials ──`);
-	await sleep(holdMs);
+	await hold(15_000, "with no usable credentials");
 
-	if (sent.length !== 0) {
-		fail(
-			`the orchestrator was steered for a prompt pi refused — a refusal is not an ending.\n\n${bodyText()}`,
-		);
-	}
-	const heldAlive = await herdrPaneExists(paneId);
-	console.log(`no steer after ${holdMs / 1000}s; child pane still open: ${heldAlive}`);
-	if (heldAlive !== true) {
-		fail("the child pane closed on a refused prompt — the human cannot log in and retry");
-	}
 	// Pin the shape itself, not just the silence: pi refused the prompt before
 	// any run started. The refusal is word-wrapped to the pane width, so match
 	// its stable words rather than one line.
@@ -312,26 +355,50 @@ if (noAuth) {
 	console.log(`child pane shows pi's refusal: ${refused}`);
 	if (!refused) fail(`the child did not refuse the prompt as expected:\n${heldText}`);
 
-	// The human gave up instead: closing the pane is what ends this wait.
-	console.log("\n── closing the refused child's pane by hand ──");
-	await run("herdr", ["pane", "close", paneId]);
-
-	const cancelled = await waitUntil(() => sent.length > 0, 30_000);
-	if (!cancelled) {
-		reap();
-		cleanup();
-		fail("closing the refused child's pane did not end the batch");
-	}
-	const body = bodyText();
-	assert.equal(sent.length, 1, `expected exactly one steer message, got ${sent.length}:\n${body}`);
-	assert.ok(
-		body.includes("cancelled (pane closed without reporting)"),
-		`expected the batch to end cancelled:\n${body}`,
+	// No run ever begins, so no report is ever written. What ends the call is
+	// whichever non-report ending the refusal leaves behind: a child that stays at
+	// its prompt is bounded by the never-started grace, while a child pi that quits
+	// writes a clean exit code. Either way nothing was reported, and the reader must
+	// be told that rather than handed the refusal scraped back as a summary.
+	console.log("\n── waiting for the refusal to end the call ──");
+	callResult = await call;
+	const text = callResult.content[0]?.text ?? "";
+	const outcome = detail();
+	const neverStarted = outcome.outcome === "failed" && outcome.reason === "never-started";
+	const exited = outcome.outcome === "completed" && outcome.via === "session-exit";
+	console.log(
+		`the refusal ended the call as ${outcome.outcome}` +
+			`${outcome.via ? ` (${outcome.via})` : ""}${outcome.reason ? ` (${outcome.reason})` : ""}`,
 	);
-	console.log("\n── steer message ──\n" + body);
+	assert.ok(neverStarted || exited, `the refusal was reported as neither never-started nor an exit:\n${text}`);
+	assert.equal(sent.length, 0, `the orchestrator was messaged after the refusal:\n${text}`);
+	// A never-started failure names itself and points at the pane it kept; a clean
+	// exit has to say the child never reported, instead of quoting the refusal back
+	// as if the child had handed it over.
+	if (neverStarted) {
+		assert.match(text, /failed \(never-started\)/, `the failure went unnamed:\n${text}`);
+		assert.match(text, new RegExp(`inspect pane \`?${paneId}`), `the open pane was not named:\n${text}`);
+	} else {
+		assert.match(text, /never reported/, `the summary-less ending went unexplained:\n${text}`);
+	}
+	assert.doesNotMatch(text, /completed \(reported\)/, `the refusal was reported as a report:\n${text}`);
+	console.log("\n── result text ──\n" + text);
+
+	// A never-started failure is the fixable case: the pane is where the human runs
+	// /login, so it must still be there. A session exit left no pane behind.
+	if (neverStarted) {
+		const stillOpen = await herdrPaneExists(paneId);
+		console.log(`refused child's pane still open after the failure: ${stillOpen}`);
+		if (stillOpen !== true) {
+			reap();
+			cleanup();
+			fail("a never-started failure closed the pane the human needs to log in on");
+		}
+	}
 
 	cleanup();
-	console.log("\nPASS a refused prompt held silently, and closing the pane ended the batch cancelled");
+	reap();
+	console.log("\nPASS a refused prompt held silently, then failed as never-started with its pane left open");
 	process.exit(0);
 }
 
@@ -344,19 +411,7 @@ console.log(
 		: "child pane did not show the error yet; holding anyway",
 );
 
-// The hold: nothing may reach the orchestrator, and the child must stay alive.
-const holdMs = retries ? 25_000 : 15_000;
-console.log(`\n── holding ${holdMs / 1000}s with the endpoint down ──`);
-await sleep(holdMs);
-
-if (sent.length !== 0) {
-	fail(
-		`the orchestrator was steered while the child was held — a provider error is not an ending.\n\n${bodyText()}`,
-	);
-}
-const heldAlive = await herdrPaneExists(paneId);
-console.log(`no steer after ${holdMs / 1000}s; child pane still open: ${heldAlive}`);
-if (heldAlive !== true) fail("the child pane closed on a provider error — the human cannot fix and drive it");
+await hold(retries ? 25_000 : 15_000, "with the endpoint down");
 
 // ── Recovery: healthy endpoint, human drives the same child to report ───────
 healthy = true;
@@ -368,18 +423,15 @@ await run("herdr", [
 	"The provider is fixed. Call subagent_report now with the single word PONG.",
 ]);
 
-const reported = await waitUntil(() => sent.length > 0, 90_000);
-if (!reported) {
-	reap();
-	cleanup();
-	fail("the held child never reported after the provider was fixed — the batch is wedged");
-}
-
-const body = bodyText();
-assert.equal(sent.length, 1, `expected exactly one steer message, got ${sent.length}:\n${body}`);
+console.log("waiting for the call to return the report...");
+callResult = await call;
+const body = callResult.content[0]?.text ?? "";
+assert.equal(detail().outcome, "completed", `expected a completion:\n${body}`);
+assert.equal(detail().via, "report", `the report was read as a settle, not the child's hand-back:\n${body}`);
 assert.ok(body.includes("completed (reported)"), `expected \`completed (reported)\`:\n${body}`);
 assert.ok(body.includes("PONG"), `the child's answer is missing from the report:\n${body}`);
-console.log("\n── steer message ──\n" + body);
+assert.equal(sent.length, 0, `the orchestrator was messaged although the result is the tool result:\n${body}`);
+console.log("\n── result text ──\n" + body);
 
 // The report is what ends the child: the pane must not outlive it.
 const closed = await waitUntil(async () => (await herdrPaneExists(paneId)) === false, 15_000);
@@ -391,5 +443,5 @@ if (!closed) {
 }
 
 cleanup();
-console.log("\nPASS a provider error held silently and the later report closed the batch");
+console.log("\nPASS a provider error held silently and the later report came back as the tool result");
 process.exit(0);

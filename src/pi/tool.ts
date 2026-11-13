@@ -1,13 +1,18 @@
 /**
- * The subagent tool definition: its schema, its execute body, and the TUI
- * rendering of its acknowledgment.
+ * The subagent tool definition: its schema, its blocking execute body, and the
+ * TUI rendering of its result.
+ *
+ * The call returns when the whole batch has finished: every child's report is
+ * carried in the one tool result, so nothing is delivered afterwards. A human
+ * interrupting the turn ends the wait with a cancelled result and leaves the
+ * children's panes open.
  *
  * Registration itself stays in `index.ts`: this module only builds the object
  * `pi.registerTool` is handed, so the register-or-not guard lives in one place.
  *
  * Every value `execute` and `renderResult` used to close over arrives through
  * `ToolDeps`, which keeps the per-registration state (the watcher set, the
- * column tracker, the shutdown flag) owned by the caller.
+ * column tracker) owned by the caller.
  */
 
 import { dirname, join } from "node:path";
@@ -15,6 +20,7 @@ import {
 	getAgentDir,
 	type ExtensionAPI,
 	type ExtensionContext,
+	type Theme,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -23,16 +29,17 @@ import { ackLine, skipNotice } from "../present/ack.ts";
 import {
 	NOTE_ALL_SKIPPED,
 	NOTE_NOTHING,
-	NOTE_STARTED,
 	renderAck,
 	type AckDetails,
 	type SpawnedEntry,
 } from "../present/ack-render.ts";
+import { buildResultDetails, buildResultText, emptySummaryText, oneLine } from "../present/result.ts";
 import { PROMPT_GUIDELINES, buildToolDescription } from "../present/describe.ts";
 import { discoverAgents } from "../config/agents.ts";
 import { type TinysubagentConfig } from "../config/config.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { collectRequests, resolveCwd, resolveProjectAgentDir } from "../children/requests.ts";
+import { errorMessage } from "../children/contract.ts";
 import { parentModelSpec, parentThinking, spawnOne } from "../children/spawn.ts";
 import type { RunningLabels } from "../children/running-labels.ts";
 import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.ts";
@@ -49,6 +56,58 @@ function failure(message: string) {
 		details: { status: "error", error: message },
 		isError: true,
 	};
+}
+
+/**
+ * The coloured form of a finished batch: one block per child, then the pre-flight
+ * notices. Built from `ResultDetail`, so it draws exactly what the model reads,
+ * with each child's ending coloured by how it ended.
+ */
+function renderReport(details: AckDetails, theme: Theme): string[] {
+	const lines: string[] = [];
+
+	for (const entry of details.results ?? []) {
+		if (lines.length > 0) lines.push("");
+		// Green for a child that handed work back, red for a failure, yellow for a
+		// cancellation — the ending the reader has to act on.
+		const color = entry.outcome === "completed" ? "success" : entry.outcome === "failed" ? "error" : "warning";
+		lines.push(
+			[
+				theme.fg("toolTitle", theme.bold(entry.name)),
+				theme.fg("muted", "—"),
+				theme.fg(color, entry.status),
+				theme.fg("muted", entry.elapsed),
+			].join(" "),
+		);
+
+		const meta = [
+			entry.agent ? `agent \`${entry.agent}\`` : null,
+			entry.profile ? `profile \`${entry.profile}\`` : null,
+			`pane \`${entry.paneId}\``,
+		].filter((part): part is string => part !== null);
+		lines.push(theme.fg("muted", meta.join(" · ")));
+
+		lines.push(`${theme.fg("muted", "Task:")} ${oneLine(entry.task)}`);
+
+		const summary = entry.summary?.trim() ?? "";
+		lines.push(
+			summary === ""
+				? theme.fg("muted", emptySummaryText({ kind: entry.outcome, via: entry.via }, entry.paneId))
+				: entry.outcome === "failed"
+					? theme.fg("error", `Error: ${summary}`)
+					: summary,
+		);
+	}
+
+	// What never became a child, after the children that did.
+	const notices = [
+		...(details.failed ?? []).map((entry) => theme.fg("error", `failed ${entry.agent}: ${entry.error}`)),
+		...(details.skipped ?? []).map((label) => theme.fg("muted", skipNotice(label))),
+		...(details.warnings ?? []).map((warning) => theme.fg("warning", warning)),
+	];
+	if (notices.length > 0) lines.push("", ...notices);
+
+	return lines;
 }
 
 /** Everything the tool body needs from the registration that built it. */
@@ -81,8 +140,6 @@ export interface ToolDeps {
 	 * so a caller that never wants deduplication (tests, smoke runs) can omit it.
 	 */
 	reportedWarnings?: Set<string>;
-	/** Reads the caller's shutdown flag, so delivery stops after it. */
-	isShuttingDown: () => boolean;
 	/**
 	 * The routing seam: when a classifier or SystemOne key is configured,
 	 * rewrites each request's profile before the validation loop. Built per
@@ -93,17 +150,7 @@ export interface ToolDeps {
 }
 
 export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> {
-	const {
-		pi,
-		config,
-		parameters,
-		advertisedAgents,
-		capability,
-		columns,
-		watchers,
-		runningLabels,
-		isShuttingDown,
-	} = deps;
+	const { pi, config, parameters, advertisedAgents, capability, columns, watchers, runningLabels } = deps;
 
 	return {
 		name: TOOL_NAME,
@@ -113,7 +160,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 		promptGuidelines: PROMPT_GUIDELINES,
 		parameters,
 
-		async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx: ExtensionContext) {
+		async execute(_toolCallId, rawParams, signal, _onUpdate, ctx: ExtensionContext) {
 			const params = rawParams as ToolParams;
 
 			const problem = await capability.ensureReady();
@@ -157,51 +204,51 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			let context: SpawnContext;
 			try {
 				if (routingActive(config)) {
-				const hasAutoRoutedRequests = accepted.some(
-					(request) => !request.profile?.trim() && discovered.agents.some((agent) => agent.name === request.agent),
-				);
-				if (config.classifier && hasAutoRoutedRequests) {
-					ctx.ui?.notify(
-						`tinysubagent: routing profile with classifier model ${config.classifier.raw}.`,
-						"info",
+					const hasAutoRoutedRequests = accepted.some(
+						(request) => !request.profile?.trim() && discovered.agents.some((agent) => agent.name === request.agent),
 					);
+					if (config.classifier && hasAutoRoutedRequests) {
+						ctx.ui?.notify(
+							`tinysubagent: routing profile with classifier model ${config.classifier.raw}.`,
+							"info",
+						);
+					}
+					await routeProfiles(accepted, config, {
+						route: deps.route(ctx),
+						agents: discovered.agents,
+						warn: (message) => routeWarnings.push(message),
+					});
 				}
-				await routeProfiles(accepted, config, {
-					route: deps.route(ctx),
+
+				// Validate every profile before opening any pane, so a bad batch fails
+				// whole rather than halfway.
+				for (const request of accepted) {
+					const profile = resolveProfile(config, request.profile, {
+						model: parentModelSpec(ctx),
+						thinking: parentThinking(ctx),
+					});
+					if (!profile.ok) {
+						releaseAll(accepted);
+						return failure(profile.error);
+					}
+				}
+
+				const sessionFile = ctx.sessionManager.getSessionFile();
+				const projectAgentDir = resolveProjectAgentDir(cwd);
+				context = {
+					cwd,
+					agentDir: projectAgentDir ?? baseAgentDir,
+					agentDirOverride: projectAgentDir,
+					sessionDir: sessionFile ? dirname(sessionFile) : join(baseAgentDir, "sessions"),
+					sessionId: ctx.sessionManager.getSessionId(),
+					env: process.env,
+					allToolNames: pi.getAllTools().map((tool) => (tool as { name: string }).name),
 					agents: discovered.agents,
-					warn: (message) => routeWarnings.push(message),
-				});
-			}
-
-			// Validate every profile before opening any pane, so a bad batch fails
-			// whole rather than halfway.
-			for (const request of accepted) {
-				const profile = resolveProfile(config, request.profile, {
-					model: parentModelSpec(ctx),
-					thinking: parentThinking(ctx),
-				});
-				if (!profile.ok) {
-					releaseAll(accepted);
-					return failure(profile.error);
-				}
-			}
-
-			const sessionFile = ctx.sessionManager.getSessionFile();
-			const projectAgentDir = resolveProjectAgentDir(cwd);
-			context = {
-				cwd,
-				agentDir: projectAgentDir ?? baseAgentDir,
-				agentDirOverride: projectAgentDir,
-				sessionDir: sessionFile ? dirname(sessionFile) : join(baseAgentDir, "sessions"),
-				sessionId: ctx.sessionManager.getSessionId(),
-				env: process.env,
-				allToolNames: pi.getAllTools().map((tool) => (tool as { name: string }).name),
-				agents: discovered.agents,
-				config,
-				parentModel: parentModelSpec(ctx),
-				parentThinking: parentThinking(ctx),
-				columns,
-				reportedWarnings: deps.reportedWarnings,
+					config,
+					parentModel: parentModelSpec(ctx),
+					parentThinking: parentThinking(ctx),
+					columns,
+					reportedWarnings: deps.reportedWarnings,
 				};
 			} catch (error) {
 				releaseAll(accepted);
@@ -216,20 +263,29 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 
 			try {
 				for (const request of accepted) {
-					const result = await spawnOne(request, context);
-					if (result.ok) {
-						runnings.push(result.running);
-						spawned.push({
-							// `running.agent` is null only for a child that was never launched,
-							// which cannot reach here — fall back to the request anyway.
-							agent: result.running.agent ?? request.agent,
-							name: result.running.name,
-							paneId: result.running.paneId,
-							profile: result.running.profile,
-							warnings: result.warnings,
-						});
-					} else {
-						failures.push({ agent: request.agent, error: result.error });
+					// A throw is a spawn refusal like any other, and this loop is the seam
+					// that keeps one from taking the batch with it: `spawnOne` can fail after
+					// a pane is already open, and letting that escape `execute` would strand
+					// the children that did start — their Labels held, their panes open, and
+					// no watcher to end their wait.
+					try {
+						const result = await spawnOne(request, context);
+						if (result.ok) {
+							runnings.push(result.running);
+							spawned.push({
+								// `running.agent` is null only for a child that was never launched,
+								// which cannot reach here — fall back to the request anyway.
+								agent: result.running.agent ?? request.agent,
+								name: result.running.name,
+								paneId: result.running.paneId,
+								profile: result.running.profile,
+								warnings: result.warnings,
+							});
+						} else {
+							failures.push({ agent: request.agent, error: result.error });
+						}
+					} catch (error) {
+						failures.push({ agent: request.agent, error: errorMessage(error) });
 					}
 				}
 			} finally {
@@ -241,52 +297,71 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				}
 			}
 
-			if (runnings.length > 0) {
-				void watchBatch(runnings, {
-					pi,
-					watchers,
-					isShuttingDown,
-					columns,
-					// The Label is held for exactly as long as its child is running: a
-					// settled child — reported, failed, or gone — frees the name again.
-					releaseLabel: (label) => runningLabels.release(label),
-				});
-			}
-
-			const lines = [
-				...spawned.map((entry) => ackLine(entry)),
+			// What never became a child, in the order the model reads it. Routing
+			// warnings are diagnostic text too: the choice fell back to `current` and
+			// the model should know why.
+			const warnings = [...spawned.flatMap((entry) => entry.warnings), ...routeWarnings];
+			const notices = [
 				...failures.map((entry) => `failed ${entry.agent}: ${entry.error}`),
 				...skipped.map((label) => skipNotice(label)),
-				// Routing warnings are diagnostic text for the model — the choice
-				// fell back to `current` and the model should know why. `renderResult`
-				// stays as-is deliberately: it is the same parts with a theme, so
-				// plain-text lines the renderer has never been taught about would
-				// only lose their meaning in colour.
-				...routeWarnings,
+				...warnings,
 			];
 
-			// A skip is an answer, not a failure: nothing was refused, the work the
-			// orchestrator asked for is already running under that label. Only a
-			// batch that started nothing and refused nothing is the plain nothing.
-			const note =
-				runnings.length > 0
-					? NOTE_STARTED
-					: failures.length === 0 && skipped.length > 0
-						? NOTE_ALL_SKIPPED
-						: NOTE_NOTHING;
-			// `skipped` is its own status so a caller can tell "already running"
-			// from a refusal without re-reading the text.
-			const status = runnings.length > 0 ? "started" : failures.length === 0 && skipped.length > 0 ? "skipped" : "error";
+			// Nothing to wait for: the call already has its whole answer. A skip is an
+			// answer, not a failure — the work the orchestrator asked for is already
+			// running under that label — so only a batch that refused everything is
+			// the plain nothing, and only that sets `isError`.
+			if (runnings.length === 0) {
+				const skippedOnly = failures.length === 0 && skipped.length > 0;
+				const text = [
+					...spawned.map((entry) => ackLine(entry)),
+					...notices,
+					skippedOnly ? NOTE_ALL_SKIPPED : NOTE_NOTHING,
+				]
+					.filter((part) => part !== "")
+					.join("\n");
 
+				return {
+					content: [{ type: "text" as const, text }],
+					details: {
+						status: skippedOnly ? "skipped" : "error",
+						spawned,
+						failed: failures,
+						skipped,
+						warnings,
+					},
+					isError: !skippedOnly,
+				};
+			}
+
+			// The call blocks here until every child has settled. A human interrupting
+			// the turn aborts `signal`, which ends the waits as `cancelled` and leaves
+			// the panes open — the children are never closed on the caller's behalf.
+			const results = await watchBatch(runnings, signal, {
+				watchers,
+				columns,
+				// The Label is held for exactly as long as its child is running: a
+				// settled child — reported, failed, or gone — frees the name again.
+				releaseLabel: (label) => runningLabels.release(label),
+			});
+
+			// The batch ran, so its report is content whatever it says: a failed or
+			// cancelled child is an ending the orchestrator has to read, not an error
+			// of this call.
 			return {
-				content: [{ type: "text" as const, text: `${lines.join("\n")}\n\n${note}` }],
+				content: [
+					{
+						type: "text" as const,
+						text: [buildResultText(results), ...notices].filter((part) => part !== "").join("\n\n"),
+					},
+				],
 				details: {
-					status,
+					...buildResultDetails(results),
 					spawned,
 					failed: failures,
 					skipped,
+					warnings,
 				},
-				isError: runnings.length === 0 && (failures.length > 0 || skipped.length === 0),
 			};
 		},
 
@@ -297,6 +372,18 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 		 */
 		renderResult(result, _options, theme) {
 			const details = result.details as AckDetails | undefined;
+
+			// A finished batch: the report is the result, so draw it as one.
+			if (details?.status === "finished" && details.results) {
+				return new Text(renderReport(details, theme).join("\n"), 0, 0);
+			}
+
+			// Only a transcript from before the blocking refactor gets here: once a batch
+			// has started, `execute` always returns `status: "finished"` above, so the
+			// spawn-line rendering below replays the old acknowledgment — a call that had
+			// returned while its children were still running. Note that it reads warnings
+			// from `spawned[]`, which is where the old path carried them; the live path
+			// reports them on `details.warnings`.
 			const spawned = details?.spawned ?? [];
 
 			if (spawned.length === 0) {
@@ -316,8 +403,6 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				),
 				...(details?.skipped ?? []).map((label) => theme.fg("muted", skipNotice(label))),
 				...spawned.flatMap((entry) => entry.warnings.map((warning) => theme.fg("warning", warning))),
-				"",
-				theme.fg("muted", NOTE_STARTED),
 			];
 			return new Text(lines.join("\n"), 0, 0);
 		},

@@ -11,6 +11,7 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { ResolvedProfile } from "../config/profiles.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../types.ts";
 import { ackParts, type SpawnAck } from "./ack.ts";
+import type { ResultDetail } from "./result.ts";
 
 /** One child as the spawn acknowledgment reports it. */
 export interface SpawnedEntry {
@@ -21,20 +22,24 @@ export interface SpawnedEntry {
 	warnings: string[];
 }
 
+/** Every part of a call's outcome the TUI renders: spawn lines or a finished report. */
 export interface AckDetails {
+	/** `started`, `finished`, `skipped`, or `error`. */
 	status?: string;
 	error?: string;
 	spawned?: SpawnedEntry[];
 	failed?: { agent: string; error: string }[];
 	/** Labels skipped because a subagent already holds them. Informational. */
 	skipped?: string[];
+	/** Role warnings and routing warnings, in the order the model reads them. */
+	warnings?: string[];
+	/** A finished batch's results, so the report can be drawn with colour. */
+	results?: ResultDetail[];
 }
 
-export const NOTE_STARTED =
-	"Results arrive as a steer message when the subagents finish. Wait for that message — do nothing else: end your turn, and do not poll or start unrelated work.";
 export const NOTE_NOTHING = "Nothing was launched.";
 export const NOTE_ALL_SKIPPED =
-	"Nothing was launched: every requested label is already running. Wait for those subagents' results instead of starting new ones.";
+	"Nothing was launched: every requested label is already running. Those children's reports come back in the result of the call that started them — nothing is delivered here, and nothing arrives later.";
 
 /** Thinking levels carry their own theme colours, so the level is readable at a glance. */
 export const THINKING_COLORS: Record<ThinkingLevel, ThemeColor> = {

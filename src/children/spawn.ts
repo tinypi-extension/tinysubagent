@@ -88,7 +88,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 	// Nested delegation is refused rather than half-supported. A grandchild's
 	// result lands in the subagent's own session, and the batch contract has no
-	// way to carry it up: the orchestrator's steer delivers what its direct
+	// way to carry it up: the orchestrator's result carries what its direct
 	// children report, and the subagent has no report that carries a
 	// grandchild's payload. Failing the spawn says so, instead of losing work
 	// quietly later.
@@ -195,6 +195,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			agent: request.agent,
 			profile: { name: profile.name, model: profile.model, thinking: profile.thinking },
 			paneId,
+			writesSession: harness.writesSession,
 			sessionFile: paths.childSessionFile,
 			exitCodeFile: paths.exitCodeFile,
 			reportFile: paths.reportFile,

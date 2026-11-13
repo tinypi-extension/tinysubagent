@@ -3,26 +3,25 @@
  *
  * `scripts/smoke.ts` reimplements the spawn recipe; this drives the real
  * extension instead. It loads `index.ts`, registers the tool through a stub
- * `ExtensionAPI`, calls `execute` with real arguments, and then waits to see the
- * steer message come out the other end.
+ * `ExtensionAPI`, calls `execute` with real arguments, and waits for the call to
+ * return the whole batch's report.
  *
  * What this proves, with a real herdr pane and a real pi child:
  *
  *   - the tool is registered and its schema is accepted,
- *   - `execute` returns immediately with an acknowledgement, not a result,
- *   - the watcher resolves the child on its own,
- *   - exactly one steer message is delivered, with `triggerTurn` and `deliverAs:
- *     "steer"` — the options that make it wake the parent rather than queue,
+ *   - `execute` blocks until the child is done and returns its report as the
+ *     tool result, rather than acknowledging and delivering later,
+ *   - nothing is sent to the parent session — no steer message at all,
  *   - the pane is gone once the child is done.
  *
- * It cannot prove pi acts on the steer; that is pi's side of the contract. It
- * proves every part of the message and the options handed to it.
+ * It cannot prove the model reads the result; that is pi's side of the contract.
+ * It proves the call carries every part of the report.
  *
  * Usage: node scripts/smoke-tool.ts [agent] [--parallel]
  *
- * `--parallel` spawns two children at once. A child that errors is not reported:
- * it holds its pane like an unreported turn end. `npm run smoke:provider-error`
- * exercises that hold and its recovery on purpose.
+ * `--parallel` spawns two children at once. A child that errors reports as a
+ * failure inside the returned result. `npm run smoke:provider-error` exercises
+ * the never-started hold on purpose.
  */
 
 import { strict as assert } from "node:assert";
@@ -73,11 +72,9 @@ function cleanup(): void {
 // ── The stub surface pi would provide ───────────────────────────────────────
 const tools: Record<string, unknown>[] = [];
 const listeners = new Map<string, unknown>();
+// Kept only to prove it stays empty: the call delivers its result, so nothing is
+// ever pushed into the parent session.
 const sent: { message: { content: string; customType?: string }; options: unknown }[] = [];
-let steerResolve: (() => void) | null = null;
-const steered = new Promise<void>((resolve) => {
-	steerResolve = resolve;
-});
 
 const api = {
 	on(event: string, handler: unknown) {
@@ -88,7 +85,6 @@ const api = {
 	},
 	sendMessage(message: { content: string; customType?: string }, options: unknown) {
 		sent.push({ message, options });
-		steerResolve?.();
 	},
 	getAllTools() {
 		// As a real session would report them: the spawn tool itself is among them,
@@ -159,18 +155,16 @@ const params = parallel
 		};
 
 const startedAt = Date.now();
-const ack = await tool.execute("call-1", params, undefined, undefined, ctx);
-const ackMs = Date.now() - startedAt;
+const result = await tool.execute("call-1", params, undefined, undefined, ctx);
+const elapsedMs = Date.now() - startedAt;
 
-console.log(`\n── execute() returned after ${ackMs}ms ──`);
-console.log(ack.content[0]?.text ?? "(no text)");
-console.log(`details: ${JSON.stringify(ack.details)}`);
+console.log(`\n── execute() returned after ${(elapsedMs / 1000).toFixed(1)}s ──`);
+console.log(result.content[0]?.text ?? "(no text)");
 
-// The whole point of fire-and-forget: the call must not wait for the subagent.
-if (ackMs > 10_000) fail(`execute() blocked for ${ackMs}ms — it must return once the panes are open`);
-if (ack.isError === true) fail("execute() reported an error");
-if (sent.length !== 0) fail(`a steer message was sent before the child finished (${sent.length})`);
-const spawned = (ack.details.spawned ?? []) as { paneId: string; warnings: string[] }[];
+// The whole point of the change: the call itself is the delivery.
+if (result.isError === true) fail("execute() reported an error");
+if (sent.length !== 0) fail(`something was sent to the parent session (${sent.length}) — the result is the return value`);
+const spawned = (result.details.spawned ?? []) as { paneId: string; warnings: string[] }[];
 if (spawned.length !== (parallel ? 2 : 1)) fail(`expected ${parallel ? 2 : 1} spawned pane(s), got ${spawned.length}`);
 // A role whose tools all resolve must not warn: a spurious warning here would mean
 // the allowlist expansion is wrong, which is how a child silently loses tools.
@@ -178,42 +172,25 @@ for (const entry of spawned) {
 	if (entry.warnings.length > 0) fail(`unexpected warning: ${entry.warnings.join("; ")}`);
 }
 
-const timeout = setTimeout(() => fail("timed out after 180s waiting for the steer message"), 180_000);
-await steered;
-clearTimeout(timeout);
-
-// ── The steer message ───────────────────────────────────────────────────────
-assert.equal(sent.length, 1, `expected exactly one combined steer message, got ${sent.length}`);
-const [steer] = sent;
-if (!steer) fail("no steer message");
-
-console.log(`\n── the steer message, ${((Date.now() - startedAt) / 1000).toFixed(1)}s after execute() ──`);
-console.log(`customType: ${steer.message.customType}`);
-console.log(`options:    ${JSON.stringify(steer.options)}`);
-console.log(steer.message.content);
-
-// These two options are the entire wake-up contract.
-assert.deepEqual(steer.options, { triggerTurn: true, deliverAs: "steer" });
-assert.equal(steer.message.customType, "tinysubagent_result");
-
+// The report is the result, so it has to carry every part the model needs.
+const report = result.content[0]?.text ?? "";
 const wanted = parallel ? ["ALPHA", "BETA"] : ["PONG"];
 for (const fragment of wanted) {
-	assert.ok(steer.message.content.includes(fragment), `steer message is missing ${fragment}`);
+	if (!report.includes(fragment)) fail(`the result is missing ${fragment}`);
 }
 // A child that skips the report means the hand-back contract is broken, not that
 // the model was conflicted: the prompts no longer tell it to avoid tools.
-assert.ok(
-	steer.message.content.includes("completed (reported)"),
-	`steer message is not labelled \`completed (reported)\` — the child fell back to scraping its session file:\n${steer.message.content}`,
-);
-// Every child must be labelled, which is what makes one message usable for a batch.
+if (!report.includes("completed (reported)")) {
+	fail(`the child did not report — it fell back to scraping its session file:\n${report}`);
+}
+// Every child must be labelled, which is what makes one result usable for a batch.
 for (const label of parallel ? ["alpha", "beta"] : ["worker"]) {
-	assert.ok(steer.message.content.includes(label), `steer message is missing the label ${label}`);
+	if (!report.includes(label)) fail(`the result is missing the label ${label}`);
 }
 
 // ── The pane ────────────────────────────────────────────────────────────────
-// A finished child's pane must not outlive it. A held child would, which is the
-// provider-error smoke's subject, not this one.
+// A finished child's pane must not outlive the wait. A never-started child would
+// keep it, which is the provider-error smoke's subject, not this one.
 const paneIds = spawned.map((entry) => entry.paneId);
 await new Promise((resolve) => setTimeout(resolve, 1_000));
 for (const paneId of paneIds) {
@@ -223,5 +200,5 @@ for (const paneId of paneIds) {
 }
 
 cleanup();
-console.log("\nPASS the registered tool spawned, waited, and delivered one steer message");
+console.log("\nPASS the registered tool blocked, returned the report, and sent nothing");
 process.exit(0);

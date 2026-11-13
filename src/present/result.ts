@@ -1,11 +1,10 @@
 /**
- * Turning finished subagents into the one message the orchestrator sees.
+ * Turning a finished batch into the one tool result the orchestrator sees.
  *
  * Parallel children settle independently, but they are reported together: the
  * caller asked one question, so it gets one answer, with every child labelled.
- * That is a deliberate departure from the reference implementation, which sends
- * one steer message per child and lets the orchestrator infer which reply
- * belongs to which request from the surrounding conversation.
+ * The tool call blocks until the batch is over, so this text is the return
+ * value rather than a later message.
  */
 
 import { resolvedProfileLabel } from "../config/profiles.ts";
@@ -41,7 +40,8 @@ export function statusLabel(outcome: SubagentOutcome): string {
 			return outcome.via === "session-exit" ? "completed (session exited)" : "completed";
 		case "failed":
 			// `exit` means the process died before it could report how it went;
-			// anything else is an older build's sidecar declaring how it ended.
+			// anything else — an error, a missing output, a run that never started —
+			// is the reader's own reading of how it ended.
 			return outcome.reason === "exit" ? `failed (exit ${outcome.exitCode})` : `failed (${outcome.reason})`;
 		case "cancelled":
 			return "cancelled (pane closed without reporting)";
@@ -49,7 +49,7 @@ export function statusLabel(outcome: SubagentOutcome): string {
 }
 
 /** Collapse a task to a single readable line for the result header. */
-function oneLine(task: string, limit = 160): string {
+export function oneLine(task: string, limit = 160): string {
 	const flat = task.replace(/\s+/g, " ").trim();
 	return flat.length <= limit ? flat : `${flat.slice(0, limit - 1)}…`;
 }
@@ -64,13 +64,33 @@ function header(results: readonly SubagentResult[]): string {
 	return `${results.length} subagents finished (${detail}).`;
 }
 
+/**
+ * What to print in place of a summary a child did not leave.
+ *
+ * A failed child's pane is worth pointing at — the error is on screen there. A
+ * completion without a summary never reported at all, and how the wait ended
+ * decides where to look: a turn-end leaves the child alive at its prompt with its
+ * pane open, while a session exit is gone and there is nothing to inspect.
+ */
+export function emptySummaryText(
+	outcome: { kind: SubagentOutcome["kind"]; via?: string },
+	paneId: string,
+): string {
+	if (outcome.kind === "completed") {
+		return outcome.via === "turn-end"
+			? "_(no summary: the child never reported — its turn ended without one, and its pane is still open)_"
+			: "_(no summary: the child never reported before its session exited)_";
+	}
+	return `_(no output captured — inspect pane \`${paneId}\`)_`;
+}
+
 function section(result: SubagentResult, index: number, total: number): string {
 	const summary = result.outcome.summary?.trim() ?? "";
 	// A failed child's summary is an error message, not a report — say so. Without
 	// the label it reads as the subagent's own account of its work.
 	const body =
 		summary === ""
-			? `_(no output captured — inspect pane \`${result.paneId}\`)_`
+			? emptySummaryText(result.outcome, result.paneId)
 			: result.outcome.kind === "failed"
 				? `**Error:** ${summary}`
 				: summary;
@@ -94,15 +114,42 @@ function section(result: SubagentResult, index: number, total: number): string {
 	].join("\n\n");
 }
 
-/** The steer body: a header plus one labelled section per child. */
+/** The report body: a header plus one labelled section per child. */
 export function buildResultText(results: readonly SubagentResult[]): string {
 	if (results.length === 0) return "No subagents finished.";
 	const sections = results.map((result, index) => section(result, index, results.length));
 	return [header(results), ...sections].join("\n\n---\n\n");
 }
 
-/** Structured payload for the TUI and for whatever else wants the raw outcome. */
-export function buildResultDetails(results: readonly SubagentResult[]): Record<string, unknown> {
+/**
+ * One child in the machine-readable result: what the TUI renders and what a
+ * consumer wanting the raw outcome reads. `status`, `elapsed` and `outcome` are
+ * precomputed, so a renderer needs no second pass over the outcome.
+ */
+export interface ResultDetail {
+	name: string;
+	agent: string | null;
+	profile: string | null;
+	paneId: string;
+	sessionFile: string;
+	task: string;
+	elapsedMs: number;
+	elapsed: string;
+	status: string;
+	outcome: SubagentOutcome["kind"];
+	via?: string;
+	reason?: string;
+	exitCode?: number | null;
+	summary: string | null;
+}
+
+export interface ResultDetails {
+	status: "finished";
+	results: ResultDetail[];
+}
+
+/** The structured form of the very batch the text describes. */
+export function buildResultDetails(results: readonly SubagentResult[]): ResultDetails {
 	return {
 		status: "finished",
 		results: results.map((result) => {
@@ -115,12 +162,14 @@ export function buildResultDetails(results: readonly SubagentResult[]): Record<s
 				sessionFile: result.sessionFile,
 				task: result.task,
 				elapsedMs: result.elapsedMs,
+				elapsed: formatDuration(result.elapsedMs),
+				status: statusLabel(outcome),
 				outcome: outcome.kind,
 				via: outcome.kind === "completed" ? outcome.via : undefined,
 				reason: outcome.kind === "failed" ? outcome.reason : undefined,
 				exitCode: outcome.kind === "failed" ? outcome.exitCode : undefined,
 				summary: outcome.summary,
-			};
+			} satisfies ResultDetail;
 		}),
 	};
 }

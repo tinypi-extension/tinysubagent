@@ -2,10 +2,10 @@
 
 Herdr-native subagent spawning for [pi](https://pi.dev). Define roles as markdown files and
 delegate to them. Each subagent runs in a shared right-hand [herdr](https://herdr.dev/) column
-with its own context window, and reports back as a steer message.
+with its own context window, and hands its report back as this call's result.
 
-- **Fire-and-forget:** spawns return immediately; results wake your session later.
-- **Parallel batches:** one or more tasks (up to 4), reporting together in one message.
+- **One blocking call:** the tool waits for the whole batch and returns every report in one result. No fire-and-forget, no second batch until it returns.
+- **Parallel batches:** one or more tasks (up to 4), reporting together in one result.
 - **Model profiles:** optional named profiles with a shared `model` and `thinking` setting for pi or agy.
 - **Per-child `env`:** static variables for subagents, without touching the orchestrator's env.
 
@@ -92,7 +92,7 @@ Notes on `tools`:
 - A `-name` entry subtracts, and `-*` drops the floor for that role. See
   [adding to and subtracting from the floor](#adding-to-and-subtracting-from-the-floor).
 - A literal name is kept even if nothing matches, so a renamed tool warns instead of silently
-  narrowing the list. Unmatched wildcards also warn on the spawn acknowledgment.
+  narrowing the list. Unmatched wildcards also warn in the call's result.
 - Nested delegation is unsupported. `*` matches `subagent` too, so a role that wants breadth
   without the spawn tool subtracts it.
 
@@ -235,7 +235,11 @@ instead of the model choosing `profile` itself:
   it falls back to `jev-latest`.
 - **Every failure falls back to `current`**, never delaying a spawn beyond a 2 s budget.
 
-When a subagent's turn ends without a `subagent_report` call, the child reminds it to report. 
+When a subagent's turn ends without a `subagent_report` call, the child reminds it to report, twice. The
+settle after that budget is spent writes a content-free completion: the waiting call ends as
+`completed (turn-end)` with no summary instead of hanging, and the pane stays open. A child whose pi
+refused the prompt (no credentials, unknown model) is reported `failed (never-started)` once a 90s grace
+has passed with nothing written, so `/login` in that pane still buys you the work.
 
 ## Environment variables
 

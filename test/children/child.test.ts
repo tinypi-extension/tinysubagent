@@ -413,19 +413,39 @@ test("an unreported finished result is reminded at once, with no check", async (
 	assert.match(stub.sent[0]!.content, /subagent_report/);
 });
 
-test("reminders still stop at the cap", async () => {
-	const stub = stubChildApi();
-	tinysubagentChild(stub.api as never, { readFinal: () => "Done." });
-	const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
-	end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
-	const settled = stub.listeners.get("agent_settled") as (
-		event: unknown,
-		ctx: { shutdown: () => void },
-	) => void;
+test("reminders still stop at the cap, and the cap ends the wait", async () => {
+	await withReportFile(async (report) => {
+		const stub = stubChildApi();
+		tinysubagentChild(stub.api as never, { readFinal: () => "Done." });
+		const end = stub.listeners.get("agent_end") as (event: unknown, ctx: unknown) => void;
+		end({ messages: [{ role: "assistant", stopReason: "stop" }] }, stub.ctx);
+		const settled = stub.listeners.get("agent_settled") as (
+			event: unknown,
+			ctx: { shutdown: () => void },
+		) => void;
 
-	for (let i = 0; i < MAX_REPORT_REMINDERS + 2; i += 1) {
+		// One settle per reminder, and not a byte on disk yet: a reminder has gone out
+		// each time, so the model still has its chance to make the call itself.
+		for (let i = 0; i < MAX_REPORT_REMINDERS; i += 1) {
+			await settled({}, stub.ctx);
+			assert.equal(existsSync(report), false, `a report was written after ${i + 1} reminders`);
+		}
+		assert.equal(stub.sent.length, MAX_REPORT_REMINDERS);
+		assert.equal(stub.shutdowns(), 0);
+
+		// The budget is spent: the next settle writes the content-free completion so a
+		// blocking call is not held open forever, and the child shuts itself down.
 		await settled({}, stub.ctx);
-	}
+		assert.equal(stub.sent.length, MAX_REPORT_REMINDERS, "the cap sent one reminder too many");
+		assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), { type: "done" });
+		assert.equal(stub.shutdowns(), 0, "the settle path shut the pane down instead of leaving it open");
 
-	assert.equal(stub.sent.length, MAX_REPORT_REMINDERS);
+		// The child is finished, so a late call is refused rather than landing a
+		// second, contradictory completion on the same sidecar. Nothing was reported
+		// here — the content-free terminal ended the wait — so the refusal says the
+		// child is finished, not that a result already went out.
+		const reportTool = stub.tools.find((tool) => tool.name === "subagent_report") ?? assert.fail("no report tool");
+		const late = await reportTool.execute?.("call-1", { result: "too late" }, undefined, undefined, stub.ctx);
+		assert.match(late?.content[0]?.text ?? "", /already finished/);
+	});
 });

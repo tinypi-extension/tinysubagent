@@ -47,6 +47,13 @@ export interface ChildHarness {
 	 */
 	sessionFileFor(cwd: string, agentDir: string): string;
 	/**
+	 * Whether {@link sessionFileFor} is a file this harness actually appends to
+	 * while it runs. pi writes it from the first entry on; agy's transcript lives
+	 * at a path only its Stop hook knows, so an empty file at the planned path
+	 * says nothing about whether agy started.
+	 */
+	writesSession: boolean;
+	/**
 	 * Scrape the child's transcript for its last turn. Returns null when this
 	 * harness is report-only — agy's report sidecar is authoritative and its
 	 * transcript carries no usable verdict.

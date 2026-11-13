@@ -48,6 +48,9 @@ export const piHarness: ChildHarness = {
 	buildArgv: buildPiArgv,
 	supportsExtension: true,
 	sessionFileFor,
+	// pi writes the session jsonl from its first entry on, which is what makes an
+	// empty file a signal about the run rather than about the harness.
+	writesSession: true,
 	readTurn(file: string): TurnInfo | null {
 		return { text: readFinalMessage(file) };
 	},

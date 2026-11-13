@@ -19,6 +19,7 @@ import { loadConfig } from "../../src/config/config.ts";
 import { PLUGIN_ID, type TabLayout } from "../../src/herdr/cli.ts";
 import { LiveSubPanes } from "../../src/herdr/layout.ts";
 import { MAX_PARALLEL_TASKS } from "../../src/children/requests.ts";
+import { NOTE_ALL_SKIPPED } from "../../src/present/ack-render.ts";
 import { TOOL_NAME } from "../../src/types.ts";
 
 interface Registered {
@@ -128,10 +129,10 @@ test("the guidelines tell the parent to wait for the result and do nothing else"
 	});
 	const guidelines = stub.tools[0]?.promptGuidelines ?? [];
 	assert.ok(guidelines.length > 0);
-	// The parent turn is handed off to the steer message, so the parent must be told
-	// to end its turn rather than fill the wait with unrelated work.
+	// The call blocks until every child reports, so the parent must be told to sit
+	// still rather than fill the wait with unrelated work or a second batch.
 	assert.ok(
-		guidelines.some((line) => /wait for the result/i.test(line) && /steer message/i.test(line)),
+		guidelines.some((line) => /returns when they have all finished/i.test(line) && /nothing else/i.test(line)),
 		`no wait-for-the-result guideline in: ${guidelines.join(" | ")}`,
 	);
 	// The result is an explicit hand-back now, so the parent must be told the
@@ -342,13 +343,22 @@ test("with routing on, the key and endpoint appear in no description, schema, or
 			onUpdate: unknown,
 			ctx: unknown,
 		) => Promise<unknown>;
-		const { result } = await withSpawnHerdrStub(() =>
-			execute("call-1", { tasks: [{ agent: "worker", task: "a brief that would travel" }] }, undefined, () => {}, ctx),
-		);
+		const { result } = await withSpawnHerdrStub(async () => {
+			const pending = execute(
+				"call-1",
+				{ tasks: [{ agent: "worker", task: "a brief that would travel" }] },
+				undefined,
+				() => {},
+				ctx,
+			);
+			await waitForLaunchScript(cwd);
+			writeFileSync(reportPathFromScript(cwd), JSON.stringify({ type: "done", result: "done" }));
+			return pending;
+		});
 		const text = ((result as { content?: { text?: string }[] }).content ?? [])
 			.map((part) => part.text ?? "")
 			.join("\n");
-		assert.match(text, /\[current\]/, `the fallback did not apply: ${text}`);
+		assert.match(text, /profile `current`/, `the fallback did not apply: ${text}`);
 		assert.ok(!text.includes(FAKE_KEY), "the spawn result leaks the key");
 		assert.ok(!text.includes(FAKE_URL), "the spawn result leaks the endpoint");
 	} finally {
@@ -533,6 +543,14 @@ test("an all-skipped acknowledgment is informational text, not an error", () => 
 	assert.ok(!joined.includes("<error>"), `an expected skip was painted as a failure: ${joined}`);
 	assert.match(joined, /<muted>/, "the skip notice carried no informational colour");
 	assert.match(joined, /skipped alpha: a subagent with this label is already running\./);
+});
+
+test("the all-skipped note does not promise a later delivery", () => {
+	// Nothing is delivered after a call returns any more: the note has to say the
+	// reports are in the other call's result, not that they will arrive.
+	assert.match(NOTE_ALL_SKIPPED, /result of the call that started them/);
+	assert.match(NOTE_ALL_SKIPPED, /nothing arrives later/);
+	assert.doesNotMatch(NOTE_ALL_SKIPPED, /arrive when/);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -790,6 +808,32 @@ function executeThroughTool(tool: Registered, ctx: Record<string, unknown>): Pro
 	return execute("call-1", { tasks: [{ agent: "worker", task: "do it" }] }, undefined, () => {}, ctx);
 }
 
+/**
+ * Wait until the launch script exists, so the report path it records can be
+ * written. The call now blocks on that report, so a test must write it while the
+ * call is still in flight.
+ */
+async function waitForLaunchScript(cwd: string): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		try {
+			reportPathFromScript(cwd);
+			return;
+		} catch {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+	}
+	assert.fail("no launch script was written");
+}
+
+/** Run a blocking call, settling the child it spawned as a completed report. */
+async function executeAndReport(cwd: string, tool: Registered, ctx: Record<string, unknown>): Promise<unknown> {
+	const pending = executeThroughTool(tool, ctx);
+	await waitForLaunchScript(cwd);
+	writeFileSync(reportPathFromScript(cwd), JSON.stringify({ type: "done", result: "done" }));
+	return pending;
+}
+
 /** The report path baked into the launch script, for a child that never ran here. */
 function reportPathFromScript(cwd: string): string {
 	const scriptsDir = join(cwd, "sessions", "artifacts", "sid", "subagent-scripts");
@@ -819,7 +863,7 @@ test("a spawn through the registered tool hands spawnOne a live-column tracker",
 
 	const restoreEnv = enterHerdrEnv();
 	try {
-		const { calls } = await withSpawnHerdrStub(() => executeThroughTool(tool as Registered, ctx));
+		const { calls } = await withSpawnHerdrStub(() => executeAndReport(cwd, tool as Registered, ctx));
 
 		assert.ok(
 			calls.some((call) => call.startsWith("plugin pane open")),
@@ -859,18 +903,11 @@ test("a completed child is dropped from the tracker when its pane closes", async
 
 	const restoreEnv = enterHerdrEnv();
 	try {
-		await withSpawnHerdrStub(() => executeThroughTool(tool as Registered, ctx));
+		// The watcher learns of completion from the child's report sidecar, written at
+		// the path baked into the launch script since the child never ran here.
+		await withSpawnHerdrStub(() => executeAndReport(cwd, tool as Registered, ctx));
 
-		// The watcher learns of completion from the child's report sidecar. Write
-		// one at the path baked into the launch script, since the child never ran.
-		writeFileSync(reportPathFromScript(cwd), JSON.stringify({ type: "done", result: "done" }));
-
-		// The watcher polls once a second; give it a few. If the timeout is hit the
-		// assertion reports the empty list rather than hanging.
-		const deadline = Date.now() + 5_000;
-		while (dropped.length === 0 && Date.now() < deadline) {
-			await new Promise((resolve) => setTimeout(resolve, 100));
-		}
+		// A completed child is dropped as the wait settles, before the call returns.
 		assert.deepEqual(dropped, ["w1:p1Z"]);
 	} finally {
 		LiveSubPanes.prototype.drop = originalDrop;

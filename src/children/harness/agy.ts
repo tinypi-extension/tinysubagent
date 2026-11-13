@@ -42,6 +42,9 @@ export const agyHarness: ChildHarness = {
 	sessionFileFor(): string {
 		return "";
 	},
+	// Nothing is ever written at the planned session path, so its emptiness is not
+	// evidence that the run never started.
+	writesSession: false,
 	readTurn(_file: string): TurnInfo | null {
 		return null;
 	},

@@ -59,25 +59,31 @@
  * times. The nudge goes out at once, on the strength of there being a final
  * message at all; the child never decides what an unreported turn ended with.
  *
+ * Once the budget is spent the wait becomes terminal: the settle writes the
+ * content-free `{"type":"done"}` and the batch ends with a completion carrying
+ * no summary. Without that last resort a model that never makes the call would
+ * hold the blocking call open for as long as its pane lives — and the pane is
+ * only closed after the wait ends, so nothing else would ever end it.
+ *
  * ## The run that never started
  *
  * pi validates the selected model and the provider's credentials inside
  * `prompt()` and *throws* before the agent phase begins when either is missing —
  * "No API key found for oc-openai" being the common one. No run means no
  * `agent_end` and no `agent_settled`, so none of the above runs: the child sits
- * at its prompt having written nothing, and the batch waits silently on the live
- * pane. That is the same wait as an unreported turn end, with the same resolution:
- * a human runs `/login`, drives the child on, and the report lands.
+ * at its prompt having written nothing. It is the watcher, not the child, that
+ * bounds this wait: a child that wrote no session entry at all within
+ * `NEVER_STARTED_MS` is reported `failed (never-started)` with its pane left
+ * open, so running `/login` there is still worth something.
  *
  * The child deliberately does not mirror pi's check. A check here could only
- * write a failure for a run that never existed, and that write would end the
- * batch while the pane it names is still fixable.
+ * write a failure for a run that never existed.
  */
 
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { REPORT_TOOL_NAME } from "../types.ts";
-import { writeResultReport } from "./report.ts";
+import { writeDoneReport, writeResultReport } from "./report.ts";
 import { readFinalMessage } from "./session.ts";
 import { finishedCleanly } from "./settle.ts";
 import type { TurnMessage } from "./settle.ts";
@@ -114,7 +120,7 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 	let remindersSent = 0;
 
 	// The explicit hand-back: the model passes its result, this writes it, and
-	// the orchestrator delivers that exact text. This is the only path that
+	// the call that waits on this child returns that exact text. This is the only path that
 	// closes the pane on success — a turn that ends without it keeps the pane
 	// open, so a failed write here means the model must retry the call.
 	pi.registerTool({
@@ -132,7 +138,9 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (finished) {
-				return { content: [{ type: "text" as const, text: "Result already reported." }], details: {} };
+				// Also reached after the content-free terminal, where nothing was
+				// reported: the child as a whole is over either way.
+				return { content: [{ type: "text" as const, text: "This child is already finished." }], details: {} };
 			}
 			if (!writeResultReport(params.result)) {
 				// Stay alive rather than exiting with the result unreported: the model
@@ -172,23 +180,37 @@ export default function tinysubagentChild(pi: ExtensionAPI, deps: ChildDeps = {}
 		// `/quit`, or close it.
 		if (!finishedCleanly(lastMessages)) return;
 
+		// Read once: "did this turn produce a final message" is the same question
+		// for the nudge and for the last resort below.
+		const finalMessage = deps.readFinal ? deps.readFinal() : finalSessionMessage();
+		// Nothing to remind and nothing to end: a clean settle whose last assistant
+		// message has no text is the one unbounded wait left by design. There is no
+		// report to ask for, so no reminder is spent, and the wait stays open until a
+		// human acts in the pane. Running the last resort here would end the wait on
+		// a settle that said nothing at all, which is a guess about a child whose
+		// next turn may still report.
+		if (finalMessage === null) return;
+
 		// The one thing worth doing with that wait: a model that finished its work
 		// in prose instead of making the call can still be nudged into it. The pane
 		// was staying open anyway.
-		await remindIfUnreported();
+		if (remindersSent < MAX_REPORT_REMINDERS) {
+			remind();
+			return;
+		}
+
+		// The budget is spent and the model still has not made the call. End the
+		// wait rather than hold a blocking call open on a turn that is already over:
+		// a completion with no summary, which is content the orchestrator can read.
+		if (writeDoneReport()) finished = true;
 	});
 
 	/**
 	 * Nudge a finished result that was never reported. The turn has ended, so
 	 * the child is idle: a steer starts one more turn, in which the model can
-	 * make the call it skipped. The nudge goes out at once, on the strength of
-	 * there being a final message at all.
+	 * make the call it skipped.
 	 */
-	async function remindIfUnreported(): Promise<void> {
-		if (remindersSent >= MAX_REPORT_REMINDERS) return;
-		const finalMessage = deps.readFinal ? deps.readFinal() : finalSessionMessage();
-		if (finalMessage === null) return;
-
+	function remind(): void {
 		remindersSent += 1;
 		pi.sendMessage(
 			{

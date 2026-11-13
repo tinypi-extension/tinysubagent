@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import type { ResolvedProfile } from "../../src/config/profiles.ts";
-import { buildResultDetails, buildResultText, formatDuration, statusLabel } from "../../src/present/steer.ts";
+import { buildResultDetails, buildResultText, formatDuration, statusLabel } from "../../src/present/result.ts";
 import type { SubagentOutcome } from "../../src/children/watcher.ts";
 
 /** The profile every result is reported under unless a test overrides it. */
@@ -57,6 +57,12 @@ test("each ending gets a label that says which kind of ending it was", () => {
 	assert.equal(
 		statusLabel({ kind: "failed", reason: "exit", exitCode: 3, summary: null }),
 		"failed (exit 3)",
+	);
+	// A prompt pi refused never started a run: the label has to say that rather
+	// than claim an exit code or an error the child never produced.
+	assert.equal(
+		statusLabel({ kind: "failed", reason: "never-started", exitCode: null, summary: null }),
+		"failed (never-started)",
 	);
 	assert.equal(statusLabel({ kind: "cancelled", summary: null }), "cancelled (pane closed without reporting)");
 });
@@ -138,7 +144,9 @@ test("details carry the machine-readable form of the same batch", () => {
 	]);
 	assert.equal(details.status, "finished");
 
-	const results = details.results as Array<Record<string, unknown>>;
+	// `ResultDetails` is a real type now, so the fields are checked rather than
+	// read off a loose record.
+	const results = details.results;
 	assert.equal(results.length, 2);
 
 	const [alpha, broken] = results;

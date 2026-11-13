@@ -33,17 +33,17 @@ One act of opening a pane and starting a child with a role, brief, profile, and 
 _Avoid_: launch, run, invocation
 
 **Batch**:
-All children started by a single tool call — one or more, up to four in parallel — whose results are reported back together.
+All children started by a single tool call — one or more, up to four in parallel — whose reports come back together as one tool result.
 _Avoid_: group, queue, set
 
 **Steer**:
-A message injected into a running session. It is how a report reaches the orchestrator, and how a human redirects a child in its pane.
+A message injected into a running session. A report no longer travels this way — the blocking call returns it — so a steer is only how a human redirects a child in its pane, or how the child's own reminder asks a finished turn to report.
 _Avoid_: send, message, notify
 
 ## Report and outcome
 
 **Report**:
-The child's explicit hand-back of its complete result, passed as an argument rather than inferred. The report is what the orchestrator receives and what ends the wait.
+The child's explicit hand-back of its complete result, passed as an argument rather than inferred. It is what ends the wait and what the tool call returns.
 _Avoid_: result, output, answer (the report carries the result)
 
 **Session record**:
@@ -55,11 +55,11 @@ The artifact a child leaves beside its session record to hand its result back. I
 _Avoid_: status file, marker, metadata
 
 **Settle**:
-The moment a child's agent loop finishes and nothing further will run. It is not an ending: the child stays at its prompt, and only a report, `/quit`, or the pane's fate ends the wait.
+The moment a child's agent loop finishes and nothing further will run. It is not an ending: the child stays at its prompt, and only a report, `/quit`, an exhausted reminder budget, or the pane's fate ends the wait.
 _Avoid_: finish, end, completion
 
 **Unreported turn end**:
-A settle with no report. It is not an ending: the child stays alive at its prompt with its context intact, and the wait continues.
+A settle with no report. The child is reminded to report, up to a fixed budget; the settle after that budget is spent writes a content-free completion, which ends the wait as a completion with no summary and leaves the pane open. Until then the child stays alive at its prompt with its context intact, and the wait continues.
 _Avoid_: silent completion, implicit done
 
 **Interrupt**:
@@ -71,8 +71,12 @@ What finally ended a wait: completed, failed, or cancelled — plus how that was
 _Avoid_: status, state, verdict (a verdict is the internal reading that produces an outcome)
 
 **Refusal**:
-pi declining to run the prompt at all — no usable model or credentials. Nothing is reported and the child stays at its prompt, so a human can log in and drive it on.
+pi declining to run the prompt at all — no usable model or credentials. Nothing is reported and the child stays at its prompt, so a human can log in and drive it on. The wait ends on it only as a never-started failure, after the grace.
 _Avoid_: error, failure (a refusal happens before any run exists)
+
+**Never started**:
+The failure a child is reported as when pi refused its prompt: no session entry of any role was written within the grace (90s), so no run ever began. Its pane is left open, because logging in there is still the fix.
+_Avoid_: no-output, silent failure
 
 **Hold open**:
 Keeping a child's pane visible briefly after an early crash, so a human can read why it failed instead of watching the pane vanish.
@@ -169,7 +173,7 @@ The rule that the orchestrator keeps three fifths of its rect and every live sub
 _Avoid_: split layout, balanced layout
 
 **Ack**:
-The immediate acknowledgment the orchestrator sees when a spawn starts, before any result exists.
+The spawn line — role, label, profile and the model it resolved to — for one child. It is drawn only when no wait follows, so a call that launched nothing still names what it declined to do.
 _Avoid_: confirmation, receipt, response
 
 ## Readiness

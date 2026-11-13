@@ -1,10 +1,11 @@
 /**
  * tinysubagent — delegate work to subagents running in herdr panes.
  *
- * A spawn is fire-and-forget: the tool opens one pane per task and returns an
- * acknowledgement, then a detached watcher collects each child's final assistant
- * message and delivers it back to this session as a steer message. For a batch,
- * every child's result arrives together in one labelled message.
+ * A call blocks: the tool opens one pane per task, waits for the whole batch, and
+ * returns every child's report in that one tool result. Nothing is delivered to
+ * this session afterwards, so the report is the answer rather than a later
+ * message. For a batch, every child's result is carried together, one section
+ * each.
  *
  * The tool is only registered when this pi is itself running inside herdr. That
  * is a deliberate choice over registering-and-failing: outside herdr there is no
@@ -63,7 +64,6 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 
 	/** Watchers still running, so a shutdown can end them. */
 	const watchers = new Set<AbortController>();
-	let shuttingDown = false;
 
 	/** Asked once per session — a second prompt would only nag. */
 	const fixOffered: PluginFixGuard = { value: false };
@@ -101,9 +101,6 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 		configWarnings,
 		offerPluginFix: pluginFix,
 		watchers,
-		markShuttingDown: () => {
-			shuttingDown = true;
-		},
 	});
 
 	pi.registerTool(
@@ -117,7 +114,6 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 			runningLabels,
 			watchers,
 			reportedWarnings,
-			isShuttingDown: () => shuttingDown,
 			// The pinned devDependency (pi-coding-agent@0.85.1) lags the runtime pi,
 			// whose registry has `findOfType`/`classify`; one cast at the seam.
 			route: (ctx) =>

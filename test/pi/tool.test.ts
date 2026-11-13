@@ -11,7 +11,7 @@
  */
 
 import { strict as assert } from "node:assert";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -73,8 +73,11 @@ const workerAgent: AgentDef = {
  * context `execute` needs. `stop()` ends the completion watcher; `cleanup()`
  * restores everything else.
  */
-function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => RouteFn) {
-	let shuttingDown = false;
+function harness(
+	config: TinysubagentConfig,
+	route: (ctx: ExtensionContext) => RouteFn,
+	options: { columns?: LiveSubPanes } = {},
+) {
 	const watchers = new Set<AbortController>();
 	const tool = createTool({
 		pi: stubPi(),
@@ -82,10 +85,9 @@ function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => R
 		parameters: buildParameters(config),
 		advertisedAgents: [workerAgent],
 		capability: { ensureReady: async () => null },
-		columns: new LiveSubPanes(),
+		columns: options.columns ?? new LiveSubPanes(),
 		runningLabels: new RunningLabels(),
 		watchers,
-		isShuttingDown: () => shuttingDown,
 		route,
 	});
 
@@ -126,12 +128,15 @@ function harness(config: TinysubagentConfig, route: (ctx: ExtensionContext) => R
 		ctx,
 		notices,
 		stop: () => {
-			shuttingDown = true;
+			// A shutdown ends the blocking waits; the panes are left open.
+			for (const controller of watchers) controller.abort();
 		},
 		/** End every running child's wait, as a shutdown or a vanished pane would. */
 		settleAll: () => {
 			for (const controller of watchers) controller.abort();
 		},
+		/** How many waits are registered, so a test can settle once they exist. */
+		watching: () => watchers.size,
 		cleanup: () => {
 			for (const [key, value] of saved) {
 				if (value === undefined) delete process.env[key];
@@ -158,14 +163,21 @@ const STUB_OPENED = JSON.stringify({
 });
 const STUB_OK = '{"id":"cli:pane","result":{"ok":true}}';
 
-/** A herdr binary that answers the whole spawn path, so no pane is really opened. */
-async function withSpawnHerdrStub<T>(fn: () => Promise<T>): Promise<T> {
+/**
+ * A herdr binary that answers the whole spawn path, so no pane is really opened.
+ *
+ * Every invocation is appended to a log beside the stub, so a test can assert on
+ * what the tool did not ask herdr to do: a cancelled child's pane must stay open.
+ */
+async function withSpawnHerdrStub<T>(fn: (calls: () => string[]) => Promise<T>): Promise<T> {
 	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-tool-herdr-"));
 	const stub = join(dir, "herdr");
+	const log = `${stub}.log`;
 	writeFileSync(
 		stub,
 		[
 			"#!/usr/bin/env bash",
+			`printf '%s\\n' "$*" >> ${JSON.stringify(log)}`,
 			'case "$1 $2" in',
 			`  "status server") printf '%s' ${JSON.stringify(STATUS_OK).replaceAll("'", `'\\''`)} ;;`,
 			`  "plugin pane") printf '%s' ${JSON.stringify(STUB_OPENED).replaceAll("'", `'\\''`)} ;;`,
@@ -177,10 +189,19 @@ async function withSpawnHerdrStub<T>(fn: () => Promise<T>): Promise<T> {
 	);
 	chmodSync(stub, 0o755);
 
+	/** Every herdr command run so far, in order. */
+	const calls = (): string[] => {
+		try {
+			return readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
+		} catch {
+			return [];
+		}
+	};
+
 	const saved = process.env.HERDR_BIN_PATH;
 	process.env.HERDR_BIN_PATH = stub;
 	try {
-		return await fn();
+		return await fn(calls);
 	} finally {
 		if (saved === undefined) delete process.env.HERDR_BIN_PATH;
 		else process.env.HERDR_BIN_PATH = saved;
@@ -188,7 +209,12 @@ async function withSpawnHerdrStub<T>(fn: () => Promise<T>): Promise<T> {
 	}
 }
 
-function executeTool(tool: { execute: unknown }, ctx: unknown, params: unknown): Promise<unknown> {
+function executeTool(
+	tool: { execute: unknown },
+	ctx: unknown,
+	params: unknown,
+	signal?: AbortSignal,
+): Promise<unknown> {
 	const execute = tool.execute as (
 		toolCallId: string,
 		params: unknown,
@@ -196,7 +222,7 @@ function executeTool(tool: { execute: unknown }, ctx: unknown, params: unknown):
 		onUpdate: unknown,
 		ctx: unknown,
 	) => Promise<unknown>;
-	return execute("call-1", params, undefined, () => {}, ctx);
+	return execute("call-1", params, signal, () => {}, ctx);
 }
 
 function contentText(result: unknown): string {
@@ -208,7 +234,12 @@ function contentText(result: unknown): string {
 /** The launch scripts the spawn wrote, read back off disk. */
 function writtenScripts(cwd: string): string[] {
 	const dir = join(cwd, "sessions", "artifacts", "sid", "subagent-scripts");
-	return readdirSync(dir).map((file) => readFileSync(join(dir, file), "utf8"));
+	try {
+		return readdirSync(dir).map((file) => readFileSync(join(dir, file), "utf8"));
+	} catch {
+		// Nothing has launched yet: this is polled, so an absent dir is not an error.
+		return [];
+	}
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -224,12 +255,16 @@ test("a batch's two requests are routed independently and each child launches on
 	const h = harness(routingConfig(systemOneOn), () => route);
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, {
-				tasks: [
-					{ agent: "worker", task: "light work", name: "one" },
-					{ agent: "worker", task: "heavy work", name: "two" },
-				],
-			}),
+			executeSettled(
+				h,
+				{
+					tasks: [
+						{ agent: "worker", task: "light work", name: "one" },
+						{ agent: "worker", task: "heavy work", name: "two" },
+					],
+				},
+				{ count: 2 },
+			),
 		);
 
 		assert.equal(calls.length, 2, `route called ${calls.length} times for a two-task batch`);
@@ -255,8 +290,8 @@ test("a batch's two requests are routed independently and each child launches on
 		assert.ok(!pro.includes("'m-light'") && !pro.includes("'low'"));
 
 		const text = contentText(result);
-		assert.match(text, /\[light\]/, `the ack never named the routed profile: ${text}`);
-		assert.match(text, /\[pro\]/, `the ack never named the routed profile: ${text}`);
+		assert.match(text, /profile `light \(m-light, low\)`/, `the report never named the routed profile: ${text}`);
+		assert.match(text, /profile `pro \(m-pro, high\)`/, `the report never named the routed profile: ${text}`);
 	} finally {
 		h.stop();
 		h.cleanup();
@@ -281,10 +316,10 @@ test("a routing failure still spawns, on the current profile, in both failure sh
 		const h = harness(routingConfig(systemOneOn), () => route);
 		try {
 			const result = await withSpawnHerdrStub(() =>
-				executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
+				executeSettled(h, { tasks: [{ agent: "worker", task: "one job" }] }),
 			);
 			const text = contentText(result);
-			assert.match(text, /\[current\]/, `${label}: the ack never named the current profile: ${text}`);
+			assert.match(text, /profile `current`/, `${label}: the report never named the current profile: ${text}`);
 			const scripts = writtenScripts(h.cwd);
 			assert.equal(scripts.length, 1, `${label}: the child did not spawn`);
 			assert.ok(scripts[0] && !scripts[0].includes("'--model'"), `${label}: the child carried a --model flag`);
@@ -330,10 +365,10 @@ test("with routing off the route function is never called", async () => {
 	const h = harness(routingConfig(null), () => route);
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
+			executeSettled(h, { tasks: [{ agent: "worker", task: "one job" }] }),
 		);
 		assert.equal(calls, 0, "routing ran without a configured key");
-		assert.match(contentText(result), /\[current\]/);
+		assert.match(contentText(result), /profile `current`/);
 	} finally {
 		h.stop();
 		h.cleanup();
@@ -362,13 +397,21 @@ test("a never-resolving route does not block the spawn beyond the routing budget
 	const h = harness(routingConfig(systemOneOn), () => route);
 	try {
 		const started = Date.now();
-		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
-		);
-		const elapsed = Date.now() - started;
-		assert.ok(elapsed < 1000, `execute took ${elapsed}ms — the routing budget did not bound the spawn`);
+		const result = await withSpawnHerdrStub(async () => {
+			const pending = executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] });
+			await waitLaunched(h.cwd, 1);
+			// Only the launch is bounded by the routing budget — the call itself now waits
+			// for the child, so timing the whole call would measure the child's work.
+			const launchedAfter = Date.now() - started;
+			assert.ok(
+				launchedAfter < 1000,
+				`the child took ${launchedAfter}ms to launch — the routing budget did not bound the spawn`,
+			);
+			await settleSpawned(h.cwd, 1);
+			return pending;
+		});
 		const text = contentText(result);
-		assert.match(text, /\[current\]/, `the child did not spawn on current: ${text}`);
+		assert.match(text, /profile `current`/, `the child did not spawn on current: ${text}`);
 		assert.equal(writtenScripts(h.cwd).length, 1, "the child did not spawn");
 	} finally {
 		h.stop();
@@ -393,7 +436,7 @@ test("the key and the endpoint appear in no description, schema, or result text"
 		assert.ok(!schema.includes(BASE_URL), "the parameter schema leaks the endpoint");
 
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
+			executeSettled(h, { tasks: [{ agent: "worker", task: "one job" }] }),
 		);
 		const text = contentText(result);
 		assert.ok(!text.includes(KEY), "the result text leaks the key");
@@ -416,9 +459,9 @@ test("an explicit profile overrides automatic routing", async () => {
 	});
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job", profile: "light" }] }),
+			executeSettled(h, { tasks: [{ agent: "worker", task: "one job", profile: "light" }] }),
 		);
-		assert.match(contentText(result), /\[light\]/);
+		assert.match(contentText(result), /profile `light \(m-light, low\)`/);
 		assert.equal(routeCalls, 0, "the router should not be called for an explicit profile");
 
 		const script = writtenScripts(h.cwd)[0];
@@ -447,11 +490,11 @@ test("the route factory is never invoked when profiles are off", async () => {
 	});
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }),
+			executeSettled(h, { tasks: [{ agent: "worker", task: "one job" }] }),
 		);
 		assert.equal(factoryCalls, 0, "the route factory ran with routing off");
 		assert.equal(routeCalls, 0, "the route ran with routing off");
-		assert.match(contentText(result), /\[current\]/);
+		assert.match(contentText(result), /profile `current`/);
 	} finally {
 		h.stop();
 		h.cleanup();
@@ -473,7 +516,7 @@ test("classifier routing shows an info notice when a profile is chosen automatic
 	};
 	const h = harness(config, () => async () => ({ choice: "light" }));
 	try {
-		await withSpawnHerdrStub(() => executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job" }] }));
+		await withSpawnHerdrStub(() => executeSettled(h, { tasks: [{ agent: "worker", task: "one job" }] }));
 		assert.deepEqual(h.notices, [{
 			message: "tinysubagent: routing profile with classifier model openrouter/typesafe/jev-latest.",
 			level: "info",
@@ -484,7 +527,7 @@ test("classifier routing shows an info notice when a profile is chosen automatic
 	}
 });
 
-test("tool description says subagents start immediately, not queued", () => {
+test("tool description says subagents start immediately and the call waits for them", () => {
 	const config = routingConfig(null);
 	const description = buildToolDescription([workerAgent], config);
 	assert.match(description, /starts the requested subagent\(s\) immediately/);
@@ -492,7 +535,9 @@ test("tool description says subagents start immediately, not queued", () => {
 	assert.match(description, /tasks` array with one or more subagents/);
 	assert.doesNotMatch(description, /Modes: single/);
 	assert.match(description, /All requested subagents run concurrently/);
-	assert.match(description, /Subagents run concurrently and report back together/);
+	// The delivery contract the model is told about: one blocking call, one result.
+	assert.match(description, /returns when every subagent has finished/);
+	assert.match(description, /reports come back together in a single result/);
 });
 
 test("only classifierModel set keeps the profile list and parameter", () => {
@@ -529,22 +574,75 @@ function isErrorFlag(result: unknown): boolean | undefined {
 	return (result as { isError?: boolean }).isError;
 }
 
+/** The label a launch script runs under: its own export, else the header comment. */
+function nameFrom(script: string): string {
+	const env = script.match(/export PI_TINYSUBAGENT_NAME='((?:[^']|'\\'')*)'/);
+	if (env) return (env[1] ?? "").replaceAll("'\\''", "'");
+	return script.match(/^# subagent: (.*)$/m)?.[1] ?? "unknown";
+}
+
+/** Wait until `count` launch scripts exist, without settling anything. */
+async function waitLaunched(cwd: string, count: number): Promise<void> {
+	await until(async () => writtenScripts(cwd).length >= count, `expected ${count} launch script(s)`);
+}
+
+/**
+ * Settle every child by writing the report sidecar the watcher polls for, which
+ * is exactly what a real child's `subagent_report` does. `count` is the TOTAL
+ * number of scripts the test expects, so a second call can settle the first
+ * batch's children along with its own.
+ */
+async function settleSpawned(cwd: string, count: number, text?: string): Promise<void> {
+	await waitLaunched(cwd, count);
+	for (const script of writtenScripts(cwd)) {
+		const reportFile = reportFileFrom(script);
+		if (existsSync(reportFile)) continue;
+		writeFileSync(reportFile, JSON.stringify({ type: "done", result: text ?? `PONG from ${nameFrom(script)}` }));
+	}
+}
+
+/** Settle every child as a failure: the ending that must still not be `isError`. */
+async function failSpawned(cwd: string, count: number, message = "boom"): Promise<void> {
+	await waitLaunched(cwd, count);
+	for (const script of writtenScripts(cwd)) {
+		const reportFile = reportFileFrom(script);
+		if (existsSync(reportFile)) continue;
+		writeFileSync(reportFile, JSON.stringify({ type: "failed", reason: "error", message }));
+	}
+}
+
+/** Run a call that spawns children, settle the batch it launched, return the result. */
+async function executeSettled(
+	h: ReturnType<typeof harness>,
+	params: unknown,
+	options: { count?: number; text?: string } = {},
+): Promise<unknown> {
+	const pending = executeTool(h.tool, h.ctx, params);
+	// Wait for the launch BEFORE settling: a report written while the call is still
+	// reserving labels would release them mid-batch and make the skip tests racy.
+	await settleSpawned(h.cwd, options.count ?? 1, options.text);
+	return pending;
+}
+
 test("a later call reusing a running label is skipped and launches nothing", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			const first = await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
 			});
-			assert.match(contentText(first), /\(alpha\)/, "the first spawn never started");
-			assert.equal(writtenScripts(h.cwd).length, 1, "the first spawn wrote no launch script");
+			await waitLaunched(h.cwd, 1);
 
 			const second = await executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "a duplicate job", name: "alpha" }],
 			});
 			const text = contentText(second);
 			assert.match(text, /alpha/, `the skip notice never named the running label: ${text}`);
+			assert.notEqual(isErrorFlag(second), true, "a skip-only call was reported as a tool error");
 			assert.equal(writtenScripts(h.cwd).length, 1, "the duplicate request launched a second child");
+
+			await settleSpawned(h.cwd, 1);
+			assert.match(contentText(await first), /## alpha — completed/, "the first spawn never started");
 		});
 	} finally {
 		h.stop();
@@ -556,22 +654,29 @@ test("a mixed batch skips only the duplicate and starts the rest", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
 			});
-			assert.equal(writtenScripts(h.cwd).length, 1, "the first spawn wrote no launch script");
+			await waitLaunched(h.cwd, 1);
 
-			const result = await executeTool(h.tool, h.ctx, {
-				tasks: [
-					{ agent: "worker", task: "a duplicate job", name: "alpha" },
-					{ agent: "worker", task: "a fresh job", name: "beta" },
-				],
-			});
+			const result = await executeSettled(
+				h,
+				{
+					tasks: [
+						{ agent: "worker", task: "a duplicate job", name: "alpha" },
+						{ agent: "worker", task: "a fresh job", name: "beta" },
+					],
+				},
+				{ count: 2 },
+			);
 			const text = contentText(result);
 			assert.match(text, /skipped alpha/, `the skip notice never named the running label: ${text}`);
-			assert.match(text, /\(beta\)/, `the fresh request never started: ${text}`);
+			assert.match(text, /## beta — completed/, `the fresh request never started: ${text}`);
+			assert.doesNotMatch(text, /## alpha — /, "the duplicate request spawned a child anyway");
 			assert.equal(writtenScripts(h.cwd).length, 2, "the batch launched the wrong number of children");
 			assert.notEqual(isErrorFlag(result), true, "a partly skipped batch was reported as an error");
+
+			await first;
 		});
 	} finally {
 		h.stop();
@@ -583,9 +688,10 @@ test("a skipped request does not hide a refused spawn in the same batch", async 
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
 			});
+			await waitLaunched(h.cwd, 1);
 			const result = await executeTool(h.tool, h.ctx, {
 				tasks: [
 					{ agent: "worker", task: "duplicate", name: "alpha" },
@@ -595,6 +701,9 @@ test("a skipped request does not hide a refused spawn in the same batch", async 
 			assert.match(contentText(result), /skipped alpha/);
 			assert.match(contentText(result), /failed missing-role/);
 			assert.equal(isErrorFlag(result), true, "the refused spawn was hidden by the skipped request");
+
+			await settleSpawned(h.cwd, 1);
+			await first;
 		});
 	} finally {
 		h.stop();
@@ -606,13 +715,13 @@ test("a call whose every label is already running is informational, not a tool e
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [
 					{ agent: "worker", task: "the first job", name: "alpha" },
 					{ agent: "worker", task: "the second job", name: "beta" },
 				],
 			});
-			assert.equal(writtenScripts(h.cwd).length, 2, "the first batch wrote the wrong number of scripts");
+			await waitLaunched(h.cwd, 2);
 
 			const result = await executeTool(h.tool, h.ctx, {
 				tasks: [
@@ -627,6 +736,9 @@ test("a call whose every label is already running is informational, not a tool e
 			assert.notEqual(isErrorFlag(result), true, "an all-skipped call was reported as a tool error");
 			const details = (result as { details?: { status?: string } }).details;
 			assert.notEqual(details?.status, "error", "an all-skipped call carried the error status");
+
+			await settleSpawned(h.cwd, 2);
+			await first;
 		});
 	} finally {
 		h.stop();
@@ -649,18 +761,21 @@ test("a skipped request is never routed and never gets a Brief", async () => {
 	const h = harness(routingConfig(systemOneOn), () => route);
 	try {
 		await withSpawnHerdrStub(async () => {
-			await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
 			});
+			await waitLaunched(h.cwd, 1);
 			routed.length = 0;
 
-			await executeTool(h.tool, h.ctx, {
+			const second = executeTool(h.tool, h.ctx, {
 				tasks: [
 					{ agent: "worker", task: "a duplicate brief", name: "alpha" },
 					{ agent: "worker", task: "a fresh brief", name: "beta" },
 				],
 			});
-
+			await settleSpawned(h.cwd, 2);
+			await second;
+			await first;
 			assert.deepEqual(routed, ["a fresh brief"], "the skipped request was routed");
 			const briefs = writtenBriefs(h.cwd);
 			assert.equal(briefs.length, 2, "the skipped request wrote a Brief");
@@ -682,29 +797,35 @@ async function until(check: () => Promise<boolean>, what: string, timeoutMs = 4_
 	assert.fail(what);
 }
 
-/** Whether one more `alpha` spawn gets through; a skipped call writes nothing. */
-async function spawnsAlphaAgain(h: ReturnType<typeof harness>): Promise<boolean> {
-	const before = writtenScripts(h.cwd).length;
-	await executeTool(h.tool, h.ctx, {
-		tasks: [{ agent: "worker", task: "work after the label was released", name: "alpha" }],
-	});
-	return writtenScripts(h.cwd).length > before;
-}
-
 test("a label is free again once its subagent's wait ends", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
 			});
+			await waitLaunched(h.cwd, 1);
 			const blocked = await executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "a duplicate job", name: "alpha" }],
 			});
 			assert.match(contentText(blocked), /skipped alpha/, "the label was not held while the child ran");
 
+			// The wait is registered only after the spawn, so settling before it exists
+			// would leave the child running until the never-started grace expires.
+			await until(async () => h.watching() >= 1, "the child's wait was never registered");
 			h.settleAll();
-			await until(() => spawnsAlphaAgain(h), "the label was still held after its subagent stopped");
+			await first;
+			const retry = await executeSettled(
+				h,
+				{ tasks: [{ agent: "worker", task: "work after the label was released", name: "alpha" }] },
+				{ count: 2 },
+			);
+			assert.match(
+				contentText(retry),
+				/## alpha — completed/,
+				"the label was still held after its subagent stopped",
+			);
+			assert.equal(writtenScripts(h.cwd).length, 2, "the retry launched the wrong number of children");
 		});
 	} finally {
 		h.stop();
@@ -716,13 +837,30 @@ test("a label is free again after its subagent reports", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
 			});
+			await waitLaunched(h.cwd, 1);
 			const script = writtenScripts(h.cwd)[0] ?? assert.fail("no launch script was written");
 			writeFileSync(reportFileFrom(script), JSON.stringify({ type: "done", result: "the first job is done" }));
 
-			await until(() => spawnsAlphaAgain(h), "the label was still held after its subagent reported");
+			// The whole point of the refactor: the report comes back as the tool result.
+			assert.match(
+				contentText(await first),
+				/the first job is done/,
+				"the reported result never came back as the tool result",
+			);
+
+			const retry = await executeSettled(
+				h,
+				{ tasks: [{ agent: "worker", task: "work after the label was released", name: "alpha" }] },
+				{ count: 2 },
+			);
+			assert.match(
+				contentText(retry),
+				/## alpha — completed/,
+				"the label was still held after its subagent reported",
+			);
 		});
 	} finally {
 		h.stop();
@@ -739,11 +877,11 @@ test("a refused spawn gives its label back at once", async () => {
 			});
 			assert.equal(isErrorFlag(refused), true, "an unknown agent was not reported as a failure");
 
-			const retried = await executeTool(h.tool, h.ctx, {
+			const retried = await executeSettled(h, {
 				tasks: [{ agent: "worker", task: "the real job", name: "alpha" }],
 			});
 			const text = contentText(retried);
-			assert.match(text, /\(alpha\)/, `the refused spawn kept its label: ${text}`);
+			assert.match(text, /## alpha — completed/, `the refused spawn kept its label: ${text}`);
 			assert.equal(writtenScripts(h.cwd).length, 1, "the retry launched the wrong number of children");
 		});
 	} finally {
@@ -756,20 +894,23 @@ test("labels match exactly and case-sensitively", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			const both = await executeTool(h.tool, h.ctx, {
+			const both = executeTool(h.tool, h.ctx, {
 				tasks: [
 					{ agent: "worker", task: "the upper job", name: "Alpha" },
 					{ agent: "worker", task: "the lower job", name: "alpha" },
 				],
 			});
-			const text = contentText(both);
-			assert.doesNotMatch(text, /skipped/, `two distinct labels were treated as one: ${text}`);
-			assert.equal(writtenScripts(h.cwd).length, 2, "a batch with two distinct labels did not start both children");
+			await waitLaunched(h.cwd, 2);
 
 			const exact = await executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the duplicate job", name: "alpha" }],
 			});
 			assert.match(contentText(exact), /skipped alpha/, "an exact reuse of a running label was not skipped");
+
+			await settleSpawned(h.cwd, 2);
+			const text = contentText(await both);
+			assert.doesNotMatch(text, /skipped/, `two distinct labels were treated as one: ${text}`);
+			assert.equal(writtenScripts(h.cwd).length, 2, "a batch with two distinct labels did not start both children");
 		});
 	} finally {
 		h.stop();
@@ -781,10 +922,10 @@ test("an omitted label is checked by the role-derived default", async () => {
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			const first = await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the first job" }],
 			});
-			assert.match(contentText(first), /\(worker\)/, "the default label was not the role name");
+			await waitLaunched(h.cwd, 1);
 
 			const second = await executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "a duplicate job" }],
@@ -794,6 +935,9 @@ test("an omitted label is checked by the role-derived default", async () => {
 				/skipped worker/,
 				"a default-labelled spawn was not checked against the running label",
 			);
+
+			await settleSpawned(h.cwd, 1);
+			assert.match(contentText(await first), /## worker — completed/, "the default label was not the role name");
 			assert.equal(writtenScripts(h.cwd).length, 1, "the default-labelled duplicate was launched");
 		});
 	} finally {
@@ -806,20 +950,183 @@ test("suffixing inside a batch still works around a running label", async () => 
 	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
 	try {
 		await withSpawnHerdrStub(async () => {
-			await executeTool(h.tool, h.ctx, {
+			const first = executeTool(h.tool, h.ctx, {
 				tasks: [{ agent: "worker", task: "the first job", name: "alpha" }],
 			});
+			await waitLaunched(h.cwd, 1);
 
-			const result = await executeTool(h.tool, h.ctx, {
-				tasks: [
-					{ agent: "worker", task: "a duplicate job", name: "alpha" },
-					{ agent: "worker", task: "a suffixed job", name: "alpha" },
-				],
-			});
+			const result = await executeSettled(
+				h,
+				{
+					tasks: [
+						{ agent: "worker", task: "a duplicate job", name: "alpha" },
+						{ agent: "worker", task: "a suffixed job", name: "alpha" },
+					],
+				},
+				{ count: 2 },
+			);
 			const text = contentText(result);
 			assert.match(text, /skipped alpha/, `the first request was not skipped: ${text}`);
-			assert.match(text, /\(alpha-2\)/, `the suffixed request never started: ${text}`);
+			assert.match(text, /## alpha-2 — completed/, `the suffixed request never started: ${text}`);
 			assert.equal(writtenScripts(h.cwd).length, 2, "the batch launched the wrong number of children");
+
+			await first;
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// The waiting call: what comes back, and what it never does to a pane
+// ────────────────────────────────────────────────────────────────────────────
+
+test("a failed child is content, not a tool error", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async (calls) => {
+			const pending = executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "a job that dies", name: "alpha" }],
+			});
+			await failSpawned(h.cwd, 1, "the child fell over");
+			const result = await pending;
+
+			const text = contentText(result);
+			assert.match(text, /## alpha — failed \(error\)/, `the failure never reached the result: ${text}`);
+			assert.match(text, /the child fell over/, `the failure was reported without its message: ${text}`);
+			assert.notEqual(isErrorFlag(result), true, "a failed child was reported as a tool error, not content");
+			assert.ok(
+				!calls().some((line) => line.startsWith("pane close")),
+				"a failed child's pane was closed behind it",
+			);
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("aborting the call cancels the batch and leaves the pane open", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async (calls) => {
+			const controller = new AbortController();
+			const pending = executeTool(
+				h.tool,
+				h.ctx,
+				{ tasks: [{ agent: "worker", task: "a job nobody waits for", name: "alpha" }] },
+				controller.signal,
+			);
+			await waitLaunched(h.cwd, 1);
+
+			controller.abort();
+			const result = await pending;
+
+			const text = contentText(result);
+			assert.match(text, /## alpha — cancelled/, `the aborted child was not reported as cancelled: ${text}`);
+			assert.notEqual(isErrorFlag(result), true, "cancelling a call was reported as a tool error");
+			// Give a stray close the chance to happen before asserting it never did.
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			assert.ok(
+				!calls().some((line) => line.startsWith("pane close")),
+				"aborting the call closed the child's pane",
+			);
+			assert.equal(writtenScripts(h.cwd).length, 1, "the aborted call launched another child");
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a reported completion closes the child's pane", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async (calls) => {
+			const result = await executeSettled(h, {
+				tasks: [{ agent: "worker", task: "a job that reports", name: "alpha" }],
+			});
+			assert.match(contentText(result), /## alpha — completed \(reported\)/);
+			// The child left under its own power, so there is nothing left to read.
+			await until(
+				async () => calls().some((line) => line.startsWith("pane close")),
+				"a reported child's pane was left open",
+			);
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a turn-end completion leaves the pane open, since it is the only evidence", async () => {
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(async (calls) => {
+			const pending = executeTool(h.tool, h.ctx, {
+				tasks: [{ agent: "worker", task: "a job that never reported", name: "alpha" }],
+			});
+			await waitLaunched(h.cwd, 1);
+			// The content-free terminal a child writes once its reminder budget is
+			// spent: the turn ended, the child is alive at its prompt, nothing was said.
+			writeFileSync(reportFileFrom(writtenScripts(h.cwd)[0]!), '{"type":"done"}');
+			const result = await pending;
+
+			const text = contentText(result);
+			assert.match(text, /## alpha — completed/, `the settle never reached the result: ${text}`);
+			// The reader is told the child never reported and that the pane is still
+			// there — not pointed at a pane this code had just closed.
+			assert.match(text, /never reported/, `a summary-less completion went unexplained: ${text}`);
+			assert.match(text, /pane is still open/, `the result did not say the pane was left open: ${text}`);
+
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			assert.ok(
+				!calls().some((line) => line.startsWith("pane close")),
+				"a turn-end completion's pane was closed, destroying the only evidence of what it did",
+			);
+		});
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a spawn that throws after opening a pane degrades to a partial batch", async () => {
+	// A tracker that fails the second time it is asked to record a pane: the pane is
+	// already open by then, which is the case that used to strand a whole batch.
+	const columns = new LiveSubPanes();
+	const place = columns.place.bind(columns);
+	let placements = 0;
+	columns.place = (paneId: string): void => {
+		placements += 1;
+		if (placements >= 2) throw new Error("layout tracker exploded");
+		place(paneId);
+	};
+
+	const h = harness(routingConfig(null), () => async () => ({ choice: "light" }), { columns });
+	try {
+		await withSpawnHerdrStub(async () => {
+			const pending = executeTool(h.tool, h.ctx, {
+				tasks: [
+					{ agent: "worker", task: "the job that starts", name: "alpha" },
+					{ agent: "worker", task: "the job that throws", name: "beta" },
+				],
+			});
+			await waitLaunched(h.cwd, 1);
+			await settleSpawned(h.cwd, 1);
+			const result = await pending;
+
+			// The child that did start is reported, not orphaned by its sibling's throw.
+			const text = contentText(result);
+			assert.match(text, /## alpha — completed \(reported\)/, `the started child was lost: ${text}`);
+			assert.match(text, /failed worker: layout tracker exploded/, `the throw never reached the result: ${text}`);
+			assert.notEqual(isErrorFlag(result), true, "a partly started batch was reported as a tool error");
+
+			const details = (result as { details?: { status?: string; results?: unknown[]; failed?: { error: string }[] } }).details;
+			assert.equal(details?.status, "finished");
+			assert.equal(details?.results?.length, 1, "the failed spawn appeared as a result of its own");
+			assert.equal(details?.failed?.[0]?.error, "layout tracker exploded");
 		});
 	} finally {
 		h.stop();

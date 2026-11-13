@@ -37,9 +37,9 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 		"Delegate tasks to subagents, each running in its own herdr pane with an isolated context window.",
 		"Calling this tool starts the requested subagent(s) immediately; it does not queue or defer them for later. All requested subagents run concurrently.",
 		"",
-		"This returns as soon as the panes are open. Do nothing else after spawning: end your turn and wait for the results. Each subagent's result is delivered back to this session automatically as a steer message when it finishes — do not poll, sleep, tail logs, or start unrelated work while you wait.",
+		"This call returns when every subagent has finished, with all their reports in one result. Do nothing else while it runs: you cannot start a second batch until it returns. A human may interrupt the turn, which ends the wait without ending the subagents — their panes stay open.",
 		"",
-		`Provide a \`tasks\` array with one or more subagents (up to ${MAX_PARALLEL_TASKS}). Subagents run concurrently and report back together in a single message. Specify \`name\` and \`profile\` per task when needed.`,
+		`Provide a \`tasks\` array with one or more subagents (up to ${MAX_PARALLEL_TASKS}). Subagents run concurrently and their reports come back together in a single result. Specify \`name\` and \`profile\` per task when needed.`,
 		"",
 		"Available roles:",
 	];
@@ -69,7 +69,7 @@ export const PROMPT_GUIDELINES = [
 	"Use subagent to delegate self-contained work that would otherwise flood this context window.",
 	"Calling subagent starts the requested agent(s) immediately; it does not queue work for later.",
 	"Do not delegate something you can finish in one or two tool calls yourself.",
-	"After spawning, do nothing else: end your turn and wait for the result, which arrives automatically as a steer message. Do not poll, sleep, or start unrelated work.",
+	"While subagents run, do nothing else: the call returns when they have all finished, and a second batch cannot start until it does. Do not poll, sleep, or start unrelated work.",
 	"Write each task as a complete brief — a subagent cannot see this conversation.",
 	"The subagent reports its result itself, so state the exact output you want — that text is what comes back.",
 ];
@@ -93,7 +93,7 @@ export function buildParameters(config: TinysubagentConfig) {
 			{
 				minItems: 1,
 				maxItems: MAX_PARALLEL_TASKS,
-				description: `Subagents, each with its own pane. Results come back together in one message. Maximum ${MAX_PARALLEL_TASKS}.`,
+				description: `Subagents, each with its own pane. The call returns one result with every report. Maximum ${MAX_PARALLEL_TASKS}.`,
 			},
 		),
 		cwd: Type.Optional(

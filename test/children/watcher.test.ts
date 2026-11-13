@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +34,7 @@ function scenario(options: { session?: string | null } = {}) {
 		agent: "worker",
 		profile: { name: "light" },
 		paneId: "w1:p9",
+		writesSession: true,
 		sessionFile,
 		exitCodeFile: `${sessionFile}.exitcode`,
 		reportFile: `${sessionFile}.done`,
@@ -62,12 +64,14 @@ function scenario(options: { session?: string | null } = {}) {
 	};
 }
 
-test("a done report completes the run and consumes both sidecars", async () => {
+test("a content-free done completes without a summary and consumes both sidecars", async () => {
 	const s = scenario();
 	try {
 		s.write(s.running.reportFile, '{"type":"done"}');
 		const outcome = await waitForSubagent(s.running, undefined, s.deps);
-		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: "the answer" });
+		// No text was handed back, and the session is not scraped to invent one: the
+		// completion says the turn ended, and that is all it claims.
+		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: null });
 		// Consumed, so a later run on the same session path cannot read them twice.
 		assert.equal(existsSync(s.running.reportFile), false);
 	} finally {
@@ -227,7 +231,7 @@ test("an aborted report does not settle the batch while the child is alive", asy
 		assert.deepEqual(await pending, {
 			kind: "completed",
 			via: "turn-end",
-			summary: "the answer",
+			summary: null,
 		});
 	} finally {
 		s.cleanup();
@@ -265,37 +269,38 @@ test("a report carrying a result beats a contradicting session file", async () =
 	}
 });
 
-test("a report with an empty result falls back to the session text", async () => {
+test("a report with an empty result is still a completion, with no summary", async () => {
 	const s = scenario();
 	try {
-		// An empty payload is no payload: fall back to the legacy scrape rather
-		// than delivering a blank result.
+		// An empty payload is no payload: the child settled without handing anything
+		// back, so the completion carries no text rather than scraping one.
 		s.write(s.running.reportFile, JSON.stringify({ type: "done", result: "" }));
 		const outcome = await waitForSubagent(s.running, undefined, s.deps);
-		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: "the answer" });
+		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: null });
 	} finally {
 		s.cleanup();
 	}
 });
 
-test("a report whose result is not a string falls back to the session text", async () => {
+test("a report whose result is not a string is a completion with no summary", async () => {
 	const s = scenario();
 	try {
 		s.write(s.running.reportFile, JSON.stringify({ type: "done", result: { text: "nope" } }));
 		const outcome = await waitForSubagent(s.running, undefined, s.deps);
-		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: "the answer" });
+		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: null });
 	} finally {
 		s.cleanup();
 	}
 });
 
-test("a malformed report still counts as settled, with the text from the session", async () => {
+test("a malformed report still counts as settled, with no summary", async () => {
 	const s = scenario();
 	try {
 		s.write(s.running.reportFile, '{"type":"do');
 		const outcome = await waitForSubagent(s.running, undefined, s.deps);
-		// A report exists, so the child finished; the answer is read from the log.
-		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: "the answer" });
+		// A report exists, so the child finished; what it finished on is not text we
+		// can read, so none is claimed.
+		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: null });
 	} finally {
 		s.cleanup();
 	}
@@ -351,7 +356,7 @@ test("an exit code stamped with another run's id is ignored, not credited", asyn
 		assert.equal(existsSync(s.running.exitCodeFile), false);
 		s.write(s.running.reportFile, '{"type":"done"}');
 		const outcome = await pending;
-		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: "the answer" });
+		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: null });
 	} finally {
 		s.cleanup();
 	}
@@ -446,5 +451,162 @@ test("the liveness probe is polled, not called every tick", async () => {
 		assert.ok(calls >= 1 && calls <= 6, `expected 1-6 probes, saw ${calls}`);
 	} finally {
 		s.cleanup();
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// A run that never started
+// ────────────────────────────────────────────────────────────────────────────
+
+test("an empty session file ends the wait as never-started once the grace expires", async () => {
+	const s = scenario({ session: null });
+	try {
+		const outcome = await waitForSubagent(s.running, undefined, {
+			...s.deps,
+			neverStartedMs: 30,
+		});
+		assert.deepEqual(outcome, {
+			kind: "failed",
+			reason: "never-started",
+			exitCode: null,
+			summary: null,
+		});
+		// Nothing was consumed and no close was asked for: a run that never spoke is
+		// reported, not reaped — its pane is left for a human to look at.
+		assert.equal(existsSync(s.running.reportFile), false, "a never-started run consumed a report");
+		assert.equal(existsSync(s.running.exitCodeFile), false, "a never-started run consumed an exit code");
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a session entry of any role suppresses never-started", async () => {
+	const s = scenario({ session: null });
+	try {
+		s.write(
+			s.running.sessionFile,
+			`${JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } })}\n`,
+		);
+		const pending = waitForSubagent(s.running, undefined, { ...s.deps, neverStartedMs: 20 });
+		const raced = await Promise.race([
+			pending,
+			new Promise((resolve) => setTimeout(() => resolve("still waiting"), 150)),
+		]);
+		assert.equal(raced, "still waiting", "a run that had started was called never-started");
+
+		s.write(s.running.reportFile, '{"type":"done"}');
+		assert.equal((await pending).kind, "completed");
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a run that starts before the grace expires still completes normally", async () => {
+	const s = scenario({ session: null });
+	try {
+		const pending = waitForSubagent(s.running, undefined, { ...s.deps, neverStartedMs: 60 });
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		s.write(
+			s.running.sessionFile,
+			`${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "late" }] } })}\n`,
+		);
+		s.write(s.running.reportFile, '{"type":"done"}');
+		const outcome = await pending;
+		// A content-free done carries no text of its own, and the session's last
+		// sentence is not promoted into its summary.
+		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: null });
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a harness that never writes the session file is not called never-started", async () => {
+	const s = scenario({ session: null });
+	try {
+		// agy keeps its transcript at a path only its Stop hook knows, so an empty
+		// file at the pi-format path is its normal state — not evidence about the run.
+		// Reading it as silence would fail every long agy run at the grace and orphan
+		// the report it later writes.
+		const agy: RunningSubagent = { ...s.running, writesSession: false };
+		const pending = waitForSubagent(agy, undefined, { ...s.deps, neverStartedMs: 10 });
+		const raced = await Promise.race([
+			pending.then(() => "settled"),
+			new Promise((resolve) => setTimeout(() => resolve("still waiting"), 120)),
+		]);
+		assert.equal(raced, "still waiting", "an agy run was called never-started after the pi grace");
+
+		// Its own signal still ends the wait, whenever it lands.
+		s.write(agy.reportFile, JSON.stringify({ type: "done", result: "AGY" }));
+		assert.deepEqual(await pending, { kind: "completed", via: "report", summary: "AGY" });
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a run seen writing a session entry is never re-judged against the grace", async () => {
+	const s = scenario();
+	try {
+		// The fixture's session file already holds a turn, so the grace has its
+		// positive answer on the first tick after it expires.
+		const pending = waitForSubagent(s.running, undefined, { ...s.deps, neverStartedMs: 10 });
+		await new Promise((resolve) => setTimeout(resolve, 60));
+
+		// The file is now unreadable (a rotated or removed log). A run that was
+		// already seen starting must not be re-read and re-judged as never started:
+		// the positive is memoized, so an empty read is never taken as silence.
+		writeFileSync(s.running.sessionFile, "", "utf8");
+		const raced = await Promise.race([
+			pending.then(() => "settled"),
+			new Promise((resolve) => setTimeout(() => resolve("still waiting"), 150)),
+		]);
+		assert.equal(raced, "still waiting", "a run that had started was re-read as never-started");
+
+		s.write(s.running.reportFile, '{"type":"done","result":"late"}');
+		assert.deepEqual(await pending, { kind: "completed", via: "report", summary: "late" });
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a report that lands during the grace check is not lost as never-started", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-watch-race-"));
+	// A FIFO stands in for the session file so the grace's read can be held open:
+	// that is the window between `classify` finding nothing and the grace deciding
+	// the run never started. A real child writes its report from another process,
+	// which is exactly what the writer below does.
+	const sessionFile = join(dir, "session.jsonl");
+	execFileSync("mkfifo", [sessionFile]);
+	const reportFile = `${sessionFile}.done`;
+	const running: RunningSubagent = {
+		id: "aaaa1111",
+		name: "watch",
+		agent: "worker",
+		profile: { name: "light" },
+		paneId: "w1:p9",
+		writesSession: true,
+		sessionFile,
+		exitCodeFile: `${sessionFile}.exitcode`,
+		reportFile,
+		startedAt: Date.now(),
+		task: "do the thing",
+	};
+	const payload = JSON.stringify({ type: "done", result: "landed late" });
+	try {
+		const writer = spawn(
+			"bash",
+			["-c", `sleep 0.05; printf '%s' '${payload}' > '${reportFile}'; : > '${sessionFile}'`],
+			{ stdio: "ignore" },
+		);
+		const outcome = await waitForSubagent(running, undefined, {
+			neverStartedMs: 0,
+			pollIntervalMs: 10,
+			paneExists: async () => true,
+		});
+		assert.equal(writer.exitCode === null || writer.exitCode === 0, true);
+		// The report outranks the inference: it is the child's own word, even when it
+		// arrived a moment after the classifier looked for it.
+		assert.deepEqual(outcome, { kind: "completed", via: "report", summary: "landed late" });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
 	}
 });

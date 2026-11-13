@@ -4,6 +4,10 @@
  * Deliberately not named `session.ts` — that name belongs to the child's JSONL
  * reader. Registration order matches the original index.ts: start first, then
  * shutdown, both before the tool is registered.
+ *
+ * Shutdown aborts every running watcher, which is also what ends a blocking tool
+ * call: the call returns its batch as cancelled rather than outliving the session
+ * that asked for it. The children's panes are left open.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -15,8 +19,6 @@ export interface LifecycleDeps {
 	offerPluginFix: (ctx: ExtensionContext) => Promise<void>;
 	/** Watchers still running, aborted and cleared on shutdown; owned by the caller. */
 	watchers: Set<AbortController>;
-	/** Flip the caller's shutdown flag so delivery stops. */
-	markShuttingDown: () => void;
 }
 
 export function registerLifecycle(pi: ExtensionAPI, deps: LifecycleDeps): void {
@@ -33,7 +35,6 @@ export function registerLifecycle(pi: ExtensionAPI, deps: LifecycleDeps): void {
 	});
 
 	pi.on("session_shutdown", () => {
-		deps.markShuttingDown();
 		for (const watcher of deps.watchers) watcher.abort();
 		deps.watchers.clear();
 	});

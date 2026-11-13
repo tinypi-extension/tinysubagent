@@ -22,18 +22,42 @@
  * nothing next to the process this is supervising, and a poll cannot miss an
  * event the way a watch can during a reconnect or a rename. Liveness of the
  * *pane* is checked far less often, since that costs a herdr subprocess.
+ *
+ * ## The run that never started
+ *
+ * A child pi that refuses its prompt — no API key, an unknown model — throws
+ * before the agent phase and writes nothing at all: no report, no exit code, and
+ * a pane that stays alive at its prompt. Nothing would ever settle it. So after
+ * `NEVER_STARTED_MS` an empty session file is itself a signal: the run never
+ * began, and the wait ends `failed (never-started)` rather than hanging on the
+ * blocking call. A session file with *any* entry, of any role, means a run
+ * happened and the ordinary rules apply; and the pane is deliberately left open,
+ * because `/login` in it is still the fix.
+ *
+ * That reading only holds for a harness that writes the session file we watch —
+ * pi. A child on another harness (agy) never writes an entry at the pi-format
+ * path, so silence there says nothing about whether a run started: the grace is
+ * skipped for it (`RunningSubagent.writesSession`) and the wait stays on the
+ * ordinary signals.
  */
 
 import { readFileSync, rmSync } from "node:fs";
 import { herdrPaneExists } from "../herdr/cli.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
-import { readFailureNote, readFinalMessage } from "./session.ts";
+import { readFailureNote, readFinalMessage, readSessionEntries } from "./session.ts";
 
 const POLL_INTERVAL_MS = 1_000;
 /** Check pane liveness every N polls — one herdr call per 5s, not per second. */
 const PANE_CHECK_EVERY = 5;
+/**
+ * How long a child may go without writing a single session entry before the run
+ * is called never-started. Generous on purpose: a cold start that writes its
+ * first entry slowly is not a failure, and the answer is only terminal once the
+ * file has stayed empty for this long.
+ */
+const NEVER_STARTED_MS = 90_000;
 
-export type FailureReason = "error" | "exit" | "no-output";
+export type FailureReason = "error" | "exit" | "no-output" | "never-started";
 
 export type SubagentOutcome =
 	/** The child handed back a result, exited pi cleanly, or an older build declared a finished turn. */
@@ -54,6 +78,12 @@ export interface RunningSubagent {
 	/** Resolved profile, for display only. */
 	profile: ResolvedProfile | null;
 	paneId: string;
+	/**
+	 * Whether this child's harness appends to {@link sessionFile} as it runs (pi),
+	 * or keeps its transcript elsewhere (agy). The never-started grace reads that
+	 * file, so it is only meaningful when the harness writes it.
+	 */
+	writesSession: boolean;
 	sessionFile: string;
 	exitCodeFile: string;
 	reportFile: string;
@@ -86,6 +116,8 @@ function readExitCode(file: string): { code: number; id: string | null } | null 
  * `result` is the explicit payload — present only when the child called
  * `subagent_report`. Anything that is not a non-empty string counts as
  * absent, which is what makes an old reader's output still valid input here.
+ * An absent payload means no text was handed back, and the session is not asked
+ * to supply one: a content-free done is a completion with no summary.
  */
 interface Report {
 	settle: "done" | "failed";
@@ -181,12 +213,14 @@ function classify(running: RunningSubagent): Classification | null {
 			remove(running.reportFile);
 			return null;
 		}
-		// An older build's report said how the turn ended. A failed one keeps its
-		// pane open — the error is on screen there and the user may want to retry.
+		// An older build's report said how the turn ended. A completed one carries
+		// no text: the child's settle is terminal, not something to dress up in the
+		// last sentence it happened to write. A failed one keeps its pane open — the
+		// error is on screen there and the user may want to retry.
 		return {
 			outcome:
 				report.settle === "done"
-					? { kind: "completed", via: "turn-end", summary: summary() }
+					? { kind: "completed", via: "turn-end", summary: null }
 					: { kind: "failed", reason: report.reason, exitCode: null, summary: failure(report.message) },
 			consume: [running.reportFile, running.exitCodeFile],
 		};
@@ -225,6 +259,8 @@ export interface WatcherDeps {
 	/** Pane liveness probe. Returns null when the answer is unknown. */
 	paneExists?: (paneId: string) => Promise<boolean | null>;
 	pollIntervalMs?: number;
+	/** Empty-session grace before a run is called never-started. */
+	neverStartedMs?: number;
 }
 
 /**
@@ -238,10 +274,17 @@ export function waitForSubagent(
 	deps: WatcherDeps = {},
 ): Promise<SubagentOutcome> {
 	const paneExists = deps.paneExists ?? ((paneId: string) => herdrPaneExists(paneId));
+	const neverStartedMs = deps.neverStartedMs ?? NEVER_STARTED_MS;
 
 	return new Promise((resolve) => {
 		let settled = false;
 		let ticks = 0;
+		/**
+		 * Memoized positive for the never-started grace: once any session entry has
+		 * been seen, the run happened and this file never needs parsing again. The
+		 * negative has to be re-read — an entry can still appear.
+		 */
+		let startedRun = false;
 
 		const finish = (outcome: SubagentOutcome, consume: string[] = []): void => {
 			if (settled) return;
@@ -263,6 +306,23 @@ export function waitForSubagent(
 			if (classification) {
 				finish(classification.outcome, classification.consume);
 				return;
+			}
+
+			// No signal, and nothing written at all: a prompt pi refused never starts
+			// a run, so the empty session file is the only trace it leaves. The pane
+			// stays open — a human can still fix the credential and drive it on.
+			// Only a harness that writes this file can be read this way: for any other
+			// the empty file is the normal state of a healthy run.
+			const graceElapsed = Date.now() - running.startedAt >= neverStartedMs;
+			if (running.writesSession && !startedRun && graceElapsed) {
+				startedRun = readSessionEntries(running.sessionFile).length > 0;
+				if (!startedRun) {
+					// A report can land between `classify` and here. It is the child's own
+					// word, so it outranks the inference; the next tick reads it properly.
+					if (readReport(running.reportFile) !== null) return;
+					finish({ kind: "failed", reason: "never-started", exitCode: null, summary: null });
+					return;
+				}
 			}
 
 			ticks += 1;

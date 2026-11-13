@@ -12,8 +12,8 @@
  * Usage: node scripts/smoke.ts [agent] [profile] [--parallel]
  *
  * `--parallel` spawns two children at once and checks that their results arrive
- * in one combined message. A child that cannot start is not reported: it holds
- * its pane, which `npm run smoke:provider-error` exercises on purpose.
+ * together in one result. A child that cannot start reports as a failure, which
+ * `npm run smoke:provider-error` exercises on purpose.
  */
 
 import { mkdirSync, rmSync } from "node:fs";
@@ -32,7 +32,7 @@ import {
 	versionAtLeast,
 } from "../src/herdr/cli.ts";
 import { spawnOne } from "../src/children/spawn.ts";
-import { buildResultText } from "../src/present/steer.ts";
+import { buildResultText } from "../src/present/result.ts";
 import { waitForSubagent, type RunningSubagent } from "../src/children/watcher.ts";
 
 const agentName = process.argv[2] ?? "worker";
@@ -157,7 +157,7 @@ for (const result of settled) {
 	console.log(`${result.name}: ${result.outcome.kind} in ${(result.elapsedMs / 1000).toFixed(1)}s`);
 }
 
-console.log(`\n── the single combined steer message ──\n${buildResultText(settled)}`);
+console.log(`\n── the single combined result text ──\n${buildResultText(settled)}`);
 
 // A finished pane closes itself; a held one is left open on purpose. Reap
 // every pane here so the user's herdr is left exactly as it was found.

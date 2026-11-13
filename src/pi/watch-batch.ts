@@ -1,26 +1,28 @@
 /**
- * Completion delivery: wait for a whole batch, then report once.
+ * Batch completion: wait for every child, then hand the results back.
  *
  * Children settle independently and a watcher ends only on a report, an exit
  * code, or the pane disappearing. A non-report ending leaves a live child at
  * its prompt instead, so the batch waits on that pane until a human resolves
- * it. Watcher ownership stays with the caller (index.ts); this module only
- * adds and removes the controllers it creates.
+ * it. The tool call blocks on this wait, so the results are the call's return
+ * value; nothing is sent to the orchestrator afterwards. Watcher ownership
+ * stays with the caller (index.ts); this module only adds and removes the
+ * controllers it creates.
+ *
+ * A pane is closed only when the child is gone anyway — it reported, or its
+ * session exited. A completion that came from a settle leaves the child alive at
+ * its prompt and its pane open, as does every failure and cancellation.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { herdrPaneClose } from "../herdr/cli.ts";
 import type { LiveSubPanes } from "../herdr/layout.ts";
 import { waitForSubagent, type RunningSubagent } from "../children/watcher.ts";
-import { buildResultDetails, buildResultText, type SubagentResult } from "../present/steer.ts";
+import type { SubagentResult } from "../present/result.ts";
 
 export interface WatchBatchDeps {
-	pi: ExtensionAPI;
 	/** Watchers still running, so a shutdown can end them; owned by the caller. */
 	watchers: Set<AbortController>;
-	/** Reads the caller's shutdown flag, so nothing is delivered after it. */
-	isShuttingDown: () => boolean;
-	/** The sub panes this registration opened; a completed child is dropped here. */
+	/** The sub panes this registration opened; a child whose pane was closed is dropped here. */
 	columns: LiveSubPanes;
 	/**
 	 * Called once per child as its wait settles, whatever the outcome, so the
@@ -30,25 +32,21 @@ export interface WatchBatchDeps {
 	releaseLabel?: (label: string) => void;
 }
 
-/** Send one steer message for a settled batch. Silent when shutting down or empty. */
-export function deliver(pi: ExtensionAPI, results: SubagentResult[], isShuttingDown: () => boolean): void {
-	if (isShuttingDown() || results.length === 0) return;
-	pi.sendMessage(
-		{
-			customType: "tinysubagent_result",
-			content: buildResultText(results),
-			display: true,
-			details: buildResultDetails(results),
-		},
-		{ triggerTurn: true, deliverAs: "steer" },
-	);
-}
-
 /**
- * Wait for a batch, then report once. Each child gets its own controller, added
- * to the caller's watcher set and removed again as soon as it settles.
+ * Wait for a batch and return one result per child, in the order they were
+ * spawned. Each child gets its own controller, added to the caller's watcher
+ * set and removed again as soon as it settles.
+ *
+ * `signal` is the tool call's own: when the human interrupts the turn, every
+ * in-flight wait resolves as cancelled so the call can return. A cancelled
+ * child is never closed — its pane is left exactly where the human can still
+ * use it.
  */
-export async function watchBatch(runnings: readonly RunningSubagent[], deps: WatchBatchDeps): Promise<void> {
+export async function watchBatch(
+	runnings: readonly RunningSubagent[],
+	signal: AbortSignal | undefined,
+	deps: WatchBatchDeps,
+): Promise<SubagentResult[]> {
 	const { watchers, columns } = deps;
 	const controllers = runnings.map(() => {
 		const controller = new AbortController();
@@ -56,36 +54,51 @@ export async function watchBatch(runnings: readonly RunningSubagent[], deps: Wat
 		return controller;
 	});
 
-	const settled = await Promise.all(
-		runnings.map(async (running, index) => {
-			const controller = controllers[index];
-			const outcome = await waitForSubagent(running, controller?.signal);
-			if (controller) watchers.delete(controller);
-			// The wait is over however it ended — reported, failed, cancelled, or
-			// aborted — so the Label this child held is free again.
-			deps.releaseLabel?.(running.name);
+	// The call's signal is not a pane's fate: forwarding it only ends the waits,
+	// never the children. Each child's controller is what the watcher listens to.
+	const forward = (): void => {
+		for (const controller of controllers) controller.abort();
+	};
+	signal?.addEventListener("abort", forward, { once: true });
+	if (signal?.aborted) forward();
 
-			// The child's pi is gone by the time a completion lands, so this only
-			// reaps a pane that outlived it. A failure is left on screen instead,
-			// so the reason stays readable. No rebalance runs here: the layout is
-			// set at spawn time and a close never revisits it.
-			if (outcome.kind === "completed") {
-				columns.drop(running.paneId);
-				void herdrPaneClose(running.paneId);
-			}
+	try {
+		return await Promise.all(
+			runnings.map(async (running, index) => {
+				const controller = controllers[index];
+				const outcome = await waitForSubagent(running, controller?.signal);
+				if (controller) watchers.delete(controller);
+				// The wait is over however it ended — reported, failed, cancelled, or
+				// aborted — so the Label this child held is free again.
+				deps.releaseLabel?.(running.name);
 
-			return {
-				name: running.name,
-				agent: running.agent,
-				profile: running.profile,
-				paneId: running.paneId,
-				task: running.task,
-				outcome,
-				elapsedMs: Date.now() - running.startedAt,
-				sessionFile: running.sessionFile,
-			} satisfies SubagentResult;
-		}),
-	);
+				// Only a wait that ended *because* the child is over may close its pane.
+				// A report and a session exit are both the child leaving: nothing is left
+				// to read there. A turn-end completion is different — the child is alive at
+				// its prompt with no summary to hand back, so the pane is the only evidence
+				// of what it did and is deliberately left open. A failure or a
+				// cancellation is left on screen too: there is a reason to read, or a
+				// human to keep driving it. No rebalance runs here: the layout is set at
+				// spawn time and a close never revisits it.
+				if (outcome.kind === "completed" && outcome.via !== "turn-end") {
+					columns.drop(running.paneId);
+					void herdrPaneClose(running.paneId);
+				}
 
-	deliver(deps.pi, settled, deps.isShuttingDown);
+				return {
+					name: running.name,
+					agent: running.agent,
+					profile: running.profile,
+					paneId: running.paneId,
+					task: running.task,
+					outcome,
+					elapsedMs: Date.now() - running.startedAt,
+					sessionFile: running.sessionFile,
+				} satisfies SubagentResult;
+			}),
+		);
+	} finally {
+		signal?.removeEventListener("abort", forward);
+		for (const controller of controllers) watchers.delete(controller);
+	}
 }
