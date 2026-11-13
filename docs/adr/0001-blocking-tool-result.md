@@ -17,5 +17,7 @@ child, and the reports are the whole reason the call exists.
 Consequences: the wait now has to end without a human present, so an unreported turn end becomes
 terminal once the child's report reminders are spent (a content-free completion, no summary, pane left
 open as the only evidence), and a child pi refused before any run is failed as `never-started` after a
-90s grace. Interrupting the orchestrator's turn ends the wait as `cancelled` and never closes a child's
-pane. Only a child that reported, or whose pi exited, has its pane closed here.
+90s grace. Interrupting the orchestrator's turn ends the wait at once, and it never closes a child's
+pane — the interrupt is relayed into every live child instead, as
+[ADR 0002](0002-interrupt-propagates.md) records. Only a child that reported, or whose pi exited, has
+its pane closed here.
