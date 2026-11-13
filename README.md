@@ -5,7 +5,7 @@ delegate to them. Each subagent runs in a shared right-hand [herdr](https://herd
 with its own context window, and hands its report back as this call's result.
 
 - **One blocking call:** the tool waits for the whole batch and returns every report in one result. No fire-and-forget, no second batch until it returns.
-- **Esc stops the batch:** an interrupt in the orchestrator's pane is relayed to every live sub pane, so each child's turn stops where it is and is reported `interrupted`. Nothing is closed: every pane stays open to read and redirect.
+- **Esc stops the batch:** an interrupt in the orchestrator's pane is relayed to every live sub pane, so each child's turn stops where it is and is reported `interrupted`. Nothing is closed: panes are left open to read and redirect.
 - **Parallel batches:** one or more tasks (up to 4), reporting together in one result.
 - **Model profiles:** optional named profiles with a shared `model` and `thinking` setting for pi or agy.
 - **Per-child `env`:** static variables for subagents, without touching the orchestrator's env.

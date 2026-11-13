@@ -75,7 +75,7 @@ A wait ended because the pane disappeared without leaving any signal — no repo
 _Avoid_: interrupted, aborted, stopped
 
 **Interrupted**:
-A wait ended before the batch settled — by the operator's interrupt, in the sense above, or by the session ending under the wait; nothing in the result tells the two apart. It is an outcome of its own, not a kind of cancelled: it says nothing about the pane except that the pane is still there, with the child's work left where it stood. Nothing is salvaged from it, so it carries no summary.
+A wait ended before the batch settled — by the operator's interrupt, in the sense above, or by the session ending under the wait; nothing in the result tells the two apart. It is an outcome of its own, not a kind of cancelled: it says nothing about the pane except that nothing here closed it, and the child's work is left where it stood. Nothing is salvaged from it, so it carries no summary.
 _Avoid_: cancelled, stopped, killed
 
 **Refusal**:
