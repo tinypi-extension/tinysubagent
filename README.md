@@ -209,6 +209,9 @@ routing works with any classifier pi has credentials for:
 - In `/subagent-settings`, the row is a picker.
 - Routing is active when `enableProfiles` is `true`, at least one named profile exists, and either
   `classifierModel` or a `systemOneAPIKey` is set.
+- Each spawn shows a TUI notice with the child's role, label, profile and model; a profile the
+  classifier picked reads `[light (by classifier model)]`, so a routed spawn is never mistaken for
+  one you asked for. A batch lists one line per child.
 - **Setting `classifierModel` makes the three `systemOne*` keys inert.** Every config file still
   listing them logs a deprecation warning naming that file.
 

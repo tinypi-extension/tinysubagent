@@ -27,7 +27,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { ackLine, skipNotice } from "../present/ack.ts";
+import { ackLine, skipNotice, spawnNotice, type SpawnNoticeEntry } from "../present/ack.ts";
 import {
 	NOTE_ALL_SKIPPED,
 	NOTE_NOTHING,
@@ -203,23 +203,27 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// by the loop below exactly as before, with no brief sent for a spawn
 			// that will not happen.
 			const routeWarnings: string[] = [];
+			// Labels whose profile the caller left open: if one carries a profile after
+			// routing, routing is what put it there, and the notice should say so.
+			const unrouted = new Set(
+				accepted.filter((request) => !request.profile?.trim()).map((request) => request.name),
+			);
+			const classifierRouted = new Set<string>();
 			let context: SpawnContext;
 			try {
 				if (routingActive(config)) {
-					const hasAutoRoutedRequests = accepted.some(
-						(request) => !request.profile?.trim() && discovered.agents.some((agent) => agent.name === request.agent),
-					);
-					if (config.classifier && hasAutoRoutedRequests) {
-						ctx.ui?.notify(
-							`tinysubagent: routing profile with classifier model ${config.classifier.raw}.`,
-							"info",
-						);
-					}
 					await routeProfiles(accepted, config, {
 						route: deps.route(ctx),
 						agents: discovered.agents,
 						warn: (message) => routeWarnings.push(message),
 					});
+					if (config.classifier !== null) {
+						for (const request of accepted) {
+							if (unrouted.has(request.name) && (request.profile?.trim() ?? "") !== "") {
+								classifierRouted.add(request.name);
+							}
+						}
+					}
 				}
 
 				// Validate every profile before opening any pane, so a bad batch fails
@@ -302,6 +306,19 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				for (const request of accepted) {
 					if (!started.has(request.name)) runningLabels.release(request.name);
 				}
+			}
+
+			// The spawn is the news: what started, on which profile, on which model.
+			// Announced once the batch's panes exist, so the notice names real children
+			// rather than an intention to spawn them.
+			if (spawned.length > 0) {
+				const entries: SpawnNoticeEntry[] = spawned.map((entry) => ({
+					agent: entry.agent,
+					name: entry.name,
+					profile: entry.profile,
+					routedByClassifier: classifierRouted.has(entry.name),
+				}));
+				ctx.ui?.notify(spawnNotice(entries), "info");
 			}
 
 			// What never became a child, in the order the model reads it. Routing

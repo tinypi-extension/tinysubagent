@@ -20,6 +20,18 @@ export interface SpawnAck {
 	profile: ResolvedProfile | null;
 }
 
+/** One child as the spawn notice reports it: the ack parts plus who picked the profile. */
+export interface SpawnNoticeEntry extends SpawnAck {
+	/** True when the classifier model chose the profile rather than the caller. */
+	routedByClassifier?: boolean;
+}
+
+/** The notice's single prefix, so each line reads as an event rather than a report. */
+export const SPAWN_NOTICE_PREFIX = "tinysubagent: spawned";
+
+/** Marks a profile the classifier model chose; the orchestrator was not the one deciding. */
+export const CLASSIFIER_NOTE = "(by classifier model)";
+
 /** The parts of the line, before separators and parentheses are applied. */
 export interface AckParts {
 	role: string;
@@ -61,9 +73,8 @@ export function skipNotice(label: string): string {
 	return `skipped ${label}: a subagent with this label is already running.`;
 }
 
-/** The plain line: what the model reads, with nothing to parse and no escapes. */
-export function ackLine(ack: SpawnAck): string {
-	const parts = ackParts(ack);
+/** The parts as one line: whatever resolved, in a fixed order, nothing empty. */
+function joinParts(parts: AckParts): string {
 	return [
 		parts.role === "" ? null : parts.role,
 		`(${parts.name})`,
@@ -73,4 +84,32 @@ export function ackLine(ack: SpawnAck): string {
 	]
 		.filter((part): part is string => part !== null)
 		.join(" ");
+}
+
+/** The plain line: what the model reads, with nothing to parse and no escapes. */
+export function ackLine(ack: SpawnAck): string {
+	return joinParts(ackParts(ack));
+}
+
+/**
+ * The notice the user sees the moment a batch has started: the role, the label,
+ * the profile it launched under, and the provider/model that profile resolved
+ * to. A profile the classifier model picked says so, so a routed spawn is never
+ * mistaken for one the caller chose.
+ *
+ * One line per child. A batch of several says how many it started and then
+ * lists them underneath, so a multi-spawn call stays readable at a glance.
+ */
+export function spawnNotice(entries: readonly SpawnNoticeEntry[]): string {
+	if (entries.length === 0) return "";
+	const lines = entries.map((entry) => {
+		const parts = ackParts(entry);
+		if (entry.routedByClassifier && parts.profile !== null) {
+			parts.profile = `${parts.profile} ${CLASSIFIER_NOTE}`;
+		}
+		return joinParts(parts);
+	});
+	const first = lines[0] ?? "";
+	if (lines.length === 1) return `${SPAWN_NOTICE_PREFIX} ${first}`;
+	return [`${SPAWN_NOTICE_PREFIX} ${lines.length} subagents`, ...lines.map((line) => `  ${line}`)].join("\n");
 }

@@ -541,7 +541,7 @@ test("the route factory is never invoked when profiles are off", async () => {
 // `classifierModel` alone keeps profile as an optional override
 // ────────────────────────────────────────────────────────────────────────────
 
-test("classifier routing shows an info notice when a profile is chosen automatically", async () => {
+test("classifier routing announces the spawned subagent, not the router", async () => {
 	const config: TinysubagentConfig = {
 		...routingConfig(null),
 		classifier: {
@@ -554,7 +554,64 @@ test("classifier routing shows an info notice when a profile is chosen automatic
 	try {
 		await withSpawnHerdrStub(() => executeSettled(h, { tasks: [{ agent: "worker", task: "one job" }] }));
 		assert.deepEqual(h.notices, [{
-			message: "tinysubagent: routing profile with classifier model openrouter/typesafe/jev-latest.",
+			message: "tinysubagent: spawned Worker (worker) [light (by classifier model)] m-light (low)",
+			level: "info",
+		}]);
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a batch of two announces both children, one line each", async () => {
+	const config: TinysubagentConfig = {
+		...routingConfig(null),
+		classifier: {
+			provider: "openrouter",
+			model: "typesafe/jev-latest",
+			raw: "openrouter/typesafe/jev-latest",
+		},
+	};
+	const h = harness(config, () => async () => ({ choice: "light" }));
+	try {
+		await withSpawnHerdrStub(() =>
+			executeSettled(h, {
+				tasks: [
+					{ agent: "worker", task: "one job", name: "first" },
+					{ agent: "worker", task: "another job", name: "second" },
+				],
+			}),
+		);
+		assert.deepEqual(h.notices, [{
+			message: [
+				"tinysubagent: spawned 2 subagents",
+				"  Worker (first) [light (by classifier model)] m-light (low)",
+				"  Worker (second) [light (by classifier model)] m-light (low)",
+			].join("\n"),
+			level: "info",
+		}]);
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("an explicit profile is announced without the classifier postfix", async () => {
+	const config: TinysubagentConfig = {
+		...routingConfig(null),
+		classifier: {
+			provider: "openrouter",
+			model: "typesafe/jev-latest",
+			raw: "openrouter/typesafe/jev-latest",
+		},
+	};
+	const h = harness(config, () => async () => ({ choice: "pro" }));
+	try {
+		await withSpawnHerdrStub(() =>
+			executeSettled(h, { tasks: [{ agent: "worker", task: "one job", profile: "light" }] }),
+		);
+		assert.deepEqual(h.notices, [{
+			message: "tinysubagent: spawned Worker (worker) [light] m-light (low)",
 			level: "info",
 		}]);
 	} finally {
@@ -1352,7 +1409,11 @@ test("a relay that fails is silent and does not stop the rest of the fan-out", a
 				assert.match(text, /alpha — interrupted/, "the failed relay changed the result");
 				assert.match(text, /beta — interrupted/, "the failed relay changed the result");
 				assert.notEqual(isErrorFlag(result), true, "a pane that is gone turned the interrupt into a failure");
-				assert.deepEqual(h.notices, [], "a failed relay warned the operator");
+				assert.deepEqual(
+					h.notices.filter((notice) => notice.level !== "info"),
+					[],
+					"a failed relay warned the operator",
+				);
 				assert.equal(writtenScripts(h.cwd).length, 2, "a failed relay changed what was spawned");
 			},
 			{ failSendKeys: ["w1:p1Z"] },

@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { ackLine, ackParts, roleLabel } from "../../src/present/ack.ts";
+import { ackLine, ackParts, roleLabel, spawnNotice } from "../../src/present/ack.ts";
 
 test("a role reads as a title, however the agent id is punctuated", () => {
 	assert.equal(roleLabel("scout"), "Scout");
@@ -55,4 +55,51 @@ test("the parts are exposed separately, so a coloured line cannot drift from the
 			thinking: "low",
 		},
 	);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// The spawn notice: what the user sees once the batch has started
+// ────────────────────────────────────────────────────────────────────────────
+
+test("a spawned child is announced with its role, label, profile, model and thinking", () => {
+	assert.equal(
+		spawnNotice([
+			{
+				agent: "scout",
+				name: "finder",
+				profile: { name: "current", model: "oc-openai/deepseek-flash", thinking: "medium" },
+			},
+		]),
+		"tinysubagent: spawned Scout (finder) [current] oc-openai/deepseek-flash (medium)",
+	);
+});
+
+test("a profile the classifier model picked says so, and one the caller picked does not", () => {
+	const profile = { name: "light", model: "oc-openai/deepseek-flash", thinking: "low" } as const;
+	assert.equal(
+		spawnNotice([{ agent: "worker", name: "job", profile, routedByClassifier: true }]),
+		"tinysubagent: spawned Worker (job) [light (by classifier model)] oc-openai/deepseek-flash (low)",
+	);
+	assert.equal(
+		spawnNotice([{ agent: "worker", name: "job", profile }]),
+		"tinysubagent: spawned Worker (job) [light] oc-openai/deepseek-flash (low)",
+	);
+});
+
+test("a batch is announced as many lines, one per child", () => {
+	assert.equal(
+		spawnNotice([
+			{ agent: "scout", name: "finder", profile: { name: "light", model: "m-light" } },
+			{ agent: "worker", name: "job", profile: null },
+		]),
+		[
+			"tinysubagent: spawned 2 subagents",
+			"  Scout (finder) [light] m-light",
+			"  Worker (job)",
+		].join("\n"),
+	);
+});
+
+test("nothing spawned is announced as nothing", () => {
+	assert.equal(spawnNotice([]), "");
 });
