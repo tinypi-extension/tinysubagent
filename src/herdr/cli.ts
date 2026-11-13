@@ -5,11 +5,13 @@
  *
  *   - panes are created, named and reaped through `herdr plugin pane open`,
  *     `herdr pane rename` and `herdr pane close`;
+ *   - an interrupt is relayed with `herdr pane send-keys <pane> esc` — the one
+ *     place this module types into a pane, and only on the operator's behalf;
  *   - the `tinysubagent-panes` plugin — shipped in `herdr-plugin/` beside this
  *     module — supplies the *entrypoint*: a dispatcher that reads the
  *     launch-script path out of an environment variable and `exec bash`es it.
- *     We never type into a pane's shell, so there is no race with the pane's
- *     own startup (direnv, rc files, prompt).
+ *     A launch never types into a pane's shell, so there is no race with the
+ *     pane's own startup (direnv, rc files, prompt).
  *
  * Every call is a subprocess. herdr prints an envelope —
  * `{"id":"cli:...","result":{...}}` — for most commands but a bare object for
@@ -355,6 +357,17 @@ export async function herdrPaneLayout(paneId: string): Promise<TabLayout | null>
 	}
 
 	return { tabId: typeof record.tab_id === "string" ? record.tab_id : null, panes };
+}
+
+/**
+ * Press Esc in a pane: the same keystroke a human uses to stop a turn.
+ *
+ * Best-effort like the other cosmetic calls. An interrupt that cannot be
+ * delivered — a pane that is already gone, a herdr that errors — resolves
+ * `false` instead of throwing, because the relay must stay silent.
+ */
+export async function herdrPaneSendEsc(paneId: string): Promise<boolean> {
+	return runHerdrQuiet(["pane", "send-keys", paneId, "esc"]);
 }
 
 /**
