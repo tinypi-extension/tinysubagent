@@ -73,7 +73,7 @@ test("launch paths live under the orchestrator's own session artifacts", () => {
 	assert.equal(paths.scriptsDir, "/sessions/--proj--/artifacts/sid-1/subagent-scripts");
 	assert.equal(paths.contextDir, "/sessions/--proj--/artifacts/sid-1/context");
 	assert.match(paths.scriptFile, /subagent-scripts\/worker-abcd1234\.sh$/);
-	assert.match(paths.taskFile, /context\/worker-.*\.md$/);
+	assert.match(paths.taskFile, /context\/worker-abcd1234-.*\.md$/);
 	// Both sidecars hang off the child's session file, which is how the watcher
 	// finds them without any registry.
 	assert.equal(paths.exitCodeFile, `${paths.childSessionFile}.exitcode`);

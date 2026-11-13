@@ -35,12 +35,6 @@ export interface WatchBatchDeps {
 	watchers: Set<AbortController>;
 	/** The sub panes this registration opened; a child whose pane was closed is dropped here. */
 	columns: LiveSubPanes;
-	/**
-	 * Called once per child as its wait settles, whatever the outcome, so the
-	 * Label it held can be claimed again. Optional: a caller with nothing to
-	 * release simply omits it.
-	 */
-	releaseLabel?: (label: string) => void;
 }
 
 /**
@@ -102,10 +96,6 @@ export async function watchBatch(
 				const controller = controllers[index];
 				const outcome = await waitForSubagent(running, controller?.signal);
 				if (controller) watchers.delete(controller);
-				// The wait is over however it ended — reported, failed, cancelled,
-				// interrupted, or gone — so the Label this child held is free again.
-				deps.releaseLabel?.(running.name);
-
 				// A wait that ended because the child is over closes its pane: a report and a
 				// session exit are both the child leaving, so nothing is left to read there.
 				// A turn-end completion is different — the child is alive at its prompt with no

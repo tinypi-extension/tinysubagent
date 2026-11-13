@@ -96,7 +96,7 @@ export function buildLaunchPaths(input: LaunchPathsInput): LaunchPaths {
 		artifactDir,
 		scriptsDir,
 		contextDir,
-		taskFile: path.join(contextDir, `${fileSafe}-${timestampForArtifacts()}.md`),
+		taskFile: path.join(contextDir, `${fileSafe}-${input.id}-${timestampForArtifacts()}.md`),
 		scriptFile: path.join(scriptsDir, `${fileSafe}-${input.id}.sh`),
 		childSessionDir,
 		childSessionFile,

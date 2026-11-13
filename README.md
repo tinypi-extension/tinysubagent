@@ -192,9 +192,6 @@ ends. Existing trust entries are preserved. The workspace and hook are removed a
 
 ### Profile routing via classifier model (`classifierModel`)
 
-A `classifierModel` routes **in process** through pi's model registry instead of SystemOne, so
-routing works with any classifier pi has credentials for:
-
 ```jsonc
 {
   "enableProfiles": true,
@@ -207,43 +204,11 @@ routing works with any classifier pi has credentials for:
 - Set one up with pi's built-in [models](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md#use-classifier-models)
   or a custom one via [pi-classifier-provider](https://github.com/tinypi-extension/pi-classifier-provider).
 - In `/subagent-settings`, the row is a picker.
-- Routing is active when `enableProfiles` is `true`, at least one named profile exists, and either
-  `classifierModel` or a `systemOneAPIKey` is set.
 - Each spawn shows a TUI notice with the child's role, label, profile and model; a profile the
   classifier picked reads `[light (by classifier model)]`, so a routed spawn is never mistaken for
   one you asked for. A batch lists one line per child.
 - **Setting `classifierModel` makes the three `systemOne*` keys inert.** Every config file still
   listing them logs a deprecation warning naming that file.
-
-### SystemOne profile routing (deprecated)
-
-> A configured `classifierModel` supersedes this section. The `systemOne*` keys are then ignored, and
-> every config file that still lists them logs a warning naming the file to clean up.
-
-With a SystemOne key set, the orchestrator asks a routing service to pick the profile for each task,
-instead of the model choosing `profile` itself:
-
-```jsonc
-{
-  "enableProfiles": true,
-  "profiles": { "light": { "model": "<small-model>", "thinking": "low" } },
-  "systemOneAPIKey": "sk-…",                     // secret API key
-  "systemOneBaseUrl": "https://api.typesafe.ai", // optional; default shown
-  "systemOneModel": "jev-latest"                 // optional; default shown
-}
-```
-
-- Project scope is inert for all three keys. A checked-in project file cannot enable, disable, or
-  redirect routing. Put them in the override or global file.
-- **`systemOneModel` fails silently.** If it is absent, blank, non-string, keyless, or project-scoped,
-  it falls back to `jev-latest`.
-- **Every failure falls back to `current`**, never delaying a spawn beyond a 2 s budget.
-
-When a subagent's turn ends without a `subagent_report` call, the child reminds it to report, twice. The
-settle after that budget is spent writes a content-free completion: the waiting call ends as
-`completed (turn-end)` with no summary instead of hanging, and the pane stays open. A child whose pi
-refused the prompt (no credentials, unknown model) is reported `failed (never-started)` once a 90s grace
-has passed with nothing written, so `/login` in that pane still buys you the work.
 
 ## Environment variables
 
