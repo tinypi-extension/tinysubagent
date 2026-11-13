@@ -1,6 +1,6 @@
 # Interrupt propagates to the children
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 
@@ -89,3 +89,7 @@ Interrupt is relayed, never escalated. A second Esc, an Esc against a child that
 - **This contradicts a stated consequence of ADR 0001** ("interrupting the orchestrator's turn ends the wait as `cancelled` and never closes a child's pane"). The no-closing half stands and is reaffirmed; the "ends the wait as `cancelled` and nothing else" half is reversed. Flagged here rather than silently overridden, and worth an ADR of its own.
 - The awkward part of the feature is that it reaches into a pane the operator may not be looking at, using the same keystroke the operator would use by hand. The mitigation is not targeting cleverness: it is that the relay stops a turn and closes nothing, so the worst case is a child that has to be re-prompted.
 - `cancelled` is currently rendered as "cancelled (pane closed without reporting)" and is already wrong on the abort path today; this change removes the lie rather than spreading it.
+
+## Outcome
+
+All five tickets resolved on the single integration branch `integration/interrupt-propagates`, off `main` at `eef3b20`, tip `f947660`. One interrupt in the orchestrator's pane is relayed into every live sub pane this registration holds, the blocking call returns at once, each child's turn stops where it is and is reported `interrupted` with no summary, and nothing is closed. Merge commits: `61c8755` (01), `f79a8f4` + `491b91e` (02 + alignment), `610455f` (03), `5a61f12` (04), `e385e8f` (05), `eb94acd` (review fixes). `npm test` 534 pass / 0 fail, `npm run typecheck` clean at the tip.

@@ -4,10 +4,16 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The Live sub panes tracker lists the ids it currently holds, in a stable order, with no herdr call.
-- [ ] A pane id nobody placed is never listed; a dropped id stops being listed.
-- [ ] Enumeration never mutates the tracked set and never throws.
-- [ ] The existing layout-checked enumeration, placement, and sizing behaviour are unchanged.
-- [ ] Tests cover an empty tracker, a placed pane, and a dropped pane, at the existing layout seam.
+- [x] The Live sub panes tracker lists the ids it currently holds, in a stable order, with no herdr call.
+- [x] A pane id nobody placed is never listed; a dropped id stops being listed.
+- [x] Enumeration never mutates the tracked set and never throws.
+- [x] The existing layout-checked enumeration, placement, and sizing behaviour are unchanged.
+- [x] Tests cover an empty tracker, a placed pane, and a dropped pane, at the existing layout seam.
+
+## Answer
+
+`LiveSubPanes` gained `trackedIds(): string[]` (`src/herdr/layout.ts`). It returns the ids the tracker holds in placement (spawn) order — explicitly not the on-screen order `liveIn` reports — with no herdr call, no probing or pruning, and no mutation, so it cannot throw. An id nobody `place`d is never listed and a `drop`ped id stops being listed; `liveIn`, `planPlacement`, `planResizes`, `place` and `drop` are untouched. Tests sit at the existing `LiveSubPanes` seam in `test/herdr/layout.test.ts` (empty tracker, placed pane, dropped pane, stability/no-mutation).
+
+Commit `20f6588`, merged by `61c8755`.
