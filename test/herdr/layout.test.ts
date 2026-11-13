@@ -281,3 +281,32 @@ test("LiveSubPanes: dropping twice is safe", () => {
 	assert.doesNotThrow(() => tracker.drop("never-placed"));
 	assert.deepEqual(tracker.liveIn(tab([{ paneId: "s1", rect: box(0, 0, 1, 1) }])), []);
 });
+
+test("LiveSubPanes: trackedIds on an empty tracker lists nothing", () => {
+	const tracker = new LiveSubPanes();
+	assert.deepEqual(tracker.trackedIds(), []);
+});
+
+test("LiveSubPanes: trackedIds lists a placed pane without a layout", () => {
+	const tracker = new LiveSubPanes();
+	tracker.place("s1");
+	assert.deepEqual(tracker.trackedIds(), ["s1"]);
+});
+
+test("LiveSubPanes: trackedIds stops listing a dropped pane", () => {
+	const tracker = new LiveSubPanes();
+	tracker.place("s1");
+	tracker.place("s2");
+	tracker.drop("s1");
+	assert.deepEqual(tracker.trackedIds(), ["s2"]);
+});
+
+test("LiveSubPanes: trackedIds is stable and never mutates the tracked set", () => {
+	const tracker = new LiveSubPanes();
+	tracker.place("s1");
+	tracker.place("s2");
+	assert.deepEqual(tracker.trackedIds(), ["s1", "s2"]);
+	assert.deepEqual(tracker.trackedIds(), ["s1", "s2"]);
+	// Reading ids must not prune: the layout-checked read still decides that.
+	assert.deepEqual(tracker.liveIn(tab([{ paneId: "s2", rect: box(84, 0, 127, 58) }])), ["s2"]);
+});
