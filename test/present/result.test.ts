@@ -132,6 +132,36 @@ test("an interrupted child is reported as interrupted, with its pane still open"
 	assert.doesNotMatch(text, /report/i);
 });
 
+test("an all-interrupted batch says so, and that every pane was left open", () => {
+	const text = buildResultText([result("alpha", { kind: "interrupted" }), result("beta", { kind: "interrupted" })]);
+
+	// The batch-level statement belongs to the lead, above the sections: a reader
+	// has to learn the batch was stopped before reading child-by-child.
+	const [lead, note] = text.split("\n\n");
+	assert.equal(lead, "2 subagents finished (0 completed, 2 did not).");
+	assert.equal(note, "The batch was interrupted: every child's pane was left open.");
+});
+
+test("a partly interrupted batch names whose panes were left open", () => {
+	const text = buildResultText([
+		result("alpha", { kind: "completed", via: "turn-end", summary: "ALPHA" }),
+		result("beta", { kind: "interrupted" }),
+		result("gamma", { kind: "cancelled", summary: null }),
+	]);
+
+	const [lead, note] = text.split("\n\n");
+	assert.equal(lead, "3 subagents finished (1 completed, 2 did not).");
+	assert.equal(note, "The batch was interrupted: the interrupted child's pane was left open.");
+	// alpha reported and its pane is closed, so the note must not claim every pane.
+	assert.equal(note?.includes("every child"), false, `a partly interrupted batch claimed every pane was open: ${note}`);
+});
+
+test("a batch nobody interrupted carries no interrupt note", () => {
+	const text = buildResultText([result("alpha", done), result("gamma", { kind: "cancelled", summary: null })]);
+
+	assert.equal(text.includes("batch was interrupted"), false, `an uninterrupted batch claimed an interrupt: ${text}`);
+});
+
 test("the structured detail of an interrupted child is the kind and nothing else", () => {
 	const [row] = buildResultDetails([result("beta", { kind: "interrupted" })]).results;
 

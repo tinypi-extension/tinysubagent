@@ -69,6 +69,23 @@ function header(results: readonly SubagentResult[]): string {
 }
 
 /**
+ * The batch-level statement an interrupted result leads with.
+ *
+ * The operator stopped the batch, not one child, and that is a fact about the
+ * whole result rather than any section. It reports the panes as they really are:
+ * an interrupt closes nothing, so every interrupted child's pane is left open,
+ * while a completed child's pane is gone and is not claimed here. `null` when no
+ * child was interrupted, because an uninterrupted batch needs no note.
+ */
+function interruptNote(results: readonly SubagentResult[]): string | null {
+	const interrupted = results.filter((result) => result.outcome.kind === "interrupted").length;
+	if (interrupted === 0) return null;
+	if (interrupted === results.length) return "The batch was interrupted: every child's pane was left open.";
+	if (interrupted === 1) return "The batch was interrupted: the interrupted child's pane was left open.";
+	return "The batch was interrupted: the interrupted children's panes were left open.";
+}
+
+/**
  * What to print in place of a summary a child did not leave.
  *
  * A failed child's pane is worth pointing at — the error is on screen there. A
@@ -129,7 +146,9 @@ function section(result: SubagentResult, index: number, total: number): string {
 export function buildResultText(results: readonly SubagentResult[]): string {
 	if (results.length === 0) return "No subagents finished.";
 	const sections = results.map((result, index) => section(result, index, results.length));
-	return [header(results), ...sections].join("\n\n---\n\n");
+	const note = interruptNote(results);
+	const lead = note === null ? header(results) : `${header(results)}\n\n${note}`;
+	return [lead, ...sections].join("\n\n---\n\n");
 }
 
 /**

@@ -37,3 +37,6 @@ intact, so the cheapest recovery is to read what it reached and redirect it by h
 is a child that has to be re-prompted. Only the abort path changes: a report, an exit, a settle, a
 refusal, and a vanished pane end a wait exactly as they did before, and the other consequence of
 [ADR 0001](0001-blocking-tool-result.md) — that nothing here closes a pane — is kept, not reversed.
+One ending the result does not tell apart: a session shutting down while a batch waits ends every wait
+the same way — resolved `interrupted`, with no keystroke relayed — so the rows read as an interrupt even
+though nothing was pressed.

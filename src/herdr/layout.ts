@@ -186,9 +186,10 @@ export class LiveSubPanes {
 	}
 
 	/**
-	 * Every id this registration holds, in placement order, without asking herdr
-	 * anything. Reads `tracked` and never writes it: an id the tab has lost stays
-	 * listed until `liveIn` prunes it or `drop` forgets it. Cannot throw.
+	 * Every id this registration holds, in the order the panes were placed — spawn
+	 * order, not their order on screen — without asking herdr anything. Reads
+	 * `tracked` and never writes it: an id the tab has lost stays listed until
+	 * `liveIn` prunes it or `drop` forgets it. Cannot throw.
 	 */
 	trackedIds(): string[] {
 		return [...this.tracked];
