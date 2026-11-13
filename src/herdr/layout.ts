@@ -185,6 +185,15 @@ export class LiveSubPanes {
 		this.tracked.delete(paneId);
 	}
 
+	/**
+	 * Every id this registration holds, in placement order, without asking herdr
+	 * anything. Reads `tracked` and never writes it: an id the tab has lost stays
+	 * listed until `liveIn` prunes it or `drop` forgets it. Cannot throw.
+	 */
+	trackedIds(): string[] {
+		return [...this.tracked];
+	}
+
 	/** Tracked panes the tab still reports, ordered top to bottom. */
 	liveIn(tab: TabLayout): string[] {
 		const panes = measuredPanes(tab);
