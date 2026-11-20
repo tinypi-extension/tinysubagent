@@ -1,7 +1,7 @@
 /**
  * One Rex child, end to end: the wrapper is split off the orchestrator's
- * block, its sidecar report becomes the blocking tool result, and the block is
- * closed once the child is done. Only the CLI boundary is faked.
+ * block, its sidecars settle the wait, and the block closes. Only the CLI
+ * boundary is faked.
  */
 
 import { strict as assert } from "node:assert";
@@ -14,7 +14,7 @@ import { spawnOne } from "../../src/children/spawn.ts";
 import type { SpawnContext } from "../../src/children/contract.ts";
 import { activatePaneHost, LiveSubPanes } from "../../src/pane-host/index.ts";
 import { watchBatch } from "../../src/pi/watch-batch.ts";
-import { buildResultText } from "../../src/present/result.ts";
+import { buildResultText, type SubagentResult } from "../../src/present/result.ts";
 import type { AgentDef } from "../../src/types.ts";
 import { withFakeRex } from "../helpers/fake-rex.ts";
 
@@ -52,51 +52,77 @@ async function waitForCall(calls: () => string[], needle: string): Promise<void>
 	assert.fail(`rex did not receive a call containing ${needle}: ${calls().join(" | ")}`);
 }
 
-test("one Rex child returns its report and closes its block", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-rex-batch-"));
-	const cwd = join(dir, "work");
-	mkdirSync(cwd, { recursive: true });
-
-	try {
-		await withFakeRex(
-			{
-				split: JSON.stringify({ block_ids: [CHILD] }),
-				block: JSON.stringify({ block_id: CHILD }),
-			},
-			async (calls) => {
-				activatePaneHost(REX_ENV);
+/** Spawn one Rex child, publish a sidecar, wait, and return the tool result. */
+async function runRexBatch(
+	dir: string,
+	cwd: string,
+	settle: (running: { exitCodeFile: string; reportFile: string; id: string }) => void,
+): Promise<{ results: SubagentResult[]; calls: string[] }> {
+	return withFakeRex(
+		{
+			split: JSON.stringify({ block_ids: [CHILD] }),
+			block: JSON.stringify({ block_id: CHILD }),
+		},
+		async (calls) => {
+			activatePaneHost(REX_ENV);
+			try {
 				const spawned = await spawnOne(
 					{ agent: "worker", task: "Do it.", name: "worker" },
 					context(dir, cwd),
 				);
 				assert.equal(spawned.ok, true);
-				if (!spawned.ok) return;
-				const running = spawned.running;
-				assert.equal(running.paneId, CHILD);
-
-				writeFileSync(
-					running.reportFile,
-					JSON.stringify({ type: "done", result: "Rex child finished." }),
-				);
-
-				const results = await watchBatch([running], undefined, {
+				if (!spawned.ok) return { results: [], calls: calls() };
+				settle(spawned.running);
+				const results = await watchBatch([spawned.running], undefined, {
 					watchers: new Set(),
 					columns: new LiveSubPanes(),
 				});
-				assert.equal(results.length, 1);
-				assert.equal(results[0]?.outcome.kind, "completed");
-				assert.equal(results[0]?.outcome.via, "report");
-				assert.match(buildResultText(results), /Rex child finished\./);
-
 				await waitForCall(calls, "block close");
-				const scriptCall = calls().find((call) => call.startsWith("split ")) ?? "";
-				assert.match(scriptCall, /--label worker/);
-				assert.match(scriptCall, new RegExp(`-- .*subagent-scripts/worker-[a-f0-9]+\\.sh$`));
-				assert.ok(calls().some((call) => call === `block close -s sess-1 -S server-1 ${CHILD}`));
-			},
-		);
+				return { results, calls: calls() };
+			} finally {
+				activatePaneHost({});
+			}
+		},
+	);
+}
+
+function tempWorkdir(): { dir: string; cwd: string; cleanup: () => void } {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-rex-batch-"));
+	const cwd = join(dir, "work");
+	mkdirSync(cwd, { recursive: true });
+	return { dir, cwd, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("one Rex child returns its report and closes its block", async () => {
+	const { dir, cwd, cleanup } = tempWorkdir();
+	try {
+		const { results, calls } = await runRexBatch(dir, cwd, (running) => {
+			writeFileSync(running.reportFile, JSON.stringify({ type: "done", result: "Rex child finished." }));
+		});
+		assert.equal(results.length, 1);
+		assert.equal(results[0]?.paneId, CHILD);
+		assert.equal(results[0]?.outcome.kind, "completed");
+		assert.equal(results[0]?.outcome.via, "report");
+		assert.match(buildResultText(results), /Rex child finished\./);
+
+		const splitCall = calls.find((call) => call.startsWith("split ")) ?? "";
+		assert.match(splitCall, /--label worker/);
+		assert.match(splitCall, new RegExp(`-- .*subagent-scripts/worker-[a-f0-9]+\\.sh$`));
+		assert.ok(calls.includes(`block close -s sess-1 -S server-1 ${CHILD}`));
 	} finally {
-		activatePaneHost({});
-		rmSync(dir, { recursive: true, force: true });
+		cleanup();
+	}
+});
+
+test("a clean session exit closes the Rex block too", async () => {
+	const { dir, cwd, cleanup } = tempWorkdir();
+	try {
+		const { results } = await runRexBatch(dir, cwd, (running) => {
+			writeFileSync(running.exitCodeFile, `0 ${running.id}`);
+		});
+		assert.equal(results[0]?.outcome.kind, "completed");
+		assert.equal(results[0]?.outcome.via, "session-exit");
+	} finally {
+		cleanup();
 	}
 });
