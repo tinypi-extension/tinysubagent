@@ -46,8 +46,7 @@ import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.t
 import type { SpawnContext, SpawnRequest, ToolParams } from "../children/contract.ts";
 import type { RunningSubagent } from "../children/watcher.ts";
 import { TOOL_NAME, type AgentDef } from "../types.ts";
-import type { LiveSubPanes } from "../herdr/layout.ts";
-import type { CapabilityCheck } from "./capability.ts";
+import type { CapabilityCheck, LiveSubPanes } from "../pane-host/index.ts";
 import { watchBatch } from "./watch-batch.ts";
 
 function failure(message: string) {

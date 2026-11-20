@@ -16,7 +16,7 @@
  *      at a prompt is harmless, a missed Esc is not.
  *   2. Fire and forget. Sending is never awaited (the call returns as soon as
  *      the relay is issued) and every rejection is swallowed, because a pane
- *      that is already gone, or a herdr error, must produce no warning, no
+ *      that is already gone, or a host error, must produce no warning, no
  *      failure and no change to the result. One pane failing never stops the
  *      rest of the fan-out.
  *   3. Once per interrupt, not once per pane: this function carries no memory,
@@ -25,12 +25,12 @@
  *      which is what keeps a second Esc from being typed.
  */
 
-import { herdrPaneSendEsc } from "../herdr/cli.ts";
+import { paneHost } from "../pane-host/index.ts";
 
 /**
  * Type one Esc into each pane. Never awaits, never throws, never reports
  * failure; an empty list sends nothing.
  */
 export function relayInterrupt(paneIds: readonly string[]): void {
-	for (const paneId of paneIds) void herdrPaneSendEsc(paneId).catch(() => {});
+	paneHost.relayInterrupt(paneIds);
 }

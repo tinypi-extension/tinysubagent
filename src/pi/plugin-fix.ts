@@ -1,16 +1,16 @@
 /**
- * The one-step herdr plugin repair offered at session start, so a first run is
- * a keypress instead of a path-typed command.
+ * The one-step repair a pane host can offer at session start, so a first run
+ * is a keypress instead of a typed command.
  *
- * Nothing is linked or enabled without the confirmation: this mutates the
- * user's global herdr config, so it stays a decision they make. Declining (or
- * having no UI to ask in) leaves the tool's own error message as the fallback,
- * and the question is not repeated this session.
+ * Nothing is applied without confirmation: a repair can change the user's
+ * global host config, so it stays their decision. Declining (or having no UI
+ * to ask in) leaves the tool's own problem message as the fallback, and the
+ * question is not repeated this session. The host owns the wording and the
+ * command; this module only asks and applies.
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { herdrPluginEnable, herdrPluginLink, PLUGIN_ID, pluginDir } from "../herdr/cli.ts";
-import type { CapabilityCheck } from "./capability.ts";
+import type { CapabilityCheck, Readiness } from "../pane-host/index.ts";
 
 /**
  * Per-session guard, owned by the caller (index.ts) so the question is asked at
@@ -27,43 +27,33 @@ export interface PluginFixDeps {
 	fixOffered: PluginFixGuard;
 }
 
+const NO_READINESS: Readiness = { problem: null, fix: null };
+
 export async function offerPluginFix(ctx: ExtensionContext, deps: PluginFixDeps): Promise<void> {
 	if (deps.fixOffered.value || !ctx.hasUI) return;
 
-	// Bounded, and never fatal: a wedged herdr must not hold up the session, and
-	// the tool probe stays the authority on whether a spawn can actually run.
-	const readiness = await deps.capability.probe({ timeoutMs: 5_000 }).catch(() => null);
-	const fix = readiness?.fix;
-	const problem = readiness?.problem;
+	// Bounded, and never fatal: an unreachable host must not hold up the session,
+	// and the tool probe stays the authority on whether a spawn can actually run.
+	const readiness = await deps.capability.probe({ timeoutMs: 5_000 }).catch(() => NO_READINESS);
+	const { fix, problem } = readiness;
 	if (!fix || !problem) return;
 	deps.fixOffered.value = true;
 
-	const pluginDirPath = pluginDir();
-	const title = fix === "link" ? "Link the tinysubagent herdr plugin?" : "Enable the tinysubagent herdr plugin?";
-	const detail =
-		fix === "link"
-			? `The pane entrypoint "${PLUGIN_ID}" ships with this package but is not linked yet.\n\n` +
-				`herdr plugin link "${pluginDirPath}" --enabled`
-			: `The pane entrypoint "${PLUGIN_ID}" is linked but disabled.\n\n` + `herdr plugin enable ${PLUGIN_ID}`;
-
 	let agreed = false;
 	try {
-		agreed = await ctx.ui.confirm(title, detail);
+		agreed = await ctx.ui.confirm(fix.title, fix.detail);
 	} catch {
 		return; // No UI after all; the tool reports the problem when it is called.
 	}
 	if (!agreed) return;
 
 	try {
-		if (fix === "link") await herdrPluginLink(pluginDirPath);
-		else await herdrPluginEnable(PLUGIN_ID);
+		await fix.apply();
 		// Drop the cached verdict so the next tool call re-probes instead of
-		// reusing the "not installed" answer it may already have.
+		// reusing the problem it may already have cached.
 		deps.capability.reset();
-		ctx.ui.notify(`tinysubagent: ${PLUGIN_ID} is ready.`, "info");
+		ctx.ui.notify(fix.applied(), "info");
 	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		const verb = fix === "link" ? "link" : "enable";
-		ctx.ui.notify(`tinysubagent: could not ${verb} ${PLUGIN_ID}: ${reason}`, "error");
+		ctx.ui.notify(fix.failed(error), "error");
 	}
 }
