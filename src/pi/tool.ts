@@ -174,6 +174,16 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// another request, either in this batch or a concurrent call.
 			const accepted = mode.requests;
 
+			// With profiles off, a role name in `profile` is the slip the old
+			// description invited, not a request for a real profile. Drop it before
+			// either the validation loop or `spawnOne` sees it; other named profiles
+			// are still refused as before.
+			if (!config.enableProfiles) {
+				for (const request of accepted) {
+					if (request.profile?.trim() === request.agent) request.profile = undefined;
+				}
+			}
+
 			// Routing rewrites each request's profile before the validation loop
 			// runs. It never fails a spawn: every transport failure, rejection, or
 			// incoherent answer lands on `current` inside routeProfiles, and

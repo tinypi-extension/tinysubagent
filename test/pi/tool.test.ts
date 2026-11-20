@@ -535,6 +535,39 @@ test("the route factory is never invoked when profiles are off", async () => {
 	}
 });
 
+test("a role name in `profile` is treated as `current` when profiles are off", async () => {
+	const config: TinysubagentConfig = { ...routingConfig(null), enableProfiles: false };
+	const h = harness(config, () => async () => ({ choice: "light" }));
+	try {
+		const result = await withSpawnHerdrStub(() =>
+			executeSettled(h, { tasks: [{ agent: "worker", task: "one job", profile: "worker" }] }),
+		);
+		const text = contentText(result);
+		assert.match(text, /profile `current`/, `the role name killed the batch: ${text}`);
+		assert.doesNotMatch(text, /cannot be used/, `the role name was refused: ${text}`);
+		assert.equal(writtenScripts(h.cwd).length, 1, "the subagent did not spawn");
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("an unrelated named profile is still refused when profiles are off", async () => {
+	const config: TinysubagentConfig = { ...routingConfig(null), enableProfiles: false };
+	const h = harness(config, () => async () => ({ choice: "light" }));
+	try {
+		const result = await withSpawnHerdrStub(() =>
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "one job", profile: "lite" }] }),
+		);
+		assert.match(contentText(result), /profiles are disabled/);
+		assert.equal((result as { isError?: boolean }).isError, true);
+		assert.equal(writtenScripts(h.cwd).length, 0, "a refused batch still spawned");
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // `classifierModel` alone keeps profile as an optional override
 // ────────────────────────────────────────────────────────────────────────────
@@ -630,9 +663,22 @@ test("tool description says subagents start immediately and the call waits for t
 	assert.match(description, /tasks` array with one or more subagents/);
 	assert.doesNotMatch(description, /Modes: single/);
 	assert.match(description, /All requested subagents run concurrently/);
+	// With profiles on, the original `profile` advice stays.
+	assert.match(description, /Specify `name` and `profile` per task when needed\./);
 	// The delivery contract the model is told about: one blocking call, one result.
 	assert.match(description, /returns when every subagent has finished/);
 	assert.match(description, /reports come back together in a single result/);
+});
+
+test("with profiles off the description forbids `profile` and still lists the roles", () => {
+	const config: TinysubagentConfig = { ...routingConfig(null), enableProfiles: false };
+	const description = buildToolDescription([workerAgent], config);
+	assert.doesNotMatch(description, /Specify `name` and `profile`/);
+	assert.match(description, /a role name is never a `profile`/);
+	assert.match(description, /profiles are disabled/);
+	assert.match(description, /Available roles:/);
+	assert.match(description, /- `worker`/);
+	assert.ok(!JSON.stringify(buildParameters(config)).includes('"profile"'));
 });
 
 test("only classifierModel set keeps the profile list and parameter", () => {
