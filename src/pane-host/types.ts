@@ -1,4 +1,4 @@
-/** The TUI kinds this extension can host child panes in. */
+/** The TUI kinds this extension can host sub panes in. */
 export type PaneHostKind = "herdr" | "rex";
 
 /** A pane's rect, in whatever units the host reports them. */
@@ -11,7 +11,7 @@ export interface Rect {
 
 /** Geometry the host reported for one window. */
 export interface PaneLayout {
-	tabId: string | null;
+	windowId: string | null;
 	panes: { paneId: string; rect: Rect }[];
 	/** Smallest meaningful movement in this layout's units; herdr defaults to one row. */
 	tolerance?: number;
@@ -31,8 +31,8 @@ export interface OpenChildRequest {
 	/** Pane to split; the adapter falls back to the orchestrator's pane. */
 	targetPaneId: string | null;
 	direction: "right" | "down";
-	/** Path to the generated wrapper script the child pane runs. */
-	command: string;
+	/** Path to the generated wrapper script the sub pane runs. */
+	scriptPath: string;
 	/** The child's short name, shown as its label where the host supports one. */
 	label?: string;
 	focus: boolean;
@@ -81,7 +81,7 @@ export interface PaneHost {
 	currentPaneId(env: NodeJS.ProcessEnv): string | null;
 	/** Fresh readiness cache, one per extension registration. */
 	createCapability(): CapabilityCheck;
-	/** Open a child pane and return its full, addressable id. */
+	/** Open a sub pane and return its full, addressable id. */
 	openChild(request: OpenChildRequest): Promise<string>;
 	renameChild(paneId: string, label: string): Promise<boolean>;
 	closeChild(paneId: string): Promise<boolean>;

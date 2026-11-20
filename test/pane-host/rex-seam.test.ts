@@ -35,7 +35,7 @@ test("a child block opens from the wrapper with a label and a full split ID", as
 			cwd: "/tmp/work",
 			targetPaneId: null,
 			direction: "right",
-			command: "/tmp/wrap.sh",
+			scriptPath: "/tmp/wrap.sh",
 			focus: false,
 			label: "worker",
 		});

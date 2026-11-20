@@ -99,7 +99,7 @@ test("a child opens from the wrapper script and can be renamed by the host", asy
 				cwd: "/tmp/work",
 				targetPaneId: "w1:p1",
 				direction: "right",
-				command: "/tmp/wrap.sh",
+				scriptPath: "/tmp/wrap.sh",
 				focus: false,
 			});
 			assert.equal(paneId, "w1:child");

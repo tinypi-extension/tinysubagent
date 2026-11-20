@@ -172,7 +172,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			cwd: context.cwd,
 			targetPaneId,
 			direction,
-			command: paths.scriptFile,
+			scriptPath: paths.scriptFile,
 			label: request.name,
 			focus: false,
 		});
@@ -221,7 +221,7 @@ async function resolvePlacement(
 	// `liveIn` (which forgets every id the tab does not report) and plans a
 	// birth instead.
 	const live = layout ? columns.liveIn(layout) : [];
-	return planPlacement(layout ?? { tabId: null, panes: [] }, orchestratorPaneId, live);
+	return planPlacement(layout ?? { windowId: null, panes: [] }, orchestratorPaneId, live);
 }
 
 /** Record the pane and apply the initial resize pass. */

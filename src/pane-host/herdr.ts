@@ -119,13 +119,13 @@ export function createHerdrPaneHost(): PaneHost {
 		detectedIn: isInsideHerdr,
 		currentPaneId,
 		createCapability: createHerdrCapability,
-		openChild: ({ cwd, targetPaneId, direction, command, focus }: OpenChildRequest) =>
+		openChild: ({ cwd, targetPaneId, direction, scriptPath, focus }: OpenChildRequest) =>
 			herdrPaneOpen({
 				cwd,
 				targetPaneId,
 				direction,
 				// The herdr entrypoint reads the wrapper path from this --env value.
-				env: { PI_HERDR_LAUNCH_SCRIPT: command },
+				env: { PI_HERDR_LAUNCH_SCRIPT: scriptPath },
 				focus,
 			}),
 		renameChild: herdrPaneRename,

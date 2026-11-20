@@ -106,7 +106,7 @@ test("Rex layout reads normalized rects from session inspection", async () => {
 	await withFakeRex({ session: birthView }, async (calls) => {
 		const layout = await createPaneHost(REX_ENV).readLayout(ORCH);
 		assert.deepEqual(layout, {
-			tabId: "window-1",
+			windowId: "window-1",
 			panes: [
 				{ paneId: ORCH, rect: { x: 0, y: 0, width: 0.6, height: 1 } },
 				{ paneId: FIRST, rect: { x: 0.6, y: 0, width: 0.4, height: 1 } },

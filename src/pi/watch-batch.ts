@@ -18,7 +18,7 @@
  *
  * An interrupt of the call's turn is relayed from here. The wait is the trigger:
  * when it starts, or when the signal aborts under it, one Esc goes into every
- * live child pane — the batch's own children and any earlier call's still open,
+ * live sub pane — the batch's own children and any earlier call's still open,
  * idle ones included — every wait ends as `interrupted`, and then each of those
  * panes is closed. The Esc is what stops the turn; the close is what stops the
  * child from being left behind with nobody waiting on it.

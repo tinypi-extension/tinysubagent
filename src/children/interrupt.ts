@@ -1,7 +1,7 @@
 /**
  * Relaying an orchestrator interrupt to the children.
  *
- * One Esc per live child pane — the same keystroke the operator would use by
+ * One Esc per live sub pane — the same keystroke the operator would use by
  * hand — so a child that is mid-turn stops where it is. Nothing is killed: the
  * worst case is a child that has to be re-prompted. The pane is then closed, but
  * that is the caller's follow-up, not this function's: closing here would race

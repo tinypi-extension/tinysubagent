@@ -235,7 +235,7 @@ export interface Rect {
 
 /** Tab geometry as `pane layout` reports it. */
 export interface TabLayout {
-	tabId: string | null;
+	windowId: string | null;
 	panes: { paneId: string; rect: Rect }[];
 }
 
@@ -356,7 +356,7 @@ export async function herdrPaneLayout(paneId: string): Promise<TabLayout | null>
 		panes.push({ paneId: rawId, rect: { x, y, width, height } as Rect });
 	}
 
-	return { tabId: typeof record.tab_id === "string" ? record.tab_id : null, panes };
+	return { windowId: typeof record.tab_id === "string" ? record.tab_id : null, panes };
 }
 
 /**

@@ -407,7 +407,7 @@ test("herdrPaneLayout runs pane layout for the pane and unwraps the tab", async 
 
 	assert.deepEqual(args, ["pane", "layout", "--pane", "pane-root"]);
 	assert.deepEqual(result, {
-		tabId: "tab-1",
+		windowId: "tab-1",
 		panes: [
 			{ paneId: "pane-a", rect: { x: 0, y: 0, width: 127, height: 58 } },
 			{ paneId: "pane-b", rect: { x: 127, y: 0, width: 84, height: 58 } },
@@ -456,7 +456,7 @@ test("herdrPaneLayout drops pane entries it cannot address or measure", async ()
 	// A non-string tab id is not addressable; the bad pane entries are dropped
 	// rather than poisoning the whole layout.
 	assert.deepEqual(result, {
-		tabId: null,
+		windowId: null,
 		panes: [{ paneId: "keep", rect: { x: 1, y: 2, width: 3, height: 4 } }],
 	});
 });

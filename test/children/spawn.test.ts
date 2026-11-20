@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { PLUGIN_ENTRYPOINT, PLUGIN_ID, type Rect, type TabLayout } from "../../src/herdr/cli.ts";
+import { PLUGIN_ENTRYPOINT, PLUGIN_ID, type Rect } from "../../src/herdr/cli.ts";
+import type { PaneLayout } from "../../src/pane-host/types.ts";
 import { LiveSubPanes, planResizes } from "../../src/herdr/layout.ts";
 import { MAX_PARALLEL_TASKS, collectRequests, resolveCwd, uniqueName } from "../../src/children/requests.ts";
 import { spawnOne } from "../../src/children/spawn.ts";
@@ -650,9 +651,9 @@ function layoutPayload(panes: PaneSpec[]): string {
 	});
 }
 
-/** The same fixture as the `TabLayout` the planner receives. */
-function plannerLayout(panes: PaneSpec[]): TabLayout {
-	return { tabId: "tab-1", panes: panes.map((pane) => ({ paneId: pane.paneId, rect: { ...pane.rect } })) };
+/** The same fixture as the `PaneLayout` the planner receives. */
+function plannerLayout(panes: PaneSpec[]): PaneLayout {
+	return { windowId: "tab-1", panes: panes.map((pane) => ({ paneId: pane.paneId, rect: { ...pane.rect } })) };
 }
 
 /**

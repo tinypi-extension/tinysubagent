@@ -85,7 +85,7 @@ async function rexRenameChild(env: NodeJS.ProcessEnv, paneId: string, label: str
 }
 
 interface RexView {
-	tabId: string | null;
+	windowId: string | null;
 	panes: { paneId: string; rect: Rect }[];
 	layers: unknown[];
 }
@@ -142,7 +142,7 @@ function rexWindow(view: Record<string, unknown>, paneId: string): RexView | nul
 		}
 		if (!ids.has(paneId)) continue;
 		return {
-			tabId: typeof record.window_id === "string" ? record.window_id : null,
+			windowId: typeof record.window_id === "string" ? record.window_id : null,
 			panes,
 			layers,
 		};
@@ -181,7 +181,7 @@ async function rexReadLayout(
 	const window = rexWindow(view, paneId);
 	// Rex rects are fractions of a window, not rows: a whole-row tolerance would
 	// swallow every meaningful adjustment.
-	return window ? { tabId: window.tabId, panes: window.panes, tolerance: 1e-6 } : null;
+	return window ? { windowId: window.windowId, panes: window.panes, tolerance: 1e-6 } : null;
 }
 
 type PaneRect = RexView["panes"][number];
@@ -323,7 +323,7 @@ function rexSendEsc(env: NodeJS.ProcessEnv, paneId: string): void {
 /** Split the orchestrator's block and return the new block's full id. */
 async function rexOpenChild(
 	env: NodeJS.ProcessEnv,
-	{ cwd, targetPaneId, direction, command, label, focus }: OpenChildRequest,
+	{ cwd, targetPaneId, direction, scriptPath, label, focus }: OpenChildRequest,
 ): Promise<string> {
 	const anchor = targetPaneId ?? currentRexBlock(env);
 	if (!anchor) throw new Error("Rex block context is missing — cannot split a child block.");
@@ -345,7 +345,7 @@ async function rexOpenChild(
 		focus ? "--focus" : "--focus=false",
 		"--json",
 		"--",
-		command,
+		scriptPath,
 	];
 	const result = await runRexJson(args, { timeoutMs: 30_000 });
 	const ids = result.block_ids;
