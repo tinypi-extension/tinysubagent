@@ -13,6 +13,8 @@ export interface Rect {
 export interface PaneLayout {
 	tabId: string | null;
 	panes: { paneId: string; rect: Rect }[];
+	/** Smallest meaningful movement in this layout's units; herdr defaults to one row. */
+	tolerance?: number;
 }
 
 /** One divider move, described without naming a host command. */

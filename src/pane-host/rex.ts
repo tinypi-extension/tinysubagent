@@ -179,7 +179,9 @@ async function rexReadLayout(
 	const view = await readRexSession(env);
 	if (!view) return null;
 	const window = rexWindow(view, paneId);
-	return window ? { tabId: window.tabId, panes: window.panes } : null;
+	// Rex rects are fractions of a window, not rows: a whole-row tolerance would
+	// swallow every meaningful adjustment.
+	return window ? { tabId: window.tabId, panes: window.panes, tolerance: 1e-6 } : null;
 }
 
 type PaneRect = RexView["panes"][number];

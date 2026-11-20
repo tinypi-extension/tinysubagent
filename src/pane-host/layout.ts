@@ -98,9 +98,10 @@ export function planPlacement(
  * `planPlacement` uses, narrowed to the single case where the column really did
  * not exist before. Anything larger is an append over the whole column.
  *
- * Both cases are guarded by a one-row tolerance because the host rounds every
- * resize step to whole rows, so a pass that is already equal emits nothing. Total:
- * any input yields `[]`, and the pass never exceeds `N-1` ops.
+ * Both cases are guarded by a host-declared tolerance: herdr rounds every
+ * resize step to whole rows, while a normalized host declares a fractional
+ * floor. A pass that is already equal emits nothing. Total: any input yields
+ * `[]`, and the pass never exceeds `N-1` ops.
  */
 export function planResizes(
 	layout: PaneLayout,
@@ -112,6 +113,9 @@ export function planResizes(
 	if (!panes.some((pane) => pane.paneId === newPaneId)) return [];
 	const inTab = liveInTab(panes, live);
 	if (inTab.length === 0) return [];
+	// Herdr rects are in rows, where one row is the rounding floor. A host that
+	// reports normalized fractions declares a much smaller floor instead.
+	const tolerance = layout.tolerance ?? 1;
 
 	const only = inTab.length === 1 ? inTab[0] : undefined;
 	if (only && only.paneId === newPaneId) {
@@ -121,7 +125,7 @@ export function planResizes(
 		const width = orches.rect.width + only.rect.width;
 		if (width === 0) return [];
 		const delta = orches.rect.width - 0.6 * width;
-		if (Math.abs(delta) < 1) return [];
+		if (Math.abs(delta) < tolerance) return [];
 		return [
 			{
 				paneId: newPaneId,
@@ -144,7 +148,7 @@ export function planResizes(
 		const below = inTab[k];
 		if (!above || !below) continue;
 		const delta = above.rect.height - target;
-		if (Math.abs(delta) < 1) continue;
+		if (Math.abs(delta) < tolerance) continue;
 		const nodeHeight = total - (k - 1) * target;
 		if (nodeHeight === 0) continue;
 		ops.push({
