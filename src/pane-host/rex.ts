@@ -182,6 +182,133 @@ async function rexReadLayout(
 	return window ? { tabId: window.tabId, panes: window.panes } : null;
 }
 
+type PaneRect = RexView["panes"][number];
+type Axis = "horizontal" | "vertical";
+
+const EPSILON = 1e-6;
+
+function spansOverlap(
+	paneStart: number,
+	paneSize: number,
+	otherStart: number,
+	otherSize: number,
+): boolean {
+	return Math.min(paneStart + paneSize, otherStart + otherSize) - Math.max(paneStart, otherStart) > EPSILON;
+}
+
+/** The pane touching `pane` across the divider on the given axis, if any. */
+function adjacentPane(panes: PaneRect[], pane: PaneRect, axis: Axis): PaneRect | null {
+	let best: PaneRect | null = null;
+	let bestOverlap = 0;
+	for (const candidate of panes) {
+		if (candidate.paneId === pane.paneId) continue;
+		const overlap = axis === "horizontal"
+			? spansOverlap(pane.rect.y, pane.rect.height, candidate.rect.y, candidate.rect.height)
+				? Math.min(pane.rect.height, candidate.rect.height)
+				: 0
+			: spansOverlap(pane.rect.x, pane.rect.width, candidate.rect.x, candidate.rect.width)
+				? Math.min(pane.rect.width, candidate.rect.width)
+				: 0;
+		if (overlap <= EPSILON || overlap <= bestOverlap) continue;
+		const touches = axis === "horizontal"
+			? Math.abs(candidate.rect.x + candidate.rect.width - pane.rect.x) < EPSILON ||
+				Math.abs(pane.rect.x + pane.rect.width - candidate.rect.x) < EPSILON
+			: Math.abs(candidate.rect.y + candidate.rect.height - pane.rect.y) < EPSILON ||
+				Math.abs(pane.rect.y + pane.rect.height - candidate.rect.y) < EPSILON;
+		if (!touches) continue;
+		best = candidate;
+		bestOverlap = overlap;
+	}
+	return best;
+}
+
+function blockIds(node: unknown, into: Set<string>): void {
+	const record = asRecord(node);
+	if (!record) return;
+	if (typeof record.block_id === "string") into.add(record.block_id);
+	const split = asRecord(record.split);
+	if (split) {
+		blockIds(split.before, into);
+		blockIds(split.after, into);
+	}
+}
+
+/** The Rex split ratio for the border that separates the two given blocks. */
+function splitRatio(node: unknown, beforeId: string, afterId: string, axis: Axis): number | null {
+	const record = asRecord(node);
+	if (!record) return null;
+	const split = asRecord(record.split);
+	if (!split || split.direction !== axis) return null;
+
+	const before = new Set<string>();
+	const after = new Set<string>();
+	blockIds(split.before, before);
+	blockIds(split.after, after);
+	if (!before.has(beforeId) || !after.has(afterId)) return null;
+
+	// The innermost matching split is the border Rex's resize API will pick.
+	const deeper = splitRatio(split.before, beforeId, afterId, axis) ??
+		splitRatio(split.after, beforeId, afterId, axis);
+	if (deeper !== null) return deeper;
+	return typeof split.ratio === "number" && Number.isFinite(split.ratio) ? split.ratio : null;
+}
+
+async function rexResizeChild(env: NodeJS.ProcessEnv, op: ResizeOp): Promise<boolean> {
+	const axis: Axis | null = op.direction === "left" || op.direction === "right"
+		? "horizontal"
+		: op.direction === "up" || op.direction === "down"
+			? "vertical"
+			: null;
+	if (!axis) return false;
+
+	const view = await readRexSession(env);
+	if (!view) return false;
+	const window = rexWindow(view, op.paneId);
+	if (!window) return false;
+	const pane = window.panes.find((entry) => entry.paneId === op.paneId);
+	if (!pane) return false;
+	const neighbor = adjacentPane(window.panes, pane, axis);
+	if (!neighbor) return false;
+
+	// `before` is the left/top side of the border regardless of which pane the
+	// planner named: the planner's direction says which way the border moves.
+	const neighborFirst = axis === "horizontal"
+		? neighbor.rect.x < pane.rect.x
+		: neighbor.rect.y < pane.rect.y;
+	const beforeId = neighborFirst ? neighbor.paneId : pane.paneId;
+	const afterId = neighborFirst ? pane.paneId : neighbor.paneId;
+	let ratio: number | null = null;
+	for (const layer of window.layers) {
+		const record = asRecord(layer);
+		if (!record || record.kind !== "tiled") continue;
+		ratio = splitRatio(record.layout, beforeId, afterId, axis);
+		if (ratio !== null) break;
+	}
+	if (ratio === null) return false;
+
+	const growsBefore = op.direction === "right" || op.direction === "down";
+	const target = ratio + (growsBefore ? op.amount : -op.amount);
+	if (!Number.isFinite(target) || target <= 0 || target >= 1) return false;
+
+	const { session, server } = rexContext(env);
+	if (!session) return false;
+	return runRexQuiet([
+		"api",
+		"call",
+		"-s",
+		session,
+		...(server ? ["-S", server] : []),
+		"session.resize_pane",
+		JSON.stringify({
+			session_id: session,
+			direction: axis,
+			before_block_id: beforeId,
+			after_block_id: afterId,
+			ratio: target,
+		}),
+	]);
+}
+
 /** Split the orchestrator's block and return the new block's full id. */
 async function rexOpenChild(
 	env: NodeJS.ProcessEnv,
@@ -229,7 +356,7 @@ export function createRexPaneHost(env: NodeJS.ProcessEnv = process.env): PaneHos
 		closeChild: (paneId) => rexCloseChild(env, paneId),
 		childExists: (paneId) => rexChildExists(env, paneId),
 		readLayout: (paneId) => rexReadLayout(env, paneId),
-		resizeChild: async (_op: ResizeOp) => false,
+		resizeChild: (op) => rexResizeChild(env, op),
 		relayInterrupt: () => {},
 	};
 }

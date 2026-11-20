@@ -55,3 +55,30 @@ test("Rex layout reads normalized rects from session inspection", async () => {
 		assert.deepEqual(calls(), ["session inspect -S server-1 sess-1 --json"]);
 	});
 });
+
+test("a Rex birth divider moves with a ratio resize between the two full block ids", async () => {
+	const halfView = view(
+		window("window-1", {
+			rect: [0, 0, 1, 1],
+			split: {
+				split_id: "split-1",
+				direction: "horizontal",
+				ratio: 0.5,
+				before: block(ORCH, [0, 0, 0.5, 1]),
+				after: block(FIRST, [0.5, 0, 0.5, 1]),
+			},
+		}),
+	);
+	await withFakeRex({ session: halfView, api: '{"revision":1}' }, async (calls) => {
+		const resized = await createPaneHost(REX_ENV).resizeChild({
+			paneId: FIRST,
+			direction: "right",
+			amount: 0.1,
+		});
+		assert.equal(resized, true);
+		assert.deepEqual(calls(), [
+			"session inspect -S server-1 sess-1 --json",
+			`api call -s sess-1 -S server-1 session.resize_pane {"session_id":"sess-1","direction":"horizontal","before_block_id":"${ORCH}","after_block_id":"${FIRST}","ratio":0.6}`,
+		]);
+	});
+});
