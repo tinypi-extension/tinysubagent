@@ -35,7 +35,7 @@ test("a child block opens from the wrapper with a label and a full split ID", as
 			cwd: "/tmp/work",
 			targetPaneId: null,
 			direction: "right",
-			command: "/tmp/wrap.sh",
+			scriptPath: "/tmp/wrap.sh",
 			focus: false,
 			label: "worker",
 		});
@@ -71,10 +71,9 @@ test("an interrupt sends Esc to every live block by full id, pinned to the sessi
 	const second = "session:sess-1/block:child-b";
 	const host = createPaneHost({ ...REX_ENV, REX_SERVER: "server-1" });
 	await withFakeRex({ "send-key": "" }, async (calls) => {
-		host.relayInterrupt([first, second]);
-		for (let attempt = 0; attempt < 100 && calls().length < 2; attempt += 1) {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
+		// Awaiting the relay is what lets a caller close a pane only after its
+		// Esc has actually been sent, instead of racing the keystroke.
+		await host.relayInterrupt([first, second]);
 		assert.deepEqual(calls().sort(), [
 			`send-key -s sess-1 -S server-1 -b ${first} esc`,
 			`send-key -s sess-1 -S server-1 -b ${second} esc`,

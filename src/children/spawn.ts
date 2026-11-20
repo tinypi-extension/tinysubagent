@@ -161,7 +161,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// Without a tracker this stays the original call: split right off the
 	// orchestrator. With one, the placement decides target and direction.
 	const placement = columns && orchestratorPaneId
-		? await resolvePlacement(columns, orchestratorPaneId)
+		? await resolvePlacement(columns, orchestratorPaneId, warnings)
 		: null;
 	const targetPaneId = placement?.targetPaneId ?? orchestratorPaneId;
 	const direction = placement?.direction ?? "right";
@@ -172,7 +172,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			cwd: context.cwd,
 			targetPaneId,
 			direction,
-			command: paths.scriptFile,
+			scriptPath: paths.scriptFile,
 			label: request.name,
 			focus: false,
 		});
@@ -186,7 +186,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// Both the read and every resize are best-effort: a failed read means no
 	// pass, and a failed resize leaves the pane open and usable.
 	if (columns && orchestratorPaneId) {
-		await applySpawnResizes(columns, orchestratorPaneId, paneId);
+		await applySpawnResizes(columns, orchestratorPaneId, paneId, warnings);
 	}
 
 	// Cosmetic: a rename failure must not fail the spawn.
@@ -215,13 +215,15 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 async function resolvePlacement(
 	columns: LiveSubPanes,
 	orchestratorPaneId: string,
+	warnings: string[],
 ): Promise<Placement> {
 	const layout = await paneHost.readLayout(orchestratorPaneId);
+	if (!layout) warnings.push("could not read the pane layout; placement falls back to the orchestrator pane");
 	// A failed read must not prune the tracker, so the empty case skips
 	// `liveIn` (which forgets every id the tab does not report) and plans a
 	// birth instead.
 	const live = layout ? columns.liveIn(layout) : [];
-	return planPlacement(layout ?? { tabId: null, panes: [] }, orchestratorPaneId, live);
+	return planPlacement(layout ?? { windowId: null, panes: [] }, orchestratorPaneId, live);
 }
 
 /** Record the pane and apply the initial resize pass. */
@@ -229,12 +231,17 @@ async function applySpawnResizes(
 	columns: LiveSubPanes,
 	orchestratorPaneId: string,
 	paneId: string,
+	warnings: string[],
 ): Promise<void> {
 	columns.place(paneId);
 	const layout = await paneHost.readLayout(orchestratorPaneId);
-	if (layout) {
-		for (const op of planResizes(layout, orchestratorPaneId, columns.liveIn(layout), paneId)) {
-			await paneHost.resizeChild(op);
+	if (!layout) {
+		warnings.push("could not read the pane layout after opening the sub pane; the layout pass was skipped");
+		return;
+	}
+	for (const op of planResizes(layout, orchestratorPaneId, columns.liveIn(layout), paneId)) {
+		if (!await paneHost.resizeChild(op)) {
+			warnings.push(`could not resize sub pane ${op.paneId}; the sub pane is still open and usable`);
 		}
 	}
 }

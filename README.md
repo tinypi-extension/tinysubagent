@@ -1,9 +1,9 @@
 # tinysubagent
 
 Pane-native subagent spawning for [pi](https://pi.dev). Define roles as markdown files and
-delegate to them. Each subagent runs in its own child pane — a shared right-hand
-[herdr](https://herdr.dev/) column or a Rex block — with its own context window, and hands its
-report back as this call's result.
+delegate to them. Each subagent runs in its own sub pane — a [herdr](https://herdr.dev/) pane in the
+right-hand column or a Rex block — with its own context window, and hands its report back as this
+call's result.
 
 - **One blocking call:** the tool waits for the whole batch and returns every report in one result. No fire-and-forget, no second batch until it returns.
 - **Esc stops the batch:** an interrupt in the orchestrator's pane is relayed to every live sub pane, so each child's turn stops where it is, is reported `interrupted`, and its pane is closed — nothing is left running.

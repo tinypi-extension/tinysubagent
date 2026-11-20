@@ -1,5 +1,6 @@
 /** The Rex adapter behind the pane-host seam. */
 
+import { createCapabilityCheck } from "./capability.ts";
 import {
 	isInsideRex,
 	parseRexJson,
@@ -32,8 +33,6 @@ const READY: Readiness = { problem: null, fix: null };
 
 /** The Rex probe: context and a reachable CLI, with no version gate or fix. */
 export function createRexCapability(env: NodeJS.ProcessEnv = process.env): CapabilityCheck {
-	let capabilityCheck: Promise<string | null> | null = null;
-
 	async function probe(options: ProbeOptions = {}): Promise<Readiness> {
 		if (!isInsideRex(env)) {
 			return {
@@ -50,20 +49,7 @@ export function createRexCapability(env: NodeJS.ProcessEnv = process.env): Capab
 		return READY;
 	}
 
-	async function ensureReady(): Promise<string | null> {
-		capabilityCheck ??= probe().then((readiness) => readiness.problem);
-		const problem = await capabilityCheck;
-		if (problem) capabilityCheck = null;
-		return problem;
-	}
-
-	return {
-		ensureReady,
-		probe,
-		reset: () => {
-			capabilityCheck = null;
-		},
-	};
+	return createCapabilityCheck(probe);
 }
 
 /** A missing block is a definite "no"; every other failure is unknown. */
@@ -85,7 +71,7 @@ async function rexRenameChild(env: NodeJS.ProcessEnv, paneId: string, label: str
 }
 
 interface RexView {
-	tabId: string | null;
+	windowId: string | null;
 	panes: { paneId: string; rect: Rect }[];
 	layers: unknown[];
 }
@@ -142,7 +128,7 @@ function rexWindow(view: Record<string, unknown>, paneId: string): RexView | nul
 		}
 		if (!ids.has(paneId)) continue;
 		return {
-			tabId: typeof record.window_id === "string" ? record.window_id : null,
+			windowId: typeof record.window_id === "string" ? record.window_id : null,
 			panes,
 			layers,
 		};
@@ -181,7 +167,7 @@ async function rexReadLayout(
 	const window = rexWindow(view, paneId);
 	// Rex rects are fractions of a window, not rows: a whole-row tolerance would
 	// swallow every meaningful adjustment.
-	return window ? { tabId: window.tabId, panes: window.panes, tolerance: 1e-6 } : null;
+	return window ? { windowId: window.windowId, panes: window.panes, tolerance: 1e-6 } : null;
 }
 
 type PaneRect = RexView["panes"][number];
@@ -316,14 +302,14 @@ async function rexResizeChild(env: NodeJS.ProcessEnv, op: ResizeOp): Promise<boo
 }
 
 /** Type one Esc into a block; even a block that just vanished is not an error. */
-function rexSendEsc(env: NodeJS.ProcessEnv, paneId: string): void {
-	void runRexQuiet(["send-key", ...scopeArgs(env), "-b", paneId, "esc"]);
+async function rexSendEsc(env: NodeJS.ProcessEnv, paneId: string): Promise<boolean> {
+	return runRexQuiet(["send-key", ...scopeArgs(env), "-b", paneId, "esc"]);
 }
 
 /** Split the orchestrator's block and return the new block's full id. */
 async function rexOpenChild(
 	env: NodeJS.ProcessEnv,
-	{ cwd, targetPaneId, direction, command, label, focus }: OpenChildRequest,
+	{ cwd, targetPaneId, direction, scriptPath, label, focus }: OpenChildRequest,
 ): Promise<string> {
 	const anchor = targetPaneId ?? currentRexBlock(env);
 	if (!anchor) throw new Error("Rex block context is missing — cannot split a child block.");
@@ -345,7 +331,7 @@ async function rexOpenChild(
 		focus ? "--focus" : "--focus=false",
 		"--json",
 		"--",
-		command,
+		scriptPath,
 	];
 	const result = await runRexJson(args, { timeoutMs: 30_000 });
 	const ids = result.block_ids;
@@ -368,8 +354,10 @@ export function createRexPaneHost(env: NodeJS.ProcessEnv = process.env): PaneHos
 		childExists: (paneId) => rexChildExists(env, paneId),
 		readLayout: (paneId) => rexReadLayout(env, paneId),
 		resizeChild: (op) => rexResizeChild(env, op),
-		relayInterrupt: (paneIds) => {
-			for (const paneId of paneIds) rexSendEsc(env, paneId);
+		relayInterrupt: async (paneIds) => {
+			// Wait for every keystroke before returning: a caller that closes the
+			// pane now would otherwise race the Esc it just asked us to send.
+			await Promise.all(paneIds.map((paneId) => rexSendEsc(env, paneId)));
 		},
 	};
 }

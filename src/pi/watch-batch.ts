@@ -18,7 +18,7 @@
  *
  * An interrupt of the call's turn is relayed from here. The wait is the trigger:
  * when it starts, or when the signal aborts under it, one Esc goes into every
- * live child pane — the batch's own children and any earlier call's still open,
+ * live sub pane — the batch's own children and any earlier call's still open,
  * idle ones included — every wait ends as `interrupted`, and then each of those
  * panes is closed. The Esc is what stops the turn; the close is what stops the
  * child from being left behind with nobody waiting on it.
@@ -64,25 +64,27 @@ export async function watchBatch(
 	// human's interrupt stands for — into every tracked pane, this batch's and any
 	// earlier call's.
 	//
-	// The order matters: Esc, then abort, then close. Aborting first ends every wait
-	// before a pane disappears, so no watcher can observe a vanished pane and file
-	// the child as `cancelled` instead of `interrupted`. Closing is last and best
-	// effort — a pane that is already gone is not an error, and a failure to close
-	// one changes neither the result nor the operator's notices.
+	// The order matters: Esc, then abort, then close. Waiting for the relay before
+	// aborting means a Rex send-key still in flight cannot lose its keystroke to a
+	// close, and every wait still ends before a pane disappears — no watcher can
+	// file the child as `cancelled` instead of `interrupted`. Herdr's relay
+	// resolves as soon as the sends are issued, so its timing is unchanged.
+	// Closing stays best effort: a pane that is already gone is not an error, and
+	// a failure to close one changes neither the result nor the operator's notices.
 	//
 	// `forwarded` is what stops a second relay: the initial `aborted` check and the
 	// listener can both reach here, and an abort can only send one Esc.
-	let forwarded = false;
+	let forwarded: Promise<void> | null = null;
 	const forward = (): void => {
 		if (forwarded) return;
-		forwarded = true;
 		const paneIds = columns.trackedIds();
-		relayInterrupt(paneIds);
-		for (const controller of controllers) controller.abort("interrupt");
-		for (const paneId of paneIds) {
-			columns.drop(paneId);
-			void paneHost.closeChild(paneId);
-		}
+		forwarded = relayInterrupt(paneIds).then(() => {
+			for (const controller of controllers) controller.abort("interrupt");
+			for (const paneId of paneIds) {
+				columns.drop(paneId);
+				void paneHost.closeChild(paneId);
+			}
+		});
 	};
 	signal?.addEventListener("abort", forward, { once: true });
 	// An abort that landed before this wait was reached still relays: the listener
@@ -90,7 +92,7 @@ export async function watchBatch(
 	if (signal?.aborted) forward();
 
 	try {
-		return await Promise.all(
+		const results = await Promise.all(
 			runnings.map(async (running, index) => {
 				const controller = controllers[index];
 				const outcome = await waitForSubagent(running, controller?.signal);
@@ -120,6 +122,8 @@ export async function watchBatch(
 				} satisfies SubagentResult;
 			}),
 		);
+		await forwarded;
+		return results;
 	} finally {
 		signal?.removeEventListener("abort", forward);
 		for (const controller of controllers) watchers.delete(controller);

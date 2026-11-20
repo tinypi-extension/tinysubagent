@@ -13,7 +13,7 @@ function box(x: number, y: number, width: number, height: number): Rect {
 }
 
 function tab(panes: { paneId: string; rect: Rect }[]): TabLayout {
-	return { tabId: "tab-1", panes };
+	return { windowId: "tab-1", panes };
 }
 
 const ORCH = "pane-orch";
@@ -88,9 +88,9 @@ test("planPlacement: garbage input never throws and yields the birth placement",
 		null,
 		undefined,
 		{},
-		{ tabId: null, panes: "not-an-array" },
-		{ tabId: null, panes: [{ paneId: 7, rect: box(0, 0, 1, 1) }] },
-		{ tabId: null, panes: [{ paneId: "s1", rect: null }] },
+		{ windowId: null, panes: "not-an-array" },
+		{ windowId: null, panes: [{ paneId: 7, rect: box(0, 0, 1, 1) }] },
+		{ windowId: null, panes: [{ paneId: "s1", rect: null }] },
 	] as unknown as TabLayout[];
 	for (const layout of garbage) {
 		const placement = planPlacement(layout, ORCH, ["s1"]);
@@ -210,8 +210,8 @@ test("planResizes: garbage input never throws and emits nothing", () => {
 		null,
 		undefined,
 		{},
-		{ tabId: null, panes: "not-an-array" },
-		{ tabId: null, panes: [{ paneId: NEW, rect: null }] },
+		{ windowId: null, panes: "not-an-array" },
+		{ windowId: null, panes: [{ paneId: NEW, rect: null }] },
 	] as unknown as TabLayout[];
 	for (const layout of garbage) {
 		assert.deepEqual(planResizes(layout, ORCH, [NEW], NEW), []);

@@ -157,7 +157,7 @@ _Avoid_: config error
 ## Panes and layout
 
 **Pane host**:
-A TUI that can host child panes: herdr or Rex.
+A TUI that can host sub panes: herdr or Rex.
 _Avoid_: multiplexer, terminal emulator, backend
 
 **Pane**:

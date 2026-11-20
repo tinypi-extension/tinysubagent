@@ -11,6 +11,8 @@ export interface FakeResponse {
 	stdout?: string;
 	stderr?: string;
 	exit?: number;
+	/** Sleep before logging the call, so a test can hold a command in flight. */
+	delayMs?: number;
 }
 
 function shellQuote(value: string): string {
@@ -35,7 +37,8 @@ export async function withFakeRex<T>(
 		const emit = response.stderr
 			? `cat ${shellQuote(errorFile)} 1>&2; exit ${response.exit ?? 1}`
 			: `cat ${shellQuote(file)}; exit ${response.exit ?? 0}`;
-		cases.push(`  "${key}") ${emit} ;;`);
+		const delay = response.delayMs ? `sleep ${shellQuote(String(response.delayMs / 1000))}; ` : "";
+		cases.push(`  "${key}") ${delay}${emit} ;;`);
 	}
 	const bin = join(dir, "rex");
 	writeFileSync(

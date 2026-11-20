@@ -57,7 +57,12 @@ test("an interrupt Esc reaches both Rex children by full id and closes both bloc
 	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-rex-interrupt-"));
 	try {
 		await withFakeRex(
-			{ "send-key": "", block: JSON.stringify({ block_id: FIRST }) },
+			{
+				// Hold each Esc in flight so a close issued before the relay resolves
+				// would appear first in the log and fail the order check below.
+				"send-key": { stdout: "", delayMs: 150 },
+				block: JSON.stringify({ block_id: FIRST }),
+			},
 			async (calls) => {
 				activatePaneHost(REX_ENV);
 				try {
@@ -82,6 +87,19 @@ test("an interrupt Esc reaches both Rex children by full id and closes both bloc
 						`block close -s sess-1 -S server-1 ${SECOND}`,
 					];
 					await waitForCalls(calls, [...esc, ...close]);
+
+					// The relay is awaited before any close is issued, so the log cannot
+					// show a block disappearing while its Esc is still in flight.
+					const order = calls();
+					const lastEsc = order.reduce(
+						(last, call, index) => (call.startsWith("send-key") ? index : last),
+						-1,
+					);
+					const firstClose = order.findIndex((call) => call.startsWith("block close"));
+					assert.ok(
+						firstClose === -1 || lastEsc < firstClose,
+						`Esc was not sent before a close: ${order.join(" | ")}`,
+					);
 
 					assert.deepEqual(
 						results.map((result) => result.outcome),

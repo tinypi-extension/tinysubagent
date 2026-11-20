@@ -106,7 +106,7 @@ test("Rex layout reads normalized rects from session inspection", async () => {
 	await withFakeRex({ session: birthView }, async (calls) => {
 		const layout = await createPaneHost(REX_ENV).readLayout(ORCH);
 		assert.deepEqual(layout, {
-			tabId: "window-1",
+			windowId: "window-1",
 			panes: [
 				{ paneId: ORCH, rect: { x: 0, y: 0, width: 0.6, height: 1 } },
 				{ paneId: FIRST, rect: { x: 0.6, y: 0, width: 0.4, height: 1 } },
@@ -136,6 +136,10 @@ test("a failed Rex layout read leaves the child open and the batch reporting", a
 				);
 				assert.equal(spawned.ok, true);
 				if (!spawned.ok) return;
+				assert.ok(
+					spawned.warnings.some((warning) => /could not read .*layout/i.test(warning)),
+					spawned.warnings.join(" | "),
+				);
 				writeFileSync(spawned.running.reportFile, JSON.stringify({ type: "done", result: "Still works." }));
 				const results = await watchBatch([spawned.running], undefined, { watchers: new Set(), columns });
 				await waitForCall(calls, "block close");
@@ -182,6 +186,10 @@ test("a failed Rex resize leaves the child open and the batch reporting", async 
 				);
 				assert.equal(spawned.ok, true);
 				if (!spawned.ok) return;
+				assert.ok(
+					spawned.warnings.some((warning) => /could not resize/i.test(warning)),
+					spawned.warnings.join(" | "),
+				);
 				writeFileSync(spawned.running.reportFile, JSON.stringify({ type: "done", result: "Still works." }));
 				const results = await watchBatch([spawned.running], undefined, { watchers: new Set(), columns });
 				await waitForCall(calls, "block close");

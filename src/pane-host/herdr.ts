@@ -1,5 +1,6 @@
 /** The herdr adapter behind the pane-host seam. */
 
+import { createCapabilityCheck } from "./capability.ts";
 import {
 	currentPaneId,
 	herdrPaneClose,
@@ -64,8 +65,6 @@ function enableFix(): HostFix {
 
 /** The herdr capability probe, with its cache scoped to one registration. */
 export function createHerdrCapability(): CapabilityCheck {
-	let capabilityCheck: Promise<string | null> | null = null;
-
 	async function probe(options: ProbeOptions = {}): Promise<Readiness> {
 		const status = await herdrStatus(options);
 		if (!status?.running) {
@@ -96,21 +95,7 @@ export function createHerdrCapability(): CapabilityCheck {
 		return READY;
 	}
 
-	async function ensureReady(): Promise<string | null> {
-		capabilityCheck ??= probe().then((readiness) => readiness.problem);
-		const problem = await capabilityCheck;
-		// Failures are not cached: a repair made in place is picked up next time.
-		if (problem) capabilityCheck = null;
-		return problem;
-	}
-
-	return {
-		ensureReady,
-		probe,
-		reset: () => {
-			capabilityCheck = null;
-		},
-	};
+	return createCapabilityCheck(probe);
 }
 
 export function createHerdrPaneHost(): PaneHost {
@@ -119,13 +104,13 @@ export function createHerdrPaneHost(): PaneHost {
 		detectedIn: isInsideHerdr,
 		currentPaneId,
 		createCapability: createHerdrCapability,
-		openChild: ({ cwd, targetPaneId, direction, command, focus }: OpenChildRequest) =>
+		openChild: ({ cwd, targetPaneId, direction, scriptPath, focus }: OpenChildRequest) =>
 			herdrPaneOpen({
 				cwd,
 				targetPaneId,
 				direction,
 				// The herdr entrypoint reads the wrapper path from this --env value.
-				env: { PI_HERDR_LAUNCH_SCRIPT: command },
+				env: { PI_HERDR_LAUNCH_SCRIPT: scriptPath },
 				focus,
 			}),
 		renameChild: herdrPaneRename,
@@ -134,8 +119,12 @@ export function createHerdrPaneHost(): PaneHost {
 		readLayout: (paneId) => herdrPaneLayout(paneId),
 		resizeChild: ({ paneId, direction, amount }: ResizeOp) =>
 			herdrPaneResize(paneId, direction, amount),
+		// Herdr's Esc is fire-and-forget by design: the sends are issued at once
+		// and this resolves immediately, without turning a pane error into a
+		// failure of the caller's interrupt.
 		relayInterrupt: (paneIds) => {
 			for (const paneId of paneIds) void herdrPaneSendEsc(paneId).catch(() => {});
+			return Promise.resolve();
 		},
 	};
 }

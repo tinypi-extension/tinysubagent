@@ -37,7 +37,7 @@ Update the glossary, README and package description to speak of pane hosts rathe
 17. As an orchestrator in Rex, I want children addressed by full block IDs, so that a label collision or shared ID suffix cannot target the wrong block.
 18. As an orchestrator, I want the first child in a Rex window to split to the right with the orchestrator keeping three fifths of the width, so that Rex matches the herdr orchestrator-first layout.
 19. As an orchestrator, I want later children appended below the bottom-most live sub-block, so that the child column grows downward just as it does in herdr.
-20. As an orchestrator, I want the child column re-balanced as children are added and removed, so that no child becomes a sliver.
+20. As an orchestrator, I want the child column re-balanced when a child is added, so that the new child does not become a sliver.
 21. As an orchestrator, I want a boundary I have personally dragged to be preserved on later spawns, so that my manual adjustment is not silently reset.
 22. As an orchestrator, I want layout reads to come from Rex's session inspection and writes to use its ratio-based resize API, so that the same layout planner works on normalized geometry from either host.
 23. As a maintainer, I want layout calculation kept pure and host adapters responsible for I/O, so that placement rules can be tested without opening real blocks.
@@ -61,7 +61,7 @@ Update the glossary, README and package description to speak of pane hosts rathe
 
 ## Implementation Decisions
 
-- Add a pane-host abstraction that exposes host detection, capability readiness, opening a child pane, renaming a child pane, closing a child pane, reading layout geometry, rebalancing layout and relaying an interrupt. Implement it once for herdr and once for Rex. Existing herdr behavior is preserved behind its adapter; call sites use the interface and do not inspect environment variables themselves.
+- Add a pane-host abstraction that exposes host detection, capability readiness, opening a child pane, renaming a child pane, closing a child pane, reading layout geometry, rebalancing on spawn and relaying an interrupt. Implement it once for herdr and once for Rex. Existing herdr behavior is preserved behind its adapter; call sites use the interface and do not inspect environment variables themselves.
 - Detect the host from the environment at extension load. Herdr requires its environment marker, pane ID and socket path. Rex requires its block ID and session ID, with the server ID used when present. Herdr has precedence when both are set. No config toggle or forced-host override is added.
 - Keep the settings command registered in every context. Register the subagent tool only when a detected host passes its capability probe. With neither host detected, registration behavior stays as it is today.
 - Make the Rex capability probe require the Rex context variables and a reachable `rex` command. Do not impose a minimum Rex version yet. Do not offer a Rex repair fix; the plugin fix remains herdr-only and is described that way in the glossary.
@@ -106,4 +106,5 @@ Update the glossary, README and package description to speak of pane hosts rathe
 
 - Rex facts verified against the locally installed `rex` 0.1.0-preview.21 and the official CLI, shell-scripting and Lua references: split supports JSON output, label, cwd, ratio, focus, keep-open and a trailing command; JSON split results expose `.block_ids[0]`; block subcommands include rename, close, send-key and inspect; session inspection reports window layouts; `session.resize_pane` accepts a session ID, direction, before/after block IDs and a fraction, and does not change focus.
 - The glossary was updated inline during domain modeling and should remain only a vocabulary list. No ADR was added during design review.
+- Closing a sub pane never rebalances the column: the layout is decided at spawn time, and keeping herdr's close behavior unchanged takes precedence over revisiting it.
 - Definition of done: herdr behavior and tests unchanged; in Rex, pi registers the tool, a two-child batch returns both reports, Esc interrupts and closes both blocks, and liveness and close outcomes match herdr; tests, type check and docs pass.
