@@ -143,6 +143,9 @@ export function planResizes(
 	const total = inTab.reduce((sum, pane) => sum + pane.rect.height, 0);
 	const target = total / count;
 	const ops: ResizeOp[] = [];
+	// Each delta is measured against the layout as reported, not against the
+	// result of earlier ops; the host applies these ops in order. A caller that
+	// needs newer geometry reads the layout again on the next spawn.
 	for (let k = 1; k < count; k += 1) {
 		const above = inTab[k - 1];
 		const below = inTab[k];
