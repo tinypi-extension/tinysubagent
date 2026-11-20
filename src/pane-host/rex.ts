@@ -82,6 +82,11 @@ async function rexRenameChild(env: NodeJS.ProcessEnv, paneId: string, label: str
 	return runRexQuiet(["block", "rename", ...scopeArgs(env), paneId, label]);
 }
 
+/** Type one Esc into a block; even a block that just vanished is not an error. */
+function rexSendEsc(env: NodeJS.ProcessEnv, paneId: string): void {
+	void runRexQuiet(["send-key", ...scopeArgs(env), "-b", paneId, "esc"]);
+}
+
 /** Split the orchestrator's block and return the new block's full id. */
 async function rexOpenChild(
 	env: NodeJS.ProcessEnv,
@@ -130,6 +135,8 @@ export function createRexPaneHost(env: NodeJS.ProcessEnv = process.env): PaneHos
 		childExists: (paneId) => rexChildExists(env, paneId),
 		readLayout: async (): Promise<PaneLayout | null> => null,
 		resizeChild: async (_op: ResizeOp) => false,
-		relayInterrupt: () => {},
+		relayInterrupt: (paneIds) => {
+			for (const paneId of paneIds) rexSendEsc(env, paneId);
+		},
 	};
 }
