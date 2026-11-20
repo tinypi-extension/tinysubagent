@@ -66,6 +66,22 @@ test("Rex liveness, rename and close use pinned block commands", async () => {
 	});
 });
 
+test("an interrupt sends Esc to every live block by full id, pinned to the session", async () => {
+	const first = "session:sess-1/block:child-a";
+	const second = "session:sess-1/block:child-b";
+	const host = createPaneHost({ ...REX_ENV, REX_SERVER: "server-1" });
+	await withFakeRex({ "send-key": "" }, async (calls) => {
+		host.relayInterrupt([first, second]);
+		for (let attempt = 0; attempt < 100 && calls().length < 2; attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		assert.deepEqual(calls().sort(), [
+			`send-key -s sess-1 -S server-1 -b ${first} esc`,
+			`send-key -s sess-1 -S server-1 -b ${second} esc`,
+		]);
+	});
+});
+
 test("Rex readiness needs the block context and a reachable CLI, with no repair", async () => {
 	await withFakeRex({ "--version": "rex 0.1.0-preview.21\n" }, async (calls) => {
 		const readiness = await createPaneHost(REX_ENV).createCapability().probe({ timeoutMs: 5_000 });
