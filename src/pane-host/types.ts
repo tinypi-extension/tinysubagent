@@ -89,6 +89,9 @@ export interface PaneHost {
 	childExists(paneId: string): Promise<boolean | null>;
 	readLayout(paneId: string): Promise<PaneLayout | null>;
 	resizeChild(op: ResizeOp): Promise<boolean>;
-	/** Fire-and-forget interrupt relay: never throws, never reports failure. */
-	relayInterrupt(paneIds: readonly string[]): void;
+	/**
+	 * Send one Esc per pane and resolve once each keystroke has been sent.
+	 * Herdr resolves as soon as the sends are issued; never rejects.
+	 */
+	relayInterrupt(paneIds: readonly string[]): Promise<void>;
 }

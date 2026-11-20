@@ -10,13 +10,14 @@
  * Three deliberate choices live here:
  *
  *   1. Every tracked pane is relayed to, idle children included. Mid-turn state
- *      is never detected: probing each child would cost a round trip on the path
- *      that is supposed to return at once, and a pane that opened *during* the
- *      abort would still need its own Esc. The bluntness is the design — an Esc
+ *      is never detected: probing each child would add a round trip to the
+ *      interrupt path, and a pane that opened *during* the abort would still
+ *      need its own Esc. The bluntness is the design — an Esc
  *      at a prompt is harmless, a missed Esc is not.
- *   2. Fire and forget. Sending is never awaited (the call returns as soon as
- *      the relay is issued) and every rejection is swallowed, because a pane
- *      that is already gone, or a host error, must produce no warning, no
+ *   2. The relay is awaitable but never throws. Herdr resolves as soon as the
+ *      sends are issued; Rex resolves after each send-key finishes, so a
+ *      caller can close a pane only once its Esc has landed. Every host error
+ *      is swallowed: a pane that is already gone must produce no warning, no
  *      failure and no change to the result. One pane failing never stops the
  *      rest of the fan-out.
  *   3. Once per interrupt, not once per pane: this function carries no memory,
@@ -28,9 +29,9 @@
 import { paneHost } from "../pane-host/index.ts";
 
 /**
- * Type one Esc into each pane. Never awaits, never throws, never reports
- * failure; an empty list sends nothing.
+ * Type one Esc into each pane. Awaits the host's relay, never throws and never
+ * reports failure; an empty list sends nothing.
  */
-export function relayInterrupt(paneIds: readonly string[]): void {
-	paneHost.relayInterrupt(paneIds);
+export async function relayInterrupt(paneIds: readonly string[]): Promise<void> {
+	await paneHost.relayInterrupt(paneIds);
 }

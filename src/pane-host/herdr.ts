@@ -134,8 +134,12 @@ export function createHerdrPaneHost(): PaneHost {
 		readLayout: (paneId) => herdrPaneLayout(paneId),
 		resizeChild: ({ paneId, direction, amount }: ResizeOp) =>
 			herdrPaneResize(paneId, direction, amount),
+		// Herdr's Esc is fire-and-forget by design: the sends are issued at once
+		// and this resolves immediately, without turning a pane error into a
+		// failure of the caller's interrupt.
 		relayInterrupt: (paneIds) => {
 			for (const paneId of paneIds) void herdrPaneSendEsc(paneId).catch(() => {});
+			return Promise.resolve();
 		},
 	};
 }
