@@ -2,7 +2,7 @@
 
 Pane-native subagent spawning for [pi](https://pi.dev). Define roles as markdown files and
 delegate to them. Each subagent runs in its own sub pane — a [herdr](https://herdr.dev/) pane in the
-right-hand column or a Rex block — with its own context window, and hands its report back as this
+right-hand column or a [Rex](https://www.superlogical.com/rex/docs/automate/cli) block — with its own context window, and hands its report back as this
 call's result.
 
 - **One blocking call:** the tool waits for the whole batch and returns every report in one result. No fire-and-forget, no second batch until it returns.
@@ -16,7 +16,7 @@ split, so it is not offered; when herdr and Rex variables are both present, herd
 
 ## Requirements
 - Pi coding agent.
-- Either a [herdr](https://herdr.dev/) pane (version 0.8.2 or newer) or a Rex block with
+- Either a [herdr](https://herdr.dev/) pane (version 0.8.2 or newer) or a [Rex](https://www.superlogical.com/rex/docs/automate/cli) block with
   `REX_SESSION` and `REX_BLOCK` exported and `rex` reachable on `PATH`.
 - Rex needs no plugin link, no minimum CLI version and no config toggle; its block and session
   context select the adapter automatically.
