@@ -56,6 +56,42 @@ test("Rex layout reads normalized rects from session inspection", async () => {
 	});
 });
 
+test("an appended Rex child rebalances its column through the vertical split ratio", async () => {
+	const columnView = view(
+		window("window-1", {
+			rect: [0, 0, 1, 1],
+			split: {
+				split_id: "root",
+				direction: "horizontal",
+				ratio: 0.6,
+				before: block(ORCH, [0, 0, 0.6, 1]),
+				after: {
+					rect: [0.6, 0, 0.4, 1],
+					split: {
+						split_id: "column",
+						direction: "vertical",
+						ratio: 0.6,
+						before: block(FIRST, [0.6, 0, 0.4, 0.6]),
+						after: block(SECOND, [0.6, 0.6, 0.4, 0.4]),
+					},
+				},
+			},
+		}),
+	);
+	await withFakeRex({ session: columnView, api: '{"revision":1}' }, async (calls) => {
+		const resized = await createPaneHost(REX_ENV).resizeChild({
+			paneId: SECOND,
+			direction: "up",
+			amount: 0.1,
+		});
+		assert.equal(resized, true);
+		assert.deepEqual(calls(), [
+			"session inspect -S server-1 sess-1 --json",
+			`api call -s sess-1 -S server-1 session.resize_pane {"session_id":"sess-1","direction":"vertical","before_block_id":"${FIRST}","after_block_id":"${SECOND}","ratio":0.5}`,
+		]);
+	});
+});
+
 test("a Rex birth divider moves with a ratio resize between the two full block ids", async () => {
 	const halfView = view(
 		window("window-1", {

@@ -238,19 +238,23 @@ function splitRatio(node: unknown, beforeId: string, afterId: string, axis: Axis
 	const record = asRecord(node);
 	if (!record) return null;
 	const split = asRecord(record.split);
-	if (!split || split.direction !== axis) return null;
+	if (!split) return null;
 
-	const before = new Set<string>();
-	const after = new Set<string>();
-	blockIds(split.before, before);
-	blockIds(split.after, after);
-	if (!before.has(beforeId) || !after.has(afterId)) return null;
-
-	// The innermost matching split is the border Rex's resize API will pick.
-	const deeper = splitRatio(split.before, beforeId, afterId, axis) ??
+	if (split.direction === axis) {
+		const before = new Set<string>();
+		const after = new Set<string>();
+		blockIds(split.before, before);
+		blockIds(split.after, after);
+		if (before.has(beforeId) && after.has(afterId)) {
+			// The innermost matching split is the border Rex's resize API will pick.
+			const deeper = splitRatio(split.before, beforeId, afterId, axis) ??
+				splitRatio(split.after, beforeId, afterId, axis);
+			if (deeper !== null) return deeper;
+			return typeof split.ratio === "number" && Number.isFinite(split.ratio) ? split.ratio : null;
+		}
+	}
+	return splitRatio(split.before, beforeId, afterId, axis) ??
 		splitRatio(split.after, beforeId, afterId, axis);
-	if (deeper !== null) return deeper;
-	return typeof split.ratio === "number" && Number.isFinite(split.ratio) ? split.ratio : null;
 }
 
 async function rexResizeChild(env: NodeJS.ProcessEnv, op: ResizeOp): Promise<boolean> {
