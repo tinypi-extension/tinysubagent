@@ -28,7 +28,7 @@ test("Rex is detected from its block and session, and herdr keeps precedence", (
 	);
 });
 
-test("a child block opens from the wrapper with a label and a full split ID", async () => {
+test("a child block opens from the wrapper through bash, with a label and a full split ID", async () => {
 	const split = JSON.stringify({ block_ids: ["session:sess-1/block:child-full-id"] });
 	await withFakeRex({ split }, async (calls) => {
 		const paneId = await createPaneHost({ ...REX_ENV, REX_SERVER: "server-1" }).openChild({
@@ -40,9 +40,11 @@ test("a child block opens from the wrapper with a label and a full split ID", as
 			label: "worker",
 		});
 		assert.equal(paneId, "session:sess-1/block:child-full-id");
+		// Rex runs COMMAND through the login shell, so a bare path would need +x.
+		// Generated launchers are intentionally 0644; name bash explicitly.
 		assert.deepEqual(calls(), [
 			"split -s sess-1 -S server-1 -b block-full-1 --split right --ratio 40 " +
-				"-c /tmp/work --keep-open --label worker --focus=false --json -- /tmp/wrap.sh",
+				"-c /tmp/work --keep-open --label worker --focus=false --json -- bash /tmp/wrap.sh",
 		]);
 	});
 });
@@ -82,10 +84,10 @@ test("an interrupt sends Esc to every live block by full id, pinned to the sessi
 });
 
 test("Rex readiness needs the block context and a reachable CLI, with no repair", async () => {
-	await withFakeRex({ "--version": "rex 0.1.0-preview.21\n" }, async (calls) => {
+	await withFakeRex({ version: "rex 0.1.0-preview.21\n" }, async (calls) => {
 		const readiness = await createPaneHost(REX_ENV).createCapability().probe({ timeoutMs: 5_000 });
 		assert.deepEqual(readiness, { problem: null, fix: null });
-		assert.deepEqual(calls(), ["--version"]);
+		assert.deepEqual(calls(), ["version"]);
 	});
 
 	await withoutRex(async () => {
@@ -94,9 +96,18 @@ test("Rex readiness needs the block context and a reachable CLI, with no repair"
 		assert.equal(readiness.fix, null);
 	});
 
-	await withFakeRex({ "--version": "rex 0.1.0-preview.21\n" }, async () => {
+	await withFakeRex({ version: "rex 0.1.0-preview.21\n" }, async () => {
 		const readiness = await createPaneHost({ REX_SESSION: "sess-1" }).createCapability().probe();
 		assert.match(readiness.problem ?? "", /block|session/i);
 		assert.equal(readiness.fix, null);
+	});
+});
+
+test("Rex readiness uses the CLI's version subcommand, not an unsupported flag", async () => {
+	// The installed preview CLI answers `rex version` but rejects `rex --version`.
+	await withFakeRex({ version: "rex 0.1.0-preview.21\n" }, async (calls) => {
+		const readiness = await createPaneHost(REX_ENV).createCapability().probe({ timeoutMs: 5_000 });
+		assert.deepEqual(readiness, { problem: null, fix: null });
+		assert.deepEqual(calls(), ["version"]);
 	});
 });

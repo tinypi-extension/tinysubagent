@@ -121,7 +121,8 @@ export async function runRexJson(args: string[], options: RunOptions = {}): Prom
 /** A reachable CLI is all the readiness Rex needs today. */
 export async function rexReachable(options: RunOptions = {}): Promise<boolean> {
 	try {
-		const output = await runRex(["--version"], options);
+		// `version` is the portable subcommand; current Rex rejects `--version`.
+		const output = await runRex(["version"], options);
 		return output.trim().length > 0;
 	} catch {
 		return false;

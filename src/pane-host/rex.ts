@@ -331,6 +331,9 @@ async function rexOpenChild(
 		focus ? "--focus" : "--focus=false",
 		"--json",
 		"--",
+		// Rex passes COMMAND to the login shell. A bare path would be exec'd
+		// directly, but generated launchers are intentionally 0644.
+		"bash",
 		scriptPath,
 	];
 	const result = await runRexJson(args, { timeoutMs: 30_000 });
