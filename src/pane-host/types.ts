@@ -1,5 +1,5 @@
 /** The TUI kinds this extension can host child panes in. */
-export type PaneHostKind = "herdr";
+export type PaneHostKind = "herdr" | "rex";
 
 /** A pane's rect, in whatever units the host reports them. */
 export interface Rect {
