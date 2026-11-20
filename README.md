@@ -1,8 +1,9 @@
 # tinysubagent
 
-Herdr-native subagent spawning for [pi](https://pi.dev). Define roles as markdown files and
-delegate to them. Each subagent runs in a shared right-hand [herdr](https://herdr.dev/) column
-with its own context window, and hands its report back as this call's result.
+Pane-native subagent spawning for [pi](https://pi.dev). Define roles as markdown files and
+delegate to them. Each subagent runs in its own child pane — a shared right-hand
+[herdr](https://herdr.dev/) column or a Rex block — with its own context window, and hands its
+report back as this call's result.
 
 - **One blocking call:** the tool waits for the whole batch and returns every report in one result. No fire-and-forget, no second batch until it returns.
 - **Esc stops the batch:** an interrupt in the orchestrator's pane is relayed to every live sub pane, so each child's turn stops where it is, is reported `interrupted`, and its pane is closed — nothing is left running.
@@ -10,11 +11,15 @@ with its own context window, and hands its report back as this call's result.
 - **Model profiles:** optional named profiles with a shared `model` and `thinking` setting for pi or agy.
 - **Per-child `env`:** static variables for subagents, without touching the orchestrator's env.
 
-The tool is registered **only inside herdr**. Outside it there is no pane to split, so it is not offered.
+The tool registers inside a herdr pane or a Rex block. Outside both hosts there is no pane to
+split, so it is not offered; when herdr and Rex variables are both present, herdr wins.
 
 ## Requirements
 - Pi coding agent.
-- herdr version 0.8.2 or newer
+- Either a [herdr](https://herdr.dev/) pane (version 0.8.2 or newer) or a Rex block with
+  `REX_SESSION` and `REX_BLOCK` exported and `rex` reachable on `PATH`.
+- Rex needs no plugin link, no minimum CLI version and no config toggle; its block and session
+  context select the adapter automatically.
 
 ## Install
 
@@ -26,10 +31,11 @@ pi update --extensions
 Install **without a ref** so updates keep working. Pinned refs are checkout targets; to upgrade,
 install the newer tag explicitly.
 
-### Link the herdr plugin
+### Link the herdr plugin (herdr only)
 
 The pane entrypoint ships in `herdr-plugin/` (plugin id `tinysubagent-panes`, entrypoint
 `subagent`). herdr stores the absolute path and copies nothing. Pi asks before your first prompt.
+Rex does not use this plugin; skip this section when running inside a Rex block.
 
 ### Reinstall over an existing install
 
