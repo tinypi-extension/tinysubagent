@@ -6,84 +6,12 @@
  */
 
 import { strict as assert } from "node:assert";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
 import { createPaneHost, detectPaneHost } from "../../src/pane-host/index.ts";
+import { withFakeRex, withoutRex } from "../helpers/fake-rex.ts";
 
 const REX_ENV = { REX_SESSION: "sess-1", REX_BLOCK: "block-full-1" };
-
-function shellQuote(value: string): string {
-	return "'" + value.replace(/'/g, "'\\''") + "'";
-}
-
-interface FakeResponse {
-	stdout?: string;
-	stderr?: string;
-	exit?: number;
-}
-
-/** A `rex` executable that records argv and answers selected commands. */
-async function withFakeRex<T>(
-	responses: Record<string, string | FakeResponse>,
-	run: (calls: () => string[]) => Promise<T>,
-): Promise<T> {
-	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-rex-seam-"));
-	const argvFile = join(dir, "argv");
-	writeFileSync(argvFile, "");
-	const cases: string[] = [];
-	for (const [key, value] of Object.entries(responses)) {
-		const response: FakeResponse = typeof value === "string" ? { stdout: value } : value;
-		const file = join(dir, `${key.replace(/\W/g, "_")}_out`);
-		const errorFile = join(dir, `${key.replace(/\W/g, "_")}_err`);
-		writeFileSync(file, response.stdout ?? "");
-		writeFileSync(errorFile, response.stderr ?? "");
-		const emit = response.stderr
-			? `cat ${shellQuote(errorFile)} 1>&2; exit ${response.exit ?? 1}`
-			: `cat ${shellQuote(file)}; exit ${response.exit ?? 0}`;
-		cases.push(`  "${key}") ${emit} ;;`);
-	}
-	const bin = join(dir, "rex");
-	writeFileSync(
-		bin,
-		[
-			"#!/usr/bin/env bash",
-			`printf '%s\\n' "$*" >> ${shellQuote(argvFile)}`,
-			'case "$1" in',
-			...cases,
-			'  *) printf "unexpected rex command: %s\\n" "$*" 1>&2; exit 1 ;;',
-			"esac",
-			"",
-		].join("\n"),
-	);
-	chmodSync(bin, 0o755);
-	const savedPath = process.env.PATH;
-	process.env.PATH = `${dir}${savedPath ? `:${savedPath}` : ""}`;
-	const calls = (): string[] => readFileSync(argvFile, "utf8").trim().split("\n").filter(Boolean);
-	try {
-		return await run(calls);
-	} finally {
-		if (savedPath === undefined) delete process.env.PATH;
-		else process.env.PATH = savedPath;
-		rmSync(dir, { recursive: true, force: true });
-	}
-}
-
-/** A PATH with a directory that contains no `rex`, so the probe cannot reach it. */
-async function withoutRex<T>(run: () => Promise<T>): Promise<T> {
-	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-rex-missing-"));
-	const savedPath = process.env.PATH;
-	process.env.PATH = dir;
-	try {
-		return await run();
-	} finally {
-		if (savedPath === undefined) delete process.env.PATH;
-		else process.env.PATH = savedPath;
-		rmSync(dir, { recursive: true, force: true });
-	}
-}
 
 test("Rex is detected from its block and session, and herdr keeps precedence", () => {
 	assert.equal(detectPaneHost(REX_ENV), "rex");

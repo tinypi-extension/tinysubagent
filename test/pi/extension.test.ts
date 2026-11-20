@@ -58,9 +58,17 @@ function stubApi() {
 	};
 }
 
-/** Run the factory with a chosen herdr environment, restoring it afterwards. */
+/** Run the factory with a chosen pane-host environment, restoring it afterwards. */
 function withEnv(env: Record<string, string | undefined>, run: () => void): void {
-	const keys = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "PI_TINYSUBAGENT_CONFIG"];
+	const keys = [
+		"HERDR_ENV",
+		"HERDR_PANE_ID",
+		"HERDR_SOCKET_PATH",
+		"REX_SESSION",
+		"REX_BLOCK",
+		"REX_SERVER",
+		"PI_TINYSUBAGENT_CONFIG",
+	];
 	const saved = keys.map((key) => [key, process.env[key]] as const);
 	for (const key of keys) {
 		const value = env[key];
@@ -79,10 +87,10 @@ function withEnv(env: Record<string, string | undefined>, run: () => void): void
 
 const INSIDE = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/tmp/herdr.sock" };
 
-test("outside herdr the tool is not registered at all", () => {
+test("outside herdr and Rex the tool is not registered at all", () => {
 	const stub = stubApi();
 	withEnv({}, () => {
-		// Inside herdr for real, but pretending not to be: the gate is the point.
+		// Inside a host for real in this shell, but pretending not to be: the gate is the point.
 		tinysubagent(stub.api as never);
 	});
 	assert.deepEqual(stub.tools, []);
