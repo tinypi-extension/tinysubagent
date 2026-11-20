@@ -1,5 +1,5 @@
 /** The TUI kinds this extension can host child panes in. */
-export type PaneHostKind = "herdr";
+export type PaneHostKind = "herdr" | "rex";
 
 /** A pane's rect, in whatever units the host reports them. */
 export interface Rect {
@@ -31,6 +31,8 @@ export interface OpenChildRequest {
 	direction: "right" | "down";
 	/** Path to the generated wrapper script the child pane runs. */
 	command: string;
+	/** The child's short name, shown as its label where the host supports one. */
+	label?: string;
 	focus: boolean;
 }
 

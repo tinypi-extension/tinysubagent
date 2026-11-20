@@ -173,6 +173,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			targetPaneId,
 			direction,
 			command: paths.scriptFile,
+			label: request.name,
 			focus: false,
 		});
 	} catch (error) {
