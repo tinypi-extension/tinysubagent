@@ -117,11 +117,12 @@ test("one Rex child returns its report and closes its block", async () => {
 test("a clean session exit closes the Rex block too", async () => {
 	const { dir, cwd, cleanup } = tempWorkdir();
 	try {
-		const { results } = await runRexBatch(dir, cwd, (running) => {
+		const { results, calls } = await runRexBatch(dir, cwd, (running) => {
 			writeFileSync(running.exitCodeFile, `0 ${running.id}`);
 		});
 		assert.equal(results[0]?.outcome.kind, "completed");
 		assert.equal(results[0]?.outcome.via, "session-exit");
+		assert.ok(calls.includes(`block close -s sess-1 -S server-1 ${CHILD}`));
 	} finally {
 		cleanup();
 	}
