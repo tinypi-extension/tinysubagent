@@ -135,17 +135,15 @@ export function planResizes(
 		];
 	}
 
-	// Append: walk the boundaries top-down, equalising one at a time. Because
-	// everything above boundary k is already at target, the split node spanning
-	// pane_k..pane_N is C - (k-1)·t tall, and the op's amount must be measured
-	// against that shrinking node rather than the original column height.
+	// Append: walk the boundaries top-down. Every delta is measured against the
+	// layout we just read, not against earlier ops in this same pass. The split
+	// node spanning pane_k..pane_N is sized as C - (k-1)·t, so each amount is
+	// measured against that shrinking node rather than the original column.
+	// A caller that needs newer geometry reads the layout again on the next spawn.
 	const count = inTab.length;
 	const total = inTab.reduce((sum, pane) => sum + pane.rect.height, 0);
 	const target = total / count;
 	const ops: ResizeOp[] = [];
-	// Each delta is measured against the layout as reported, not against the
-	// result of earlier ops; the host applies these ops in order. A caller that
-	// needs newer geometry reads the layout again on the next spawn.
 	for (let k = 1; k < count; k += 1) {
 		const above = inTab[k - 1];
 		const below = inTab[k];

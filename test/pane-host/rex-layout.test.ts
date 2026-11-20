@@ -136,6 +136,10 @@ test("a failed Rex layout read leaves the child open and the batch reporting", a
 				);
 				assert.equal(spawned.ok, true);
 				if (!spawned.ok) return;
+				assert.ok(
+					spawned.warnings.some((warning) => /could not read .*layout/i.test(warning)),
+					spawned.warnings.join(" | "),
+				);
 				writeFileSync(spawned.running.reportFile, JSON.stringify({ type: "done", result: "Still works." }));
 				const results = await watchBatch([spawned.running], undefined, { watchers: new Set(), columns });
 				await waitForCall(calls, "block close");
@@ -182,6 +186,10 @@ test("a failed Rex resize leaves the child open and the batch reporting", async 
 				);
 				assert.equal(spawned.ok, true);
 				if (!spawned.ok) return;
+				assert.ok(
+					spawned.warnings.some((warning) => /could not resize/i.test(warning)),
+					spawned.warnings.join(" | "),
+				);
 				writeFileSync(spawned.running.reportFile, JSON.stringify({ type: "done", result: "Still works." }));
 				const results = await watchBatch([spawned.running], undefined, { watchers: new Set(), columns });
 				await waitForCall(calls, "block close");
