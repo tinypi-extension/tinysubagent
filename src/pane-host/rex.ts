@@ -1,5 +1,6 @@
 /** The Rex adapter behind the pane-host seam. */
 
+import { isInsideRex, rexReachable } from "../rex/cli.ts";
 import type {
 	CapabilityCheck,
 	OpenChildRequest,
@@ -10,31 +11,57 @@ import type {
 	ResizeOp,
 } from "./types.ts";
 
-/** Rex requires its block and session; the server is optional. */
-export function isInsideRex(env: NodeJS.ProcessEnv = process.env): boolean {
-	return Boolean(env.REX_BLOCK) && Boolean(env.REX_SESSION);
-}
+export { isInsideRex } from "../rex/cli.ts";
 
 /** The block this pi is running in, used as the split anchor. */
 export function currentRexBlock(env: NodeJS.ProcessEnv = process.env): string | null {
 	return env.REX_BLOCK || null;
 }
 
-function createRexCapability(): CapabilityCheck {
-	const readiness: Readiness = { problem: null, fix: null };
+const READY: Readiness = { problem: null, fix: null };
+
+/** The Rex probe: context and a reachable CLI, with no version gate or fix. */
+export function createRexCapability(env: NodeJS.ProcessEnv = process.env): CapabilityCheck {
+	let capabilityCheck: Promise<string | null> | null = null;
+
+	async function probe(options: ProbeOptions = {}): Promise<Readiness> {
+		if (!isInsideRex(env)) {
+			return {
+				problem: "Rex block and session context is missing — start pi inside a Rex block.",
+				fix: null,
+			};
+		}
+		if (!(await rexReachable(options))) {
+			return {
+				problem: "rex is not reachable from this block — install it on PATH.",
+				fix: null,
+			};
+		}
+		return READY;
+	}
+
+	async function ensureReady(): Promise<string | null> {
+		capabilityCheck ??= probe().then((readiness) => readiness.problem);
+		const problem = await capabilityCheck;
+		if (problem) capabilityCheck = null;
+		return problem;
+	}
+
 	return {
-		ensureReady: async () => readiness.problem,
-		probe: async (_options?: ProbeOptions) => readiness,
-		reset() {},
+		ensureReady,
+		probe,
+		reset: () => {
+			capabilityCheck = null;
+		},
 	};
 }
 
-export function createRexPaneHost(): PaneHost {
+export function createRexPaneHost(env: NodeJS.ProcessEnv = process.env): PaneHost {
 	return {
 		kind: "rex",
 		detectedIn: isInsideRex,
 		currentPaneId: currentRexBlock,
-		createCapability: createRexCapability,
+		createCapability: () => createRexCapability(env),
 		openChild: async (_request: OpenChildRequest) => {
 			throw new Error("Rex child spawn is not implemented yet.");
 		},

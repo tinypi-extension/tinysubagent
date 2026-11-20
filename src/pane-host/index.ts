@@ -32,7 +32,9 @@ const rex = createRexPaneHost();
 /** Host selection lives here, never at a call site. Herdr wins a mixed env. */
 function select(env: NodeJS.ProcessEnv): PaneHost {
 	if (herdr.detectedIn(env)) return herdr;
-	if (rex.detectedIn(env)) return rex;
+	// A partial Rex context still selects the adapter, so its probe can explain
+	// what is missing even though no host is registered.
+	if (rex.detectedIn(env) || env.REX_SESSION || env.REX_BLOCK) return createRexPaneHost(env);
 	// With no host detected, keep herdr as the default adapter. Callers still
 	// refuse to register the tool; this only preserves the seam's old shape.
 	return herdr;
