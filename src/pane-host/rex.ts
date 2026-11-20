@@ -3,6 +3,7 @@
 import {
 	isInsideRex,
 	parseRexJson,
+	rexContext,
 	rexReachable,
 	runRex,
 	runRexJson,
@@ -16,6 +17,7 @@ import type {
 	PaneLayout,
 	ProbeOptions,
 	Readiness,
+	Rect,
 	ResizeOp,
 } from "./types.ts";
 
@@ -82,6 +84,237 @@ async function rexRenameChild(env: NodeJS.ProcessEnv, paneId: string, label: str
 	return runRexQuiet(["block", "rename", ...scopeArgs(env), paneId, label]);
 }
 
+interface RexView {
+	tabId: string | null;
+	panes: { paneId: string; rect: Rect }[];
+	layers: unknown[];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+/** Rex reports rects as `[x, y, width, height]` fractions of the window. */
+function rexRect(value: unknown): Rect | null {
+	if (!Array.isArray(value) || value.length !== 4) return null;
+	const [x, y, width, height] = value;
+	if (![x, y, width, height].every((part) => typeof part === "number" && Number.isFinite(part))) {
+		return null;
+	}
+	return { x: x as number, y: y as number, width: width as number, height: height as number };
+}
+
+/** Flatten one Rex layout tree into the seam's normalized pane list. */
+function collectRexPanes(node: unknown, panes: RexView["panes"], ids: Set<string>): void {
+	const record = asRecord(node);
+	if (!record) return;
+	if (typeof record.block_id === "string") {
+		ids.add(record.block_id);
+		const rect = rexRect(record.rect);
+		if (rect) panes.push({ paneId: record.block_id, rect });
+	}
+	const split = asRecord(record.split);
+	if (split) {
+		collectRexPanes(split.before, panes, ids);
+		collectRexPanes(split.after, panes, ids);
+	}
+}
+
+/**
+ * The window that contains `paneId`. A block in a different window is not part
+ * of this tab's layout, even when the session reports several windows.
+ */
+function rexWindow(view: Record<string, unknown>, paneId: string): RexView | null {
+	const windows = Array.isArray(view.windows) ? view.windows : [];
+	for (const entry of windows) {
+		const record = asRecord(entry);
+		if (!record) continue;
+		const layers = Array.isArray(record.layers) ? record.layers : [];
+		const panes: RexView["panes"] = [];
+		const ids = new Set<string>();
+		for (const layer of layers) {
+			const layerRecord = asRecord(layer);
+			if (layerRecord && layerRecord.kind === "tiled") {
+				collectRexPanes(layerRecord.layout, panes, ids);
+			}
+		}
+		if (!ids.has(paneId)) continue;
+		return {
+			tabId: typeof record.window_id === "string" ? record.window_id : null,
+			panes,
+			layers,
+		};
+	}
+	return null;
+}
+
+/**
+ * Read the session view. `session inspect` takes the session as a positional
+ * argument, so only the server is pinned here; the session is already in the
+ * command itself.
+ */
+async function readRexSession(env: NodeJS.ProcessEnv): Promise<Record<string, unknown> | null> {
+	const { session, server } = rexContext(env);
+	if (!session) return null;
+	const args = [
+		"session",
+		"inspect",
+		...(server ? ["-S", server] : []),
+		session,
+		"--json",
+	];
+	try {
+		return parseRexJson(await runRex(args));
+	} catch {
+		return null;
+	}
+}
+
+async function rexReadLayout(
+	env: NodeJS.ProcessEnv,
+	paneId: string,
+): Promise<PaneLayout | null> {
+	const view = await readRexSession(env);
+	if (!view) return null;
+	const window = rexWindow(view, paneId);
+	// Rex rects are fractions of a window, not rows: a whole-row tolerance would
+	// swallow every meaningful adjustment.
+	return window ? { tabId: window.tabId, panes: window.panes, tolerance: 1e-6 } : null;
+}
+
+type PaneRect = RexView["panes"][number];
+type Axis = "horizontal" | "vertical";
+
+const EPSILON = 1e-6;
+
+function spansOverlap(
+	paneStart: number,
+	paneSize: number,
+	otherStart: number,
+	otherSize: number,
+): boolean {
+	return Math.min(paneStart + paneSize, otherStart + otherSize) - Math.max(paneStart, otherStart) > EPSILON;
+}
+
+/** The pane touching `pane` across the divider on the given axis, if any. */
+function adjacentPane(panes: PaneRect[], pane: PaneRect, axis: Axis): PaneRect | null {
+	let best: PaneRect | null = null;
+	let bestOverlap = 0;
+	for (const candidate of panes) {
+		if (candidate.paneId === pane.paneId) continue;
+		const overlap = axis === "horizontal"
+			? spansOverlap(pane.rect.y, pane.rect.height, candidate.rect.y, candidate.rect.height)
+				? Math.min(pane.rect.height, candidate.rect.height)
+				: 0
+			: spansOverlap(pane.rect.x, pane.rect.width, candidate.rect.x, candidate.rect.width)
+				? Math.min(pane.rect.width, candidate.rect.width)
+				: 0;
+		if (overlap <= EPSILON || overlap <= bestOverlap) continue;
+		const touches = axis === "horizontal"
+			? Math.abs(candidate.rect.x + candidate.rect.width - pane.rect.x) < EPSILON ||
+				Math.abs(pane.rect.x + pane.rect.width - candidate.rect.x) < EPSILON
+			: Math.abs(candidate.rect.y + candidate.rect.height - pane.rect.y) < EPSILON ||
+				Math.abs(pane.rect.y + pane.rect.height - candidate.rect.y) < EPSILON;
+		if (!touches) continue;
+		best = candidate;
+		bestOverlap = overlap;
+	}
+	return best;
+}
+
+function blockIds(node: unknown, into: Set<string>): void {
+	const record = asRecord(node);
+	if (!record) return;
+	if (typeof record.block_id === "string") into.add(record.block_id);
+	const split = asRecord(record.split);
+	if (split) {
+		blockIds(split.before, into);
+		blockIds(split.after, into);
+	}
+}
+
+/** The Rex split ratio for the border that separates the two given blocks. */
+function splitRatio(node: unknown, beforeId: string, afterId: string, axis: Axis): number | null {
+	const record = asRecord(node);
+	if (!record) return null;
+	const split = asRecord(record.split);
+	if (!split) return null;
+
+	if (split.direction === axis) {
+		const before = new Set<string>();
+		const after = new Set<string>();
+		blockIds(split.before, before);
+		blockIds(split.after, after);
+		if (before.has(beforeId) && after.has(afterId)) {
+			// The innermost matching split is the border Rex's resize API will pick.
+			const deeper = splitRatio(split.before, beforeId, afterId, axis) ??
+				splitRatio(split.after, beforeId, afterId, axis);
+			if (deeper !== null) return deeper;
+			return typeof split.ratio === "number" && Number.isFinite(split.ratio) ? split.ratio : null;
+		}
+	}
+	return splitRatio(split.before, beforeId, afterId, axis) ??
+		splitRatio(split.after, beforeId, afterId, axis);
+}
+
+async function rexResizeChild(env: NodeJS.ProcessEnv, op: ResizeOp): Promise<boolean> {
+	const axis: Axis | null = op.direction === "left" || op.direction === "right"
+		? "horizontal"
+		: op.direction === "up" || op.direction === "down"
+			? "vertical"
+			: null;
+	if (!axis) return false;
+
+	const view = await readRexSession(env);
+	if (!view) return false;
+	const window = rexWindow(view, op.paneId);
+	if (!window) return false;
+	const pane = window.panes.find((entry) => entry.paneId === op.paneId);
+	if (!pane) return false;
+	const neighbor = adjacentPane(window.panes, pane, axis);
+	if (!neighbor) return false;
+
+	// `before` is the left/top side of the border regardless of which pane the
+	// planner named: the planner's direction says which way the border moves.
+	const neighborFirst = axis === "horizontal"
+		? neighbor.rect.x < pane.rect.x
+		: neighbor.rect.y < pane.rect.y;
+	const beforeId = neighborFirst ? neighbor.paneId : pane.paneId;
+	const afterId = neighborFirst ? pane.paneId : neighbor.paneId;
+	let ratio: number | null = null;
+	for (const layer of window.layers) {
+		const record = asRecord(layer);
+		if (!record || record.kind !== "tiled") continue;
+		ratio = splitRatio(record.layout, beforeId, afterId, axis);
+		if (ratio !== null) break;
+	}
+	if (ratio === null) return false;
+
+	const growsBefore = op.direction === "right" || op.direction === "down";
+	const target = ratio + (growsBefore ? op.amount : -op.amount);
+	if (!Number.isFinite(target) || target <= 0 || target >= 1) return false;
+
+	const { session, server } = rexContext(env);
+	if (!session) return false;
+	return runRexQuiet([
+		"api",
+		"call",
+		"-s",
+		session,
+		...(server ? ["-S", server] : []),
+		"session.resize_pane",
+		JSON.stringify({
+			session_id: session,
+			direction: axis,
+			before_block_id: beforeId,
+			after_block_id: afterId,
+			ratio: target,
+		}),
+	]);
+}
+
 /** Type one Esc into a block; even a block that just vanished is not an error. */
 function rexSendEsc(env: NodeJS.ProcessEnv, paneId: string): void {
 	void runRexQuiet(["send-key", ...scopeArgs(env), "-b", paneId, "esc"]);
@@ -133,8 +366,8 @@ export function createRexPaneHost(env: NodeJS.ProcessEnv = process.env): PaneHos
 		renameChild: (paneId, label) => rexRenameChild(env, paneId, label),
 		closeChild: (paneId) => rexCloseChild(env, paneId),
 		childExists: (paneId) => rexChildExists(env, paneId),
-		readLayout: async (): Promise<PaneLayout | null> => null,
-		resizeChild: async (_op: ResizeOp) => false,
+		readLayout: (paneId) => rexReadLayout(env, paneId),
+		resizeChild: (op) => rexResizeChild(env, op),
 		relayInterrupt: (paneIds) => {
 			for (const paneId of paneIds) rexSendEsc(env, paneId);
 		},
