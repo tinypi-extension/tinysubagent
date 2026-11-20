@@ -156,16 +156,24 @@ _Avoid_: config error
 
 ## Panes and layout
 
+**Pane host**:
+A TUI that can host child panes: herdr or Rex.
+_Avoid_: multiplexer, terminal emulator, backend
+
 **Pane**:
-A terminal region herdr manages. Every live child owns one.
+A terminal region a pane host manages: a pane in herdr, a block in Rex. Every live child owns one.
 _Avoid_: window, tab, split, terminal
+
+**Block**:
+Rex's name for a pane.
+_Avoid_: pane (when speaking of Rex), window
 
 **Sub pane**:
 A pane holding a live subagent, as opposed to the orchestrator's own pane.
 _Avoid_: child pane, side pane
 
 **Live sub panes**:
-The set of sub panes that still exist in the tab. It — not the current batch — is what placement and sizing act on.
+The set of sub panes that still exist in the host's window. It — not the current batch — is what placement and sizing act on.
 _Avoid_: registry, pane list
 
 **Column**:
@@ -173,7 +181,7 @@ The single right-hand stack that all sub panes share, divided equally among them
 _Avoid_: stack, sidebar, panel
 
 **Column birth**:
-The first sub pane in a tab. It is the only moment the orchestrator's share is set.
+The first sub pane in a host window. It is the only moment the orchestrator's share is set.
 _Avoid_: first split, initial layout
 
 **Orchestrator-first layout**:
@@ -187,7 +195,7 @@ _Avoid_: confirmation, receipt, response
 ## Readiness
 
 **Capability probe**:
-The cached check that herdr is reachable and new enough to open sub panes at all.
+The cached check that the detected pane host is available and can open sub panes at all.
 _Avoid_: environment check, health check
 
 **Readiness**:
@@ -195,5 +203,5 @@ The probe's answer: either an empty problem or a description of what is wrong, p
 _Avoid_: status, health
 
 **Plugin fix**:
-The one-step repair offered when the pane entrypoint is not linked or not enabled.
+The herdr-only one-step repair offered when the pane entrypoint is not linked or not enabled.
 _Avoid_: auto-fix, install
