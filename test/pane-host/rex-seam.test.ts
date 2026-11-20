@@ -100,6 +100,25 @@ test("Rex is detected from its block and session, and herdr keeps precedence", (
 	);
 });
 
+test("a child block opens from the wrapper with a label and a full split ID", async () => {
+	const split = JSON.stringify({ block_ids: ["session:sess-1/block:child-full-id"] });
+	await withFakeRex({ split }, async (calls) => {
+		const paneId = await createPaneHost({ ...REX_ENV, REX_SERVER: "server-1" }).openChild({
+			cwd: "/tmp/work",
+			targetPaneId: null,
+			direction: "right",
+			command: "/tmp/wrap.sh",
+			focus: false,
+			label: "worker",
+		});
+		assert.equal(paneId, "session:sess-1/block:child-full-id");
+		assert.deepEqual(calls(), [
+			"split -s sess-1 -S server-1 -b block-full-1 --split right --ratio 40 " +
+				"-c /tmp/work --keep-open --label worker --focus=false --json -- /tmp/wrap.sh",
+		]);
+	});
+});
+
 test("Rex readiness needs the block context and a reachable CLI, with no repair", async () => {
 	await withFakeRex({ "--version": "rex 0.1.0-preview.21\n" }, async (calls) => {
 		const readiness = await createPaneHost(REX_ENV).createCapability().probe({ timeoutMs: 5_000 });

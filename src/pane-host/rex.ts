@@ -1,6 +1,6 @@
 /** The Rex adapter behind the pane-host seam. */
 
-import { isInsideRex, rexReachable } from "../rex/cli.ts";
+import { isInsideRex, rexReachable, runRexJson, scopeArgs } from "../rex/cli.ts";
 import type {
 	CapabilityCheck,
 	OpenChildRequest,
@@ -56,15 +56,49 @@ export function createRexCapability(env: NodeJS.ProcessEnv = process.env): Capab
 	};
 }
 
+/** Split the orchestrator's block and return the new block's full id. */
+async function rexOpenChild(
+	env: NodeJS.ProcessEnv,
+	{ cwd, targetPaneId, direction, command, label, focus }: OpenChildRequest,
+): Promise<string> {
+	const anchor = targetPaneId ?? currentRexBlock(env);
+	if (!anchor) throw new Error("Rex block context is missing — cannot split a child block.");
+
+	const args = [
+		"split",
+		...scopeArgs(env),
+		"-b",
+		anchor,
+		"--split",
+		direction === "right" ? "right" : "below",
+		// One child: the orchestrator keeps three fifths, the column gets two.
+		"--ratio",
+		"40",
+		"-c",
+		cwd,
+		"--keep-open",
+		...(label ? ["--label", label] : []),
+		focus ? "--focus" : "--focus=false",
+		"--json",
+		"--",
+		command,
+	];
+	const result = await runRexJson(args, { timeoutMs: 30_000 });
+	const ids = result.block_ids;
+	const blockId = Array.isArray(ids) ? ids[0] : result.block_id;
+	if (typeof blockId !== "string" || blockId === "") {
+		throw new Error(`rex split reported no block id (${JSON.stringify(result)}).`);
+	}
+	return blockId;
+}
+
 export function createRexPaneHost(env: NodeJS.ProcessEnv = process.env): PaneHost {
 	return {
 		kind: "rex",
 		detectedIn: isInsideRex,
 		currentPaneId: currentRexBlock,
 		createCapability: () => createRexCapability(env),
-		openChild: async (_request: OpenChildRequest) => {
-			throw new Error("Rex child spawn is not implemented yet.");
-		},
+		openChild: (request) => rexOpenChild(env, request),
 		renameChild: async () => false,
 		closeChild: async () => false,
 		childExists: async () => null,

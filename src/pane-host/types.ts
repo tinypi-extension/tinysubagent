@@ -31,6 +31,8 @@ export interface OpenChildRequest {
 	direction: "right" | "down";
 	/** Path to the generated wrapper script the child pane runs. */
 	command: string;
+	/** The child's short name, shown as its label where the host supports one. */
+	label?: string;
 	focus: boolean;
 }
 
