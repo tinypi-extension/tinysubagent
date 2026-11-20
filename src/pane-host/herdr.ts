@@ -1,5 +1,6 @@
 /** The herdr adapter behind the pane-host seam. */
 
+import { createCapabilityCheck } from "./capability.ts";
 import {
 	currentPaneId,
 	herdrPaneClose,
@@ -64,8 +65,6 @@ function enableFix(): HostFix {
 
 /** The herdr capability probe, with its cache scoped to one registration. */
 export function createHerdrCapability(): CapabilityCheck {
-	let capabilityCheck: Promise<string | null> | null = null;
-
 	async function probe(options: ProbeOptions = {}): Promise<Readiness> {
 		const status = await herdrStatus(options);
 		if (!status?.running) {
@@ -96,21 +95,7 @@ export function createHerdrCapability(): CapabilityCheck {
 		return READY;
 	}
 
-	async function ensureReady(): Promise<string | null> {
-		capabilityCheck ??= probe().then((readiness) => readiness.problem);
-		const problem = await capabilityCheck;
-		// Failures are not cached: a repair made in place is picked up next time.
-		if (problem) capabilityCheck = null;
-		return problem;
-	}
-
-	return {
-		ensureReady,
-		probe,
-		reset: () => {
-			capabilityCheck = null;
-		},
-	};
+	return createCapabilityCheck(probe);
 }
 
 export function createHerdrPaneHost(): PaneHost {

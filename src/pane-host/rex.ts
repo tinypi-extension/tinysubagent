@@ -1,5 +1,6 @@
 /** The Rex adapter behind the pane-host seam. */
 
+import { createCapabilityCheck } from "./capability.ts";
 import {
 	isInsideRex,
 	parseRexJson,
@@ -32,8 +33,6 @@ const READY: Readiness = { problem: null, fix: null };
 
 /** The Rex probe: context and a reachable CLI, with no version gate or fix. */
 export function createRexCapability(env: NodeJS.ProcessEnv = process.env): CapabilityCheck {
-	let capabilityCheck: Promise<string | null> | null = null;
-
 	async function probe(options: ProbeOptions = {}): Promise<Readiness> {
 		if (!isInsideRex(env)) {
 			return {
@@ -50,20 +49,7 @@ export function createRexCapability(env: NodeJS.ProcessEnv = process.env): Capab
 		return READY;
 	}
 
-	async function ensureReady(): Promise<string | null> {
-		capabilityCheck ??= probe().then((readiness) => readiness.problem);
-		const problem = await capabilityCheck;
-		if (problem) capabilityCheck = null;
-		return problem;
-	}
-
-	return {
-		ensureReady,
-		probe,
-		reset: () => {
-			capabilityCheck = null;
-		},
-	};
+	return createCapabilityCheck(probe);
 }
 
 /** A missing block is a definite "no"; every other failure is unknown. */
