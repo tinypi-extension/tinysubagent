@@ -1,6 +1,14 @@
 /** The Rex adapter behind the pane-host seam. */
 
-import { isInsideRex, rexReachable, runRexJson, scopeArgs } from "../rex/cli.ts";
+import {
+	isInsideRex,
+	parseRexJson,
+	rexReachable,
+	runRex,
+	runRexJson,
+	runRexQuiet,
+	scopeArgs,
+} from "../rex/cli.ts";
 import type {
 	CapabilityCheck,
 	OpenChildRequest,
@@ -56,6 +64,24 @@ export function createRexCapability(env: NodeJS.ProcessEnv = process.env): Capab
 	};
 }
 
+/** A missing block is a definite "no"; every other failure is unknown. */
+async function rexChildExists(env: NodeJS.ProcessEnv, paneId: string): Promise<boolean | null> {
+	try {
+		const text = await runRex(["block", "inspect", ...scopeArgs(env), paneId, "--json"]);
+		return parseRexJson(text) !== null;
+	} catch (error) {
+		return /not found|no such|does not exist|unknown block/i.test(String(error)) ? false : null;
+	}
+}
+
+async function rexCloseChild(env: NodeJS.ProcessEnv, paneId: string): Promise<boolean> {
+	return runRexQuiet(["block", "close", ...scopeArgs(env), paneId]);
+}
+
+async function rexRenameChild(env: NodeJS.ProcessEnv, paneId: string, label: string): Promise<boolean> {
+	return runRexQuiet(["block", "rename", ...scopeArgs(env), paneId, label]);
+}
+
 /** Split the orchestrator's block and return the new block's full id. */
 async function rexOpenChild(
 	env: NodeJS.ProcessEnv,
@@ -99,9 +125,9 @@ export function createRexPaneHost(env: NodeJS.ProcessEnv = process.env): PaneHos
 		currentPaneId: currentRexBlock,
 		createCapability: () => createRexCapability(env),
 		openChild: (request) => rexOpenChild(env, request),
-		renameChild: async () => false,
-		closeChild: async () => false,
-		childExists: async () => null,
+		renameChild: (paneId, label) => rexRenameChild(env, paneId, label),
+		closeChild: (paneId) => rexCloseChild(env, paneId),
+		childExists: (paneId) => rexChildExists(env, paneId),
 		readLayout: async (): Promise<PaneLayout | null> => null,
 		resizeChild: async (_op: ResizeOp) => false,
 		relayInterrupt: () => {},

@@ -119,6 +119,25 @@ test("a child block opens from the wrapper with a label and a full split ID", as
 	});
 });
 
+test("Rex liveness, rename and close use pinned block commands", async () => {
+	const child = "session:sess-1/block:child-full-id";
+	const host = createPaneHost({ ...REX_ENV, REX_SERVER: "server-1" });
+	await withFakeRex({ block: JSON.stringify({ block_id: child }) }, async (calls) => {
+		assert.equal(await host.childExists(child), true);
+		assert.equal(await host.renameChild(child, "finder"), true);
+		assert.equal(await host.closeChild(child), true);
+		assert.deepEqual(calls(), [
+			`block inspect -s sess-1 -S server-1 ${child} --json`,
+			`block rename -s sess-1 -S server-1 ${child} finder`,
+			`block close -s sess-1 -S server-1 ${child}`,
+		]);
+	});
+
+	await withFakeRex({ block: { stderr: "block not found\n" } }, async () => {
+		assert.equal(await host.childExists(child), false);
+	});
+});
+
 test("Rex readiness needs the block context and a reachable CLI, with no repair", async () => {
 	await withFakeRex({ "--version": "rex 0.1.0-preview.21\n" }, async (calls) => {
 		const readiness = await createPaneHost(REX_ENV).createCapability().probe({ timeoutMs: 5_000 });
