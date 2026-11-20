@@ -10,7 +10,7 @@
  */
 
 import type { TinysubagentConfig } from "../config/config.ts";
-import type { LiveSubPanes } from "../herdr/layout.ts";
+import type { LiveSubPanes } from "../pane-host/index.ts";
 import type { AgentDef, ThinkingLevel } from "../types.ts";
 import type { RunningSubagent } from "./watcher.ts";
 

@@ -3,7 +3,7 @@
  *
  * This module owns the whole spawn recipe: resolve the role, resolve the
  * profile, plan the artifact paths, generate the wrapper script, write it, and
- * ask herdr for a pane. It is deliberately free of any pi extension API so the
+ * ask the pane host for a pane. It is deliberately free of any pi extension API so the
  * recipe can be exercised directly by tests and by the smoke harness.
  *
  * Nothing here waits for a child. Waiting is the watcher's job.
@@ -14,8 +14,13 @@ import { harnessFor } from "./harness/index.ts";
 import { agyBinAvailable } from "./harness/agy.ts";
 import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { currentPaneId, herdrPaneLayout, herdrPaneOpen, herdrPaneRename, herdrPaneResize } from "../herdr/cli.ts";
-import { LiveSubPanes, planPlacement, planResizes, type Placement } from "../herdr/layout.ts";
+import {
+	LiveSubPanes,
+	paneHost,
+	planPlacement,
+	planResizes,
+	type Placement,
+} from "../pane-host/index.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { declaresSpawnTool, resolveToolList } from "../tool-list.ts";
 import { isThinkingLevel, TOOL_NAME, type ThinkingLevel } from "../types.ts";
@@ -150,7 +155,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// One source for both layout reads below: the pane this pi is running in is
 	// the orchestrator, so it is both the birth split target and the reference
 	// rect the 3/5 pass measures against.
-	const orchestratorPaneId = currentPaneId(context.env);
+	const orchestratorPaneId = paneHost.currentPaneId(context.env);
 	const columns = context.columns;
 
 	// Without a tracker this stays the original call: split right off the
@@ -163,11 +168,11 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 	let paneId: string;
 	try {
-		paneId = await herdrPaneOpen({
+		paneId = await paneHost.openChild({
 			cwd: context.cwd,
 			targetPaneId,
 			direction,
-			env: { PI_HERDR_LAUNCH_SCRIPT: paths.scriptFile },
+			command: paths.scriptFile,
 			focus: false,
 		});
 	} catch (error) {
@@ -184,7 +189,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	}
 
 	// Cosmetic: a rename failure must not fail the spawn.
-	void herdrPaneRename(paneId, request.name);
+	void paneHost.renameChild(paneId, request.name);
 
 	return {
 		ok: true,
@@ -210,7 +215,7 @@ async function resolvePlacement(
 	columns: LiveSubPanes,
 	orchestratorPaneId: string,
 ): Promise<Placement> {
-	const layout = await herdrPaneLayout(orchestratorPaneId);
+	const layout = await paneHost.readLayout(orchestratorPaneId);
 	// A failed read must not prune the tracker, so the empty case skips
 	// `liveIn` (which forgets every id the tab does not report) and plans a
 	// birth instead.
@@ -225,10 +230,10 @@ async function applySpawnResizes(
 	paneId: string,
 ): Promise<void> {
 	columns.place(paneId);
-	const layout = await herdrPaneLayout(orchestratorPaneId);
+	const layout = await paneHost.readLayout(orchestratorPaneId);
 	if (layout) {
 		for (const op of planResizes(layout, orchestratorPaneId, columns.liveIn(layout), paneId)) {
-			await herdrPaneResize(op.paneId, op.direction, op.amount);
+			await paneHost.resizeChild(op);
 		}
 	}
 }

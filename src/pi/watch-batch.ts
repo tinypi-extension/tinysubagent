@@ -24,8 +24,7 @@
  * child from being left behind with nobody waiting on it.
  */
 
-import { herdrPaneClose } from "../herdr/cli.ts";
-import type { LiveSubPanes } from "../herdr/layout.ts";
+import { paneHost, type LiveSubPanes } from "../pane-host/index.ts";
 import { relayInterrupt } from "../children/interrupt.ts";
 import { waitForSubagent, type RunningSubagent } from "../children/watcher.ts";
 import type { SubagentResult } from "../present/result.ts";
@@ -82,7 +81,7 @@ export async function watchBatch(
 		for (const controller of controllers) controller.abort("interrupt");
 		for (const paneId of paneIds) {
 			columns.drop(paneId);
-			void herdrPaneClose(paneId);
+			void paneHost.closeChild(paneId);
 		}
 	};
 	signal?.addEventListener("abort", forward, { once: true });
@@ -106,7 +105,7 @@ export async function watchBatch(
 				// is set at spawn time and a close never revisits it.
 				if (outcome.kind === "completed" && outcome.via !== "turn-end") {
 					columns.drop(running.paneId);
-					void herdrPaneClose(running.paneId);
+					void paneHost.closeChild(running.paneId);
 				}
 
 				return {

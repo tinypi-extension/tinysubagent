@@ -1,5 +1,5 @@
 /**
- * tinysubagent — delegate work to subagents running in herdr panes.
+ * tinysubagent — delegate work to subagents running in their own panes.
  *
  * A call blocks: the tool opens one pane per task, waits for the whole batch, and
  * returns every child's report in that one tool result. Nothing is delivered to
@@ -7,12 +7,13 @@
  * message. For a batch, every child's result is carried together, one section
  * each.
  *
- * The tool is only registered when this pi is itself running inside herdr. That
- * is a deliberate choice over registering-and-failing: outside herdr there is no
- * pane to split, so offering the tool would only invite calls that cannot work.
+ * The tool is only registered when this pi is itself running inside a detected
+ * pane host. That is a deliberate choice over registering-and-failing: outside
+ * one there is no pane to split, so offering the tool would only invite calls
+ * that cannot work.
  *
  * Only four things leave the orchestrator's process: the launch script it
- * writes, the `herdr plugin pane open` call that runs it, the poll that
+ * writes, the pane-host command that runs it, the poll that
  * notices when the child is done, and — only when a `systemOneAPIKey` is
  * configured — the SystemOne routing request, which carries each task brief
  * to `systemOneBaseUrl` to choose the child's profile. Everything else is a
@@ -26,10 +27,8 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./src/config/agents.ts";
 import { loadConfig } from "./src/config/config.ts";
-import { isInsideHerdr } from "./src/herdr/cli.ts";
-import { LiveSubPanes } from "./src/herdr/layout.ts";
+import { detectPaneHost, LiveSubPanes, paneHost } from "./src/pane-host/index.ts";
 import { buildParameters } from "./src/present/describe.ts";
-import { createCapabilityCheck } from "./src/pi/capability.ts";
 import { registerLifecycle } from "./src/pi/lifecycle.ts";
 import { offerPluginFix, type PluginFixGuard } from "./src/pi/plugin-fix.ts";
 import { createTool } from "./src/pi/tool.ts";
@@ -37,8 +36,8 @@ import { createSettingsScreen } from "./src/pi/settings-tui.ts";
 import { createRouteFn, type ClassifierRegistry } from "./src/systemone/route.ts";
 
 export default function tinysubagent(pi: ExtensionAPI): void {
-	// Registered above the herdr guard: editing a config file needs no pane, so the
-	// command has to exist in every pi session, not only in herdr ones. The call is
+	// Registered above the pane-host guard: editing a config file needs no pane,
+	// so the command has to exist in every pi session, not only hosted ones. The call is
 	// optional so a host that offers no commands still gets the tool below it.
 	pi.registerCommand?.("subagent-settings", {
 		description: "Edit tinysubagent profiles (enableProfiles + profiles.<name>)",
@@ -53,7 +52,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 		},
 	});
 
-	if (!isInsideHerdr()) return;
+	if (!detectPaneHost()) return;
 
 	const { config, warnings: configWarnings } = loadConfig(process.cwd(), getAgentDir());
 	const parameters = buildParameters(config);
@@ -68,7 +67,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 	const fixOffered: PluginFixGuard = { value: false };
 
 	/** Cached capability probe for this registration. */
-	const capability = createCapabilityCheck();
+	const capability = paneHost.createCapability();
 
 	/**
 	 * The sub panes this registration opened, tracked for the layout planner. One

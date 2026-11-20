@@ -21,7 +21,7 @@
  * Detection is a poll, not a watch. Two `existsSync` calls per second cost
  * nothing next to the process this is supervising, and a poll cannot miss an
  * event the way a watch can during a reconnect or a rename. Liveness of the
- * *pane* is checked far less often, since that costs a herdr subprocess.
+ * *pane* is checked far less often, since that costs a host subprocess.
  *
  * ## The run that never started
  *
@@ -42,12 +42,12 @@
  */
 
 import { readFileSync, rmSync } from "node:fs";
-import { herdrPaneExists } from "../herdr/cli.ts";
+import { paneHost } from "../pane-host/index.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
 import { readFailureNote, readFinalMessage, readSessionEntries } from "./session.ts";
 
 const POLL_INTERVAL_MS = 1_000;
-/** Check pane liveness every N polls — one herdr call per 5s, not per second. */
+/** Check pane liveness every N polls — one host call per 5s, not per second. */
 const PANE_CHECK_EVERY = 5;
 /**
  * How long a child may go without writing a single session entry before the run
@@ -288,7 +288,7 @@ export function waitForSubagent(
 	signal?: AbortSignal,
 	deps: WatcherDeps = {},
 ): Promise<SubagentOutcome> {
-	const paneExists = deps.paneExists ?? ((paneId: string) => herdrPaneExists(paneId));
+	const paneExists = deps.paneExists ?? ((paneId: string) => paneHost.childExists(paneId));
 	const neverStartedMs = deps.neverStartedMs ?? NEVER_STARTED_MS;
 
 	return new Promise((resolve) => {
