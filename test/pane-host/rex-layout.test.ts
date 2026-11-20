@@ -117,6 +117,85 @@ test("Rex layout reads normalized rects from session inspection", async () => {
 	});
 });
 
+test("a failed Rex layout read leaves the child open and the batch reporting", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-rex-layout-fail-"));
+	const cwd = join(dir, "work");
+	mkdirSync(cwd, { recursive: true });
+	const columns = new LiveSubPanes();
+	try {
+		await withFakeRex({
+			split: JSON.stringify({ block_ids: [FIRST] }),
+			session: { stderr: "no such session\n", exit: 1 },
+			block: JSON.stringify({ block_id: FIRST }),
+		}, async (calls) => {
+			activatePaneHost(REX_ENV);
+			try {
+				const spawned = await spawnOne(
+					{ agent: "worker", task: "Do it.", name: "worker" },
+					spawnContext(dir, cwd, columns),
+				);
+				assert.equal(spawned.ok, true);
+				if (!spawned.ok) return;
+				writeFileSync(spawned.running.reportFile, JSON.stringify({ type: "done", result: "Still works." }));
+				const results = await watchBatch([spawned.running], undefined, { watchers: new Set(), columns });
+				await waitForCall(calls, "block close");
+				assert.equal(results[0]?.outcome.kind, "completed");
+				assert.ok(!calls().some((call) => call.startsWith("api call")));
+			} finally {
+				activatePaneHost({});
+			}
+		});
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a failed Rex resize leaves the child open and the batch reporting", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-rex-resize-fail-"));
+	const cwd = join(dir, "work");
+	mkdirSync(cwd, { recursive: true });
+	const columns = new LiveSubPanes();
+	const halfView = view(
+		window("window-1", {
+			rect: [0, 0, 1, 1],
+			split: {
+				split_id: "root",
+				direction: "horizontal",
+				ratio: 0.5,
+				before: block(ORCH, [0, 0, 0.5, 1]),
+				after: block(FIRST, [0.5, 0, 0.5, 1]),
+			},
+		}),
+	);
+	try {
+		await withFakeRex({
+			split: JSON.stringify({ block_ids: [FIRST] }),
+			session: halfView,
+			api: { stderr: "resize rejected\n", exit: 1 },
+			block: JSON.stringify({ block_id: FIRST }),
+		}, async (calls) => {
+			activatePaneHost(REX_ENV);
+			try {
+				const spawned = await spawnOne(
+					{ agent: "worker", task: "Do it.", name: "worker" },
+					spawnContext(dir, cwd, columns),
+				);
+				assert.equal(spawned.ok, true);
+				if (!spawned.ok) return;
+				writeFileSync(spawned.running.reportFile, JSON.stringify({ type: "done", result: "Still works." }));
+				const results = await watchBatch([spawned.running], undefined, { watchers: new Set(), columns });
+				await waitForCall(calls, "block close");
+				assert.equal(results[0]?.outcome.kind, "completed");
+				assert.ok(calls().some((call) => call.startsWith("api call")));
+			} finally {
+				activatePaneHost({});
+			}
+		});
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("a two-child Rex batch births the column, appends below it and returns both reports", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-rex-layout-"));
 	const cwd = join(dir, "work");
