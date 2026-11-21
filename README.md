@@ -1,8 +1,8 @@
 # tinysubagent
 
-Pane-native subagent spawning for [pi](https://pi.dev). Define roles as markdown files and
-delegate to them. Each subagent runs in its own sub pane — a [herdr](https://herdr.dev/) pane in the
-right-hand column or a [Rex](https://www.superlogical.com/rex/docs/automate/cli) block — with its own context window, and hands its report back as this
+Pane-native subagent spawning for [Pi](https://pi.dev). Define roles as markdown files and
+delegate to them. Each subagent runs in its own sub pane — a [Herdr TUI](https://herdr.dev/) pane in the
+right-hand column or a [Rex App](https://www.superlogical.com/rex/docs/automate/cli) block — with its own context window, and hands its report back as this
 call's result.
 
 - **One blocking call:** the tool waits for the whole batch and returns every report in one result. No fire-and-forget, no second batch until it returns.
@@ -16,16 +16,13 @@ split, so it is not offered; when herdr and Rex variables are both present, herd
 
 ## Requirements
 - Pi coding agent.
-- Either a [herdr](https://herdr.dev/) pane (version 0.8.2 or newer) or a [Rex](https://www.superlogical.com/rex/docs/automate/cli) block with
+- Either a [Herdr TUI](https://herdr.dev/) pane (version 0.8.2 or newer) or a [Rex App](https://www.superlogical.com/rex/docs/automate/cli) block with
   `REX_SESSION` and `REX_BLOCK` exported and `rex` reachable on `PATH`.
-- Rex needs no plugin link, no minimum CLI version and no config toggle; its block and session
-  context select the adapter automatically.
 
 ## Install
 
 ```bash
-pi install git:github.com/tinypi-extension/tinysubagent  
-pi update --extensions  
+pi install git:github.com/tinypi-extension/tinysubagent
 ```
 
 Install **without a ref** so updates keep working. Pinned refs are checkout targets; to upgrade,
@@ -37,7 +34,7 @@ The pane entrypoint ships in `herdr-plugin/` (plugin id `tinysubagent-panes`, en
 `subagent`). herdr stores the absolute path and copies nothing. Pi asks before your first prompt.
 Rex does not use this plugin; skip this section when running inside a Rex block.
 
-### Reinstall over an existing install
+### Reinstall over an existing install (herdr only)
 
 herdr stores the **absolute path** of the linked plugin, and the plugin id never changes. Reinstalling
 from a new checkout, a moved repo, or a switch from a local path to `git:...` leaves the old link in
@@ -53,7 +50,7 @@ pi                                       # start pi inside a herdr pane
 herdr plugin list                        # verify: enabled  [local:/path/to/new/herdr-plugin]
 ```
 
-### Verify
+### Verify (herdr only)
 
 `pi list` shows tinysubagent, `herdr plugin list` shows the plugin enabled, and pi restarted inside
 a herdr pane lists a `subagent` tool with your roles. Otherwise see [Troubleshooting](#troubleshooting).
@@ -67,7 +64,7 @@ See [`sample_agent/`](sample_agent/) for examples.
 ---
 name: scout
 description: Fast codebase recon that returns compressed context for a handoff.
-tools: read, grep, glob, codegraph_*
+tools: read, grep, glob, mcp__codegraph__*
 ---
 
 You explore a codebase and report findings for another agent to act on.
@@ -93,15 +90,10 @@ Notes on `tools`:
 
 - `subagent_report` (the child's hand-back tool) is always added, and subtracting it is ignored.
 - Without `tools`, the child inherits the [`defaultTools` floor](#default-tools) when one is set.
-  With neither, it has **no allowlist** and inherits pi's normal tool set. Setting a floor is
-  therefore a behaviour change for every role that declares no `tools`: it stops inheriting
-  everything and starts inheriting exactly the floor.
 - A `-name` entry subtracts, and `-*` drops the floor for that role. See
   [adding to and subtracting from the floor](#adding-to-and-subtracting-from-the-floor).
-- A literal name is kept even if nothing matches, so a renamed tool warns instead of silently
-  narrowing the list. Unmatched wildcards also warn in the call's result.
-- Nested delegation is unsupported. `*` matches `subagent` too, so a role that wants breadth
-  without the spawn tool subtracts it.
+- A literal name is kept even if nothing matches
+- Nested delegation is unsusetsetpported.
 
 ## Default tools
 
@@ -173,10 +165,8 @@ a shared model and thinking level, translated to the harness's supported setting
 ### Using the agy harness
 
 Install and sign in to the `agy` CLI separately. Agy profiles launch interactively in their own
-herdr pane; the model may pause for approval, and you can review or steer it there. Agy has no
-`--tools` flag, so it cannot enforce an allowlist: the `defaultTools` floor and a role's `tools`
-list are both ignored with a warning, and the spawn proceeds. Use a pi profile when a role's tools
-are the point.
+herdr pane; the model may pause for approval, and you can review or steer it there. Agy cannot ennforce an alllowlist: the `defaultTools` floor and a role's `tools`
+list are both ignored.
 
 Each run gets a temporary workspace containing its Stop hook. To let agy load the hook without a
 first-run trust prompt, tinysubagent temporarily adds that workspace to
