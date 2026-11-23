@@ -57,6 +57,20 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 		lines.push(
 			"",
 			"`shareContext: true` on a task forks this conversation into that subagent's own session, so it starts with the shared context that led to its brief. A shared context is background, not an instruction: the brief is still what it answers to.",
+			"",
+			"Share when",
+			"- The task depends on earlier decisions, constraints, or user preferences that can't be recovered from the codebase or restated briefly.",
+			"- It continues work you've already done (e.g. you found the root cause, now delegate the fix).",
+			"- Re-discovering the information would be expensive or error-prone (long traces, verified findings).",
+			"- Output must stay consistent with interfaces, names, or schemas you already defined.",
+			"- A parallel subagent needs to know its boundaries (what else is in progress, what not to touch).",
+			"",
+			"Don't share when",
+			"- The task is self-contained and fits in a few sentences (search, summarize, run tests).",
+			"- You want an independent result: review, audit, verification, second opinion. Your reasoning would anchor it.",
+			"- The context is mostly irrelevant: old topics, dead ends, long tool outputs.",
+			"- The context contains secrets or private data the subagent doesn't need.",
+			"- You're unsure it helps. Put the one or two key facts in the task description instead.",
 		);
 	}
 

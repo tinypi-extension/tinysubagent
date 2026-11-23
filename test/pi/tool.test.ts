@@ -735,6 +735,20 @@ test("pi-level validation still accepts a role name in `profile` with profiles o
 	assert.equal(Check(buildParameters(config), call), true);
 });
 
+test("sharing guidance is advertised only when the knob is offered", () => {
+	const off: TinysubagentConfig = { ...routingConfig(null), canShareContext: false };
+	const on: TinysubagentConfig = { ...off, canShareContext: true };
+
+	const offDescription = buildToolDescription([workerAgent], off);
+	const onDescription = buildToolDescription([workerAgent], on);
+	assert.doesNotMatch(offDescription, /Share when|Don't share when/);
+	assert.match(onDescription, /Share when/);
+	assert.match(onDescription, /Don't share when/);
+	// The two ends of the guidance: continuing earlier work vs. keeping a review independent.
+	assert.match(onDescription, /continues work you've already done/);
+	assert.match(onDescription, /Your reasoning would anchor it/);
+});
+
 test("the prompt stops claiming a subagent cannot see the conversation when sharing is available", () => {
 	const off: TinysubagentConfig = { ...routingConfig(null), canShareContext: false };
 	const on: TinysubagentConfig = { ...off, canShareContext: true };
