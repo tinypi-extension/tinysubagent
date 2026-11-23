@@ -239,7 +239,7 @@ async function withSpawnHerdrStub<T>(
 	} finally {
 		if (saved === undefined) delete process.env.HERDR_BIN_PATH;
 		else process.env.HERDR_BIN_PATH = saved;
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 	}
 }
 

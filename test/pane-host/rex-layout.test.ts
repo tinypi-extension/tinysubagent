@@ -150,7 +150,7 @@ test("a failed Rex layout read leaves the child open and the batch reporting", a
 			}
 		});
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 	}
 });
 
@@ -200,7 +200,7 @@ test("a failed Rex resize leaves the child open and the batch reporting", async 
 			}
 		});
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 	}
 });
 
@@ -301,7 +301,7 @@ test("a two-child Rex batch births the column, appends below it and returns both
 			}
 		});
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 	}
 });
 

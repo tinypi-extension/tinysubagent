@@ -840,9 +840,14 @@ function spawnFixture(): { cwd: string; ctx: Record<string, unknown> } {
 			cwd,
 			model: undefined,
 			thinkingLevel: undefined,
+			// A whole enough `ReadonlySessionManager` that no *config* can make the live
+			// path crash: with `canShareContext` on (a developer's global file may turn it
+			// on) the tool reads the branch for every batch, whether or not a task shares it.
 			sessionManager: {
 				getSessionFile: () => join(cwd, "sessions", "sid.jsonl"),
 				getSessionId: () => "sid",
+				buildContextEntries: () => [],
+				getHeader: () => ({ type: "session", id: "sid", timestamp: "2026-11-23T06:00:00.000Z", cwd, version: 3 }),
 			},
 		},
 	};

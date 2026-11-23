@@ -62,7 +62,7 @@ export async function withFakeRex<T>(
 	} finally {
 		if (savedPath === undefined) delete process.env.PATH;
 		else process.env.PATH = savedPath;
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 	}
 }
 
@@ -76,6 +76,6 @@ export async function withoutRex<T>(run: () => Promise<T>): Promise<T> {
 	} finally {
 		if (savedPath === undefined) delete process.env.PATH;
 		else process.env.PATH = savedPath;
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 	}
 }
