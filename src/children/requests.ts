@@ -8,8 +8,8 @@
  */
 
 import { existsSync } from "node:fs";
-import { basename, isAbsolute, join, resolve as resolvePath } from "node:path";
-import { CONFIG_FILENAME, type TinysubagentConfig } from "../config/config.ts";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { owningConfigFile, type TinysubagentConfig } from "../config/config.ts";
 import type { ChildHarness } from "./harness/types.ts";
 import { hasShareableContext } from "./shared-context.ts";
 import type { SharedContextSource, SpawnRequest, ToolParams } from "./contract.ts";
@@ -78,13 +78,9 @@ export function collectRequests(
 export function refuseUnpermittedShare(config: TinysubagentConfig, request: SpawnRequest): string | null {
 	if (config.canShareContext === true) return null;
 	if (request.shareContext !== true) return null;
-	// The highest-precedence file owns the switch, so it is the one to name — as a
-	// basename, because this string ends up in a tool error, not a log.
-	const source = config.sources[0];
-	const named = source ? basename(source.file) : CONFIG_FILENAME;
 	return (
 		`shareContext cannot be used: sharing this conversation is disabled ` +
-		`("canShareContext" is not true in ${named}).`
+		`("canShareContext" is not true in ${owningConfigFile(config.sources)}).`
 	);
 }
 

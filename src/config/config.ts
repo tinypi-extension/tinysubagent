@@ -68,6 +68,16 @@ export interface ConfigSource {
 	scope: ConfigScope;
 }
 
+/**
+ * The file that owns a top-level switch: the one that states the key at the highest
+ * precedence. Named as a basename, because every caller puts it in a message a
+ * human reads — a tool error or a warning — rather than a log line.
+ */
+export function owningConfigFile(sources: readonly ConfigSource[]): string {
+	const source = sources[0];
+	return source ? path.basename(source.file) : CONFIG_FILENAME;
+}
+
 export interface TinysubagentConfig {
 	enableProfiles: boolean;
 	/**
@@ -667,7 +677,7 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	const systemOne = classifier === null ? resolveSystemOne(read, warnings) : null;
 
 	if (enableProfiles && Object.keys(profiles).length === 0) {
-		const named = sources[0]?.file ?? CONFIG_FILENAME;
+		const named = owningConfigFile(sources);
 		warnings.push(
 			`tinysubagent: enableProfiles is true but no usable profiles were defined in ${named}; ` +
 				`only "${CURRENT_PROFILE}" is available.`,
