@@ -9,7 +9,7 @@ The pi session that calls the subagent tool, owns the briefs, and receives the r
 _Avoid_: parent, caller, main agent
 
 **Subagent**:
-A separately launched agent process with its own context window and its own pane, started by one spawn.
+A separately launched agent process with its own context window and its own pane, started by one spawn. The window starts empty unless the brief is bought a shared context.
 _Avoid_: child agent, worker, worker agent
 
 **Child**:
@@ -24,12 +24,16 @@ _Avoid_: agent, agent type, persona
 The instruction the orchestrator writes for one spawn: what that child is to accomplish.
 _Avoid_: task, prompt, message
 
+**Shared context**:
+The orchestrator's own branch, forked into a child's session file so the child inherits the conversation that led to the brief. Permitted by `canShareContext`, requested per spawn with `shareContext`, off by default, and one-way: what comes back is still only the report.
+_Avoid_: inherited context, memory, history (a session record is the log, not what is shared)
+
 **Label**:
 The short name attached to a spawn so its pane, acknowledgment, and result can be told apart from its siblings.
 _Avoid_: id, title, name (a role has a name; a spawn has a label)
 
 **Spawn**:
-One act of opening a pane and starting a child with a role, brief, profile, and label.
+One act of opening a pane and starting a child with a role, brief, profile, and label — plus, optionally, a shared context.
 _Avoid_: launch, run, invocation
 
 **Batch**:
