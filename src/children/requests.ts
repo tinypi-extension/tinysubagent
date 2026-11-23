@@ -11,6 +11,7 @@ import { existsSync } from "node:fs";
 import { basename, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { CONFIG_FILENAME, type TinysubagentConfig } from "../config/config.ts";
 import type { ChildHarness } from "./harness/types.ts";
+import { hasShareableContext } from "./shared-context.ts";
 import type { SharedContextSource, SpawnRequest, ToolParams } from "./contract.ts";
 
 export const MAX_PARALLEL_TASKS = 4;
@@ -71,15 +72,12 @@ export function collectRequests(
  * Refuse a share the config never permitted, naming the key and the file that
  * would set it. The schema leaves `shareContext` out of the task object while the
  * gate is off, but a benign extra key must never fail a whole batch at pi's
- * validation layer — so an impossible share is refused here, before any pane
- * opens, rather than by the schema.
+ * validation layer — so an impossible share is refused here, on its own request,
+ * before any pane opens, rather than by the schema.
  */
-export function refuseUnpermittedShare(
-	config: TinysubagentConfig,
-	requests: readonly SpawnRequest[],
-): string | null {
+export function refuseUnpermittedShare(config: TinysubagentConfig, request: SpawnRequest): string | null {
 	if (config.canShareContext === true) return null;
-	if (!requests.some((request) => request.shareContext === true)) return null;
+	if (request.shareContext !== true) return null;
 	// The highest-precedence file owns the switch, so it is the one to name — as a
 	// basename, because this string ends up in a tool error, not a log.
 	const source = config.sources[0];
@@ -92,10 +90,11 @@ export function refuseUnpermittedShare(
 
 /**
  * Refuse a share the child cannot be given, naming the cause a human can act on:
- * a harness that keeps no session file has nothing to fork into, and an
- * orchestrator started without a session has nothing to fork from. Either way the
- * brief was written as if the child knows this conversation, so launching a clean
- * one would be a different spawn than the one asked for.
+ * a harness that keeps no session file has nothing to fork into, an orchestrator
+ * started without a session has nothing to fork from, and a branch with no user
+ * entry has nothing to fork at all. Either way the brief was written as if the
+ * child knows this conversation, so launching a clean one would be a different
+ * spawn than the one asked for.
  *
  * Refused per request, not per batch: the siblings are still exactly what the
  * caller asked for. Read through `harness.writesSession` and the presence of the
@@ -124,6 +123,13 @@ export function refuseUnhonourableShare(input: {
 			`shareContext cannot be honoured for "${request.name}": this session has no session file ` +
 			`to fork (pi was started without one), so ${wouldStartEmpty}. ` +
 			"Omit shareContext for this request, or restart pi with a session."
+		);
+	}
+	if (!hasShareableContext(sharedContext)) {
+		return (
+			`shareContext cannot be honoured for "${request.name}": this conversation has no user ` +
+			`message to fork yet, so ${wouldStartEmpty}. ` +
+			"Omit shareContext for this request, or ask again once the conversation has one."
 		);
 	}
 	return null;

@@ -25,7 +25,7 @@ half-finished batch it may read as its own work.
 **Status:** ready-for-agent
 
 - [ ] `canShareContext` is read from the highest-precedence config source like `enableProfiles`, default `false`, and documented in the README config table
-- [ ] `shareContext` appears on the task object in the tool schema only when the gate is on, and typebox rejects a call that passes it when the gate is off
+- [ ] `shareContext` appears on the task object in the tool schema only when the gate is on; the task object stays open, so a call that passes it anyway is refused by the tool, by name
 - [ ] `shareContext: true` on a task produces a child session file whose header has a fresh `id`, the request's `cwd`, and `parentSession` pointing at the orchestrator's session file
 - [ ] That file contains the orchestrator's branch up to and including its last `user` entry, and every entry's `parentId` chains under the new header `id`
 - [ ] No `system` entry survives the copy, and the tail is not the assistant message that called `subagent`

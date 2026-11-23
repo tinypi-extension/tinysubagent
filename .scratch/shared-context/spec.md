@@ -56,13 +56,21 @@ overwrite the allowlist the role declared.
 
 ## Refusals
 
-Both are per request, both are errors on that request rather than a silently clean child:
+Every refusal is per request: an error on that request rather than a failed batch, and never a silently
+clean child. A refused request opens no pane and writes no launch file; its siblings in the batch spawn
+exactly as they would have.
 
+The reasons:
+
+- `shareContext: true` when `canShareContext` is not true. The schema omits the key while the gate is
+off, but the task object is open, so the tool refuses a call that names it anyway — by name, quoting
+the gate and the file that would set it.
 - `shareContext: true` on a request whose profile resolves to the `agy` harness — there is no session
   file to fork from agy.
 - `shareContext: true` when the orchestrator runs `--no-session`, so there is no file to fork.
-
-A request that is refused never opens a pane; its siblings in the batch are unaffected.
+- `shareContext: true` when the branch has no user entry yet, so the fork would be a header and nothing
+  else: there is no conversation to share, and spawning clean anyway would answer a brief written as if
+  the child had read one.
 
 ## What it costs, and what is said about it
 
@@ -80,8 +88,8 @@ would break the "one blocking call, N reports" contract.
   `canShareContext` is true; `buildToolDescription` stops claiming "a subagent cannot see this
   conversation" when the capability is on, and `PROMPT_GUIDELINES` gains the sentence that says what a
   shared context does and does not replace (the brief is still the brief).
-- `src/children/requests.ts` / `src/types.ts`: carry the flag on `SpawnRequest`, and refuse it in the
-  validation loop when the profile is agy or the orchestrator has no session file.
+- `src/children/requests.ts` / `src/types.ts`: carry the flag on `SpawnRequest`, and refuse it per
+  request — the gate off, the profile agy, no session file to fork, or nothing forkable on the branch.
 - New module (e.g. `src/children/shared-context.ts`): read the branch from the `ExtensionContext`,
   render the fork JSONL, return `{ entries, tokens }` for the ack. Pure enough to test without panes.
 - `src/children/spawn.ts` + `src/children/launch.ts`: write the fork file to `paths.childSessionFile`

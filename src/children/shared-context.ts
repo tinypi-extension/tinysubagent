@@ -53,9 +53,18 @@ export interface BuildSharedContextForkInput {
 }
 
 /**
+ * Whether a fork of this conversation would carry anything at all: a branch that
+ * reaches a user entry exists, one that does not is only the orchestrator's prompt
+ * and has nothing a child could be handed.
+ */
+export function hasShareableContext(source: SharedContextSource): boolean {
+	return shareableEntries(source.branch).length > 0;
+}
+
+/**
  * Render the fork, or null when there is nothing worth forking (a branch with no
- * user entry yet). The caller then launches a clean child, which is what every
- * spawn was before sharing existed.
+ * user entry yet). A caller that asked for a share must refuse it by name rather
+ * than launch the clean child this would otherwise become.
  */
 export function buildSharedContextFork(input: BuildSharedContextForkInput): SharedContextFork | null {
 	const copied = shareableEntries(input.source.branch);
