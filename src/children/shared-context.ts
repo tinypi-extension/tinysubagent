@@ -17,7 +17,7 @@
 import { basename } from "node:path";
 import type { SessionEntry, SessionHeader, SessionManager } from "@earendil-works/pi-coding-agent";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import type { SharedContextSource } from "./contract.ts";
+import type { ShareCost, SharedContextSource } from "./contract.ts";
 
 /** The slice of the (read-only) session manager a share needs. */
 export type SharedContextReader = Pick<SessionManager, "getSessionFile" | "buildContextEntries" | "getHeader">;
@@ -38,13 +38,9 @@ export function readSharedContext(sessionManager: SharedContextReader): SharedCo
 	};
 }
 
-export interface SharedContextFork {
+export interface SharedContextFork extends ShareCost {
 	/** The fork, header line first — exactly what goes into the child's file. */
 	jsonl: string;
-	/** Entries copied: the count a share is acknowledged with. */
-	entries: number;
-	/** Rough token cost of those entries, for that same acknowledgment. */
-	tokens: number;
 }
 
 export interface BuildSharedContextForkInput {

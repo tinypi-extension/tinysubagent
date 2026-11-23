@@ -8,6 +8,7 @@
  */
 
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { ShareCost } from "../children/contract.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../types.ts";
 import { ackParts, type SpawnAck } from "./ack.ts";
@@ -19,6 +20,8 @@ export interface SpawnedEntry {
 	name: string;
 	paneId: string;
 	profile: ResolvedProfile | null;
+	/** Present only for a child given the orchestrator's context. */
+	sharedContext?: ShareCost;
 	warnings: string[];
 }
 
@@ -64,5 +67,8 @@ export function renderAck(ack: SpawnAck, theme: Theme): string {
 		const color = isThinkingLevel(parts.thinking) ? THINKING_COLORS[parts.thinking] : "muted";
 		line += ` ${theme.fg("muted", "(")}${theme.fg(color, parts.thinking)}${theme.fg("muted", ")")}`;
 	}
+	// The share's size is a fact about cost, not a fact about the role: dim, so a
+	// long row still reads as "who, where, how expensive".
+	if (parts.share !== null) line += ` ${theme.fg("dim", parts.share)}`;
 	return line;
 }

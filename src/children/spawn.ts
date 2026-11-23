@@ -226,6 +226,9 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			// watcher's never-started grace counts from there. `+ 1` is the header
 			// line; a spawn without a fork starts with no file at all.
 			sessionEntriesAtLaunch: fork ? fork.entries + 1 : 0,
+			// The same body count the acknowledgment shows, so what a share cost is
+			// read off the file the child was actually handed.
+			sharedContext: fork ? { entries: fork.entries, tokens: fork.tokens } : undefined,
 			exitCodeFile: paths.exitCodeFile,
 			reportFile: paths.reportFile,
 			startedAt: Date.now(),

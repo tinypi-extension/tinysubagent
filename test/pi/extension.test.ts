@@ -473,20 +473,51 @@ test("the acknowledgment colours each part of the line, in the plain line's orde
 					name: "scout-mcp-capability-check",
 					paneId: "w1:p1B",
 					profile: { name: "current", model: "oc-openai/deepseek-flash", thinking: "medium" },
+					sharedContext: { entries: 42, tokens: 18_400 },
 					warnings: [],
 				},
 			],
 			failed: [],
 		},
-		"Scout (scout-mcp-capability-check) [current] oc-openai/deepseek-flash (medium)",
+		"Scout (scout-mcp-capability-check) [current] oc-openai/deepseek-flash (medium) shared 42 entries · ~18k tokens",
 	);
 
 	assert.equal(
 		line,
 		"<toolTitle>*Scout*</toolTitle> <muted>(</muted><accent>scout-mcp-capability-check</accent><muted>)</muted>" +
 			" <success>[current]</success> <dim>oc-openai/deepseek-flash</dim>" +
-			" <muted>(</muted><thinkingMedium>medium</thinkingMedium><muted>)</muted>",
+			" <muted>(</muted><thinkingMedium>medium</thinkingMedium><muted>)</muted>" +
+			" <dim>shared 42 entries · ~18k tokens</dim>",
 	);
+});
+
+test("a finished child's report states the share's size in its meta line", () => {
+	const lines = renderAck(
+		{
+			status: "finished",
+			results: [
+				{
+					name: "finder",
+					agent: "worker",
+					profile: null,
+					paneId: "w1:p2",
+					sessionFile: "/sessions/finder.jsonl",
+					task: "a job with the orchestrator's history",
+					elapsedMs: 4_000,
+					elapsed: "4s",
+					status: "completed",
+					outcome: "completed",
+					via: "report",
+					summary: "DONE",
+					sharedContext: { entries: 42, tokens: 18_400 },
+				},
+			],
+		},
+		"1 subagent finished",
+	);
+	const plain = lines.join("\n").replace(/<\/?[a-zA-Z]+>/g, "");
+
+	assert.match(plain, /shared 42 entries · ~18k tokens/, `the share's size was not drawn: ${plain}`);
 });
 
 test("a launch error is shown as the error it is, not as a spawn", () => {

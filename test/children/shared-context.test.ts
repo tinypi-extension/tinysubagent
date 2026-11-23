@@ -123,3 +123,19 @@ test("a branch with no user entry has nothing to fork", () => {
 		null,
 	);
 });
+
+test("the figures charged for a share are the body it wrote — not the header, not the prompt", () => {
+	const fork = buildSharedContextFork({ source: source(branch()), childSessionFile: CHILD_FILE, cwd: "/work" });
+	assert.ok(fork, "no fork was rendered");
+	const body = fork.jsonl
+		.trimEnd()
+		.split("\n")
+		.slice(1)
+		.map((line) => JSON.parse(line) as SessionEntry);
+
+	// The header is the child's own session record, and the orchestrator's prompt is
+	// never copied, so neither may be charged to the share a human is shown.
+	assert.equal(fork.entries, body.length);
+	assert.equal(fork.entries, 3);
+	assert.equal(fork.tokens, Math.ceil(JSON.stringify(body).length / 4));
+});
