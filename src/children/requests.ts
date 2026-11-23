@@ -10,7 +10,8 @@
 import { existsSync } from "node:fs";
 import { basename, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { CONFIG_FILENAME, type TinysubagentConfig } from "../config/config.ts";
-import type { SpawnRequest, ToolParams } from "./contract.ts";
+import type { ChildHarness } from "./harness/types.ts";
+import type { SharedContextSource, SpawnRequest, ToolParams } from "./contract.ts";
 
 export const MAX_PARALLEL_TASKS = 4;
 
@@ -87,6 +88,45 @@ export function refuseUnpermittedShare(
 		`shareContext cannot be used: sharing this conversation is disabled ` +
 		`("canShareContext" is not true in ${named}).`
 	);
+}
+
+/**
+ * Refuse a share the child cannot be given, naming the cause a human can act on:
+ * a harness that keeps no session file has nothing to fork into, and an
+ * orchestrator started without a session has nothing to fork from. Either way the
+ * brief was written as if the child knows this conversation, so launching a clean
+ * one would be a different spawn than the one asked for.
+ *
+ * Refused per request, not per batch: the siblings are still exactly what the
+ * caller asked for. Read through `harness.writesSession` and the presence of the
+ * context itself, so no harness name is hardcoded here.
+ */
+export function refuseUnhonourableShare(input: {
+	request: SpawnRequest;
+	/** The harness this request's profile resolves to. */
+	harness: Pick<ChildHarness, "id" | "writesSession">;
+	/** The orchestrator's conversation, or null when there is no file to fork. */
+	sharedContext: SharedContextSource | null | undefined;
+}): string | null {
+	const { request, harness, sharedContext } = input;
+	if (request.shareContext !== true) return null;
+	const wouldStartEmpty =
+		"the subagent would start with an empty context instead of this conversation";
+	if (!harness.writesSession) {
+		return (
+			`shareContext cannot be honoured for "${request.name}": the ${harness.id} harness keeps no ` +
+			`session file to fork, so ${wouldStartEmpty}. ` +
+			"Omit shareContext for this request, or run it on a pi profile."
+		);
+	}
+	if (!sharedContext) {
+		return (
+			`shareContext cannot be honoured for "${request.name}": this session has no session file ` +
+			`to fork (pi was started without one), so ${wouldStartEmpty}. ` +
+			"Omit shareContext for this request, or restart pi with a session."
+		);
+	}
+	return null;
 }
 
 /** A project-local `.pi/agent` shadows the user's agent dir for the child. */

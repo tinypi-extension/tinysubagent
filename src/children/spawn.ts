@@ -150,10 +150,12 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 	// The shared context: a fork of the orchestrator's branch, written where the
 	// child's own `--session` already points, before the pane opens. Argv needs no
-	// change for it. Two things make a request unavailable rather than a failure —
+	// change for it. Two things make a request unshareable instead of a failure —
 	// a harness with no session file of its own (agy would never read it) and a
-	// session with no file to fork. Both launch a clean child for now; refusing
-	// them by name is a separate ticket.
+	// session with no file to fork. The tool refuses both by name, on their own row
+	// and before any launch file is written; the guard here keeps this recipe
+	// honest for a direct caller (tests, smoke runs), which then launches a clean
+	// child rather than a fork nobody would read.
 	const fork = request.shareContext && harness.writesSession && context.sharedContext
 		? buildSharedContextFork({
 			source: context.sharedContext,
