@@ -13,12 +13,15 @@ import type { TinysubagentConfig } from "../config/config.ts";
 import type { LiveSubPanes } from "../pane-host/index.ts";
 import type { AgentDef, ThinkingLevel } from "../types.ts";
 import type { RunningSubagent } from "./watcher.ts";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
 export interface TaskInput {
 	agent: string;
 	task: string;
 	name?: string;
 	profile?: string;
+	/** Fork this conversation into the child. Offered only when `canShareContext`. */
+	shareContext?: boolean;
 }
 
 /** Shape of the tool's arguments after schema validation. */
@@ -32,6 +35,21 @@ export interface SpawnRequest {
 	task: string;
 	name: string;
 	profile?: string;
+	/** Set only when the task asked for the orchestrator's context. */
+	shareContext?: boolean;
+}
+
+/**
+ * The orchestrator's own branch, as a spawn that asked for it needs it. Absent
+ * from a `SpawnContext` when this session has no file to fork.
+ */
+export interface SharedContextSource {
+	/** The orchestrator's session file: the fork's `parentSession`. */
+	sessionFile: string;
+	/** The active branch, oldest first, from `buildContextEntries()`. */
+	branch: readonly SessionEntry[];
+	/** Session format version, copied into the fork's header. */
+	version: number;
 }
 
 export interface SpawnContext {
@@ -53,6 +71,12 @@ export interface SpawnContext {
 	 * the original behaviour: every child splits right off the orchestrator pane.
 	 */
 	columns?: LiveSubPanes;
+	/**
+	 * The orchestrator's conversation, when a share is possible at all. Omitted
+	 * when `canShareContext` is off or the session has no file (`--no-session`), so
+	 * a request carrying the flag for any reason still launches a clean child.
+	 */
+	sharedContext?: SharedContextSource | null;
 	/**
 	 * Warning keys this pi session has already reported. One set per extension
 	 * registration, handed to every spawn, so registry-dependent warnings about

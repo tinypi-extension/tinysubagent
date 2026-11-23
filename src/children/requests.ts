@@ -53,6 +53,9 @@ export function collectRequests(
 			task,
 			name: uniqueName(item.name?.trim() || agent, used),
 			profile: item.profile,
+			// Only when asked: a request that did not ask for a share must stay the
+			// object it always was, so nothing downstream can treat it differently.
+			...(item.shareContext === true ? { shareContext: true } : {}),
 		});
 	}
 	return { ok: true, requests };

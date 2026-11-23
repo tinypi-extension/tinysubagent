@@ -9,8 +9,10 @@ import type { PaneLayout } from "../../src/pane-host/types.ts";
 import { LiveSubPanes, planResizes } from "../../src/herdr/layout.ts";
 import { MAX_PARALLEL_TASKS, collectRequests, resolveCwd, uniqueName } from "../../src/children/requests.ts";
 import { spawnOne } from "../../src/children/spawn.ts";
+import { childSessionDirFor } from "../../src/children/launch-paths.ts";
 import { piHarness } from "../../src/children/harness/index.ts";
-import type { SpawnContext, ToolParams } from "../../src/children/contract.ts";
+import type { SharedContextSource, SpawnContext, ToolParams } from "../../src/children/contract.ts";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { REPORT_TOOL_NAME, TOOL_NAME, type AgentDef } from "../../src/types.ts";
 
 test("one task in the tasks array becomes one request", () => {
@@ -954,6 +956,114 @@ test("two spawns in one session report the floor once and still report each role
 		assert.deepEqual(result.second.ok ? result.second.warnings : result.second, [
 			'agent "typo": unknown tool(s) nope_* — the child may be missing what it needs.',
 		]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// A shared context: a fork written where the child will open it
+// ────────────────────────────────────────────────────────────────────────────
+
+/** The branch an orchestrator holds at call time: prompt, turns, then the call. */
+function orchestratorBranch(): SessionEntry[] {
+	const at = "2026-11-23T06:00:00.000Z";
+	return [
+		{ type: "message", id: "s1", parentId: null, timestamp: at, message: { role: "system", content: "" } as never },
+		{ type: "message", id: "u1", parentId: "s1", timestamp: at, message: { role: "user", content: "ship it" } as never },
+		{ type: "message", id: "a1", parentId: "u1", timestamp: at, message: { role: "assistant", content: "planning" } as never },
+		{ type: "message", id: "u2", parentId: "a1", timestamp: at, message: { role: "user", content: "delegate this" } as never },
+		{
+			type: "message", id: "a2", parentId: "u2", timestamp: at,
+			message: { role: "assistant", content: [{ type: "toolCall", id: "c1", name: TOOL_NAME, arguments: {} }] } as never,
+		},
+	];
+}
+
+/**
+ * Spawn one task against a scratch directory whose pane opens successfully, and
+ * hand back the child session files that exist afterwards. The stub is what makes
+ * this reachable: a failed open would prove less about ordering.
+ */
+async function spawnForShare(
+	request: { shareContext?: boolean; profile?: string },
+	sharedContext: SharedContextSource,
+	overrides: Partial<SpawnContext> = {},
+): Promise<{ result: Awaited<ReturnType<typeof spawnOne>>; files: string[]; dir: string }> {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-share-"));
+	const { result } = await withHerdrStubScript([{ payload: openPayload }], () =>
+		spawnOne(
+			{ agent: "worker", task: "x", name: "worker", ...request },
+			{
+				...context([worker]),
+				cwd: dir,
+				agentDir: dir,
+				sessionDir: dir,
+				env: { HERDR_PANE_ID: ORCH },
+				...overrides,
+				sharedContext,
+			},
+		),
+	);
+	await new Promise((resolve) => setTimeout(resolve, 150));
+	const childDir = childSessionDirFor(dir, dir);
+	return { result, files: existsSync(childDir) ? readdirSync(childDir).map((file) => join(childDir, file)) : [], dir };
+}
+
+test("a shared spawn writes the fork where the child's own --session opens it", async () => {
+	const source: SharedContextSource = { sessionFile: "/agent/orchestrator.jsonl", branch: orchestratorBranch(), version: 3 };
+	const { result, files, dir } = await spawnForShare({ shareContext: true }, source);
+	try {
+		assert.equal(result.ok, true);
+		assert.equal(files.length, 1);
+		// The fork is only useful if it is the file the child loads, so the two must
+		// agree rather than merely both exist.
+		assert.equal(result.ok && result.running.sessionFile, files[0]);
+
+		const [headerLine, ...entryLines] = readFileSync(files[0] ?? "", "utf8").trimEnd().split("\n");
+		const header = JSON.parse(headerLine ?? "") as { id: string; cwd: string; parentSession: string };
+		assert.equal(header.parentSession, source.sessionFile);
+		assert.equal(header.cwd, dir);
+		assert.equal(header.id, (files[0] ?? "").split("/").pop()?.replace(/\.jsonl$/, "").split("_").slice(1).join("_"));
+
+		const entries = entryLines.map((line) => JSON.parse(line) as { message?: { role: string } });
+		assert.equal(entries.at(-1)?.message?.role, "user");
+		assert.equal(entries.some((entry) => entry.message?.role === "system"), false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a spawn without the flag writes no fork at all", async () => {
+	// Today's launch: the child creates its own session, and nothing else appears
+	// in the directory the child's `--session` names.
+	const source: SharedContextSource = { sessionFile: "/agent/orchestrator.jsonl", branch: orchestratorBranch(), version: 3 };
+	const { result, files, dir } = await spawnForShare({}, source);
+	try {
+		assert.equal(result.ok, true);
+		assert.deepEqual(files, []);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an agy child is never given a fork file it would never read", async () => {
+	// agy has no session file of its own, so a fork there would be pure litter —
+	// and worse, a lie about what the child was handed.
+	const base = context([worker]);
+	const source: SharedContextSource = { sessionFile: "/agent/orchestrator.jsonl", branch: orchestratorBranch(), version: 3 };
+	const { result, files, dir } = await spawnForShare({ shareContext: true, profile: "gemini" }, source, {
+		config: {
+			...base.config,
+			enableProfiles: true,
+			canShareContext: true,
+			profiles: { gemini: { harness: "agy", model: "gpt-oss-120b" } },
+		},
+		env: { TINYSUBAGENT_AGY_BIN: process.execPath },
+	});
+	try {
+		assert.equal(result.ok, true);
+		assert.deepEqual(files, []);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

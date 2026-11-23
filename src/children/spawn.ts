@@ -10,6 +10,7 @@
  */
 
 import { buildLaunchPaths, buildLaunchScript, buildTaskMarkdown, resolveLaunchPrefix, runId, writeLaunchFiles, writeReportFile } from "./launch.ts";
+import { buildSharedContextFork } from "./shared-context.ts";
 import { harnessFor } from "./harness/index.ts";
 import { agyBinAvailable } from "./harness/agy.ts";
 import { childExtensionPath } from "../paths.ts";
@@ -147,9 +148,25 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		harness: profile.harness,
 	});
 
+	// The shared context: a fork of the orchestrator's branch, written where the
+	// child's own `--session` already points, before the pane opens. Argv needs no
+	// change for it. Two things make a request unavailable rather than a failure —
+	// a harness with no session file of its own (agy would never read it) and a
+	// session with no file to fork. Both launch a clean child for now; refusing
+	// them by name is a separate ticket.
+	const fork = request.shareContext && harness.writesSession && context.sharedContext
+		? buildSharedContextFork({
+			source: context.sharedContext,
+			childSessionFile: paths.childSessionFile,
+			// The header's cwd is the directory the child runs in, not the orchestrator's.
+			cwd: context.cwd,
+		})
+		: null;
+
 	writeLaunchFiles([
 		{ path: paths.taskFile, content: buildTaskMarkdown({ body: agent.body, task: request.task, harness: profile.harness }) },
 		{ path: paths.scriptFile, content: script },
+		...(fork ? [{ path: paths.childSessionFile, content: fork.jsonl }] : []),
 	]);
 
 	// One source for both layout reads below: the pane this pi is running in is
