@@ -28,6 +28,9 @@ what a share costs, and can choose not to share.
 Consequences: a shared child's cost scales with the orchestrator's history, and a long branch is copied
 compacted (the active context is what is shared, not the raw log). The `agy` harness has no session
 file, so `shareContext` is refused there rather than silently spawning a clean child; the same refusal
-applies when the orchestrator runs `--no-session`. Sharing is one-way: the report is still the only
-thing that comes back, because a child pushing context inward would end the "one blocking call, N
-reports" contract the rest of the tool is built on.
+applies when the orchestrator runs `--no-session`. The `canShareContext` gate is enforced the same way
+as those refusals, not by schema validation: the key is left out of the offered schema, and a call that
+still names it is refused by the tool, naming the gate — the task object stays open, because pi checks
+every call against the schema and a benign extra key must never kill a batch. Sharing is one-way: the
+report is still the only thing that comes back, because a child pushing context inward would end the
+"one blocking call, N reports" contract the rest of the tool is built on.

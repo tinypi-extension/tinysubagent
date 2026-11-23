@@ -35,11 +35,12 @@ import {
 	type SpawnedEntry,
 } from "../present/ack-render.ts";
 import { buildResultDetails, buildResultText, emptySummaryText, oneLine } from "../present/result.ts";
-import { PROMPT_GUIDELINES, buildToolDescription } from "../present/describe.ts";
+import { buildPromptGuidelines, buildToolDescription } from "../present/describe.ts";
+import { readSharedContext } from "../children/shared-context.ts";
 import { discoverAgents } from "../config/agents.ts";
 import { type TinysubagentConfig } from "../config/config.ts";
 import { resolveProfile } from "../config/profiles.ts";
-import { collectRequests, resolveCwd, resolveProjectAgentDir } from "../children/requests.ts";
+import { collectRequests, refuseUnpermittedShare, resolveCwd, resolveProjectAgentDir } from "../children/requests.ts";
 import { errorMessage } from "../children/contract.ts";
 import { parentModelSpec, parentThinking, spawnOne } from "../children/spawn.ts";
 import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.ts";
@@ -148,7 +149,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 		label: "Subagent",
 		description: buildToolDescription(advertisedAgents, config),
 		promptSnippet: "Delegate a task to a subagent running in its own herdr pane",
-		promptGuidelines: PROMPT_GUIDELINES,
+		promptGuidelines: buildPromptGuidelines(config),
 		parameters,
 
 		async execute(_toolCallId, rawParams, signal, _onUpdate, ctx: ExtensionContext) {
@@ -169,6 +170,12 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 
 			const mode = collectRequests(params);
 			if (!mode.ok) return failure(mode.error);
+
+			// The schema omits `shareContext` while the gate is off, but the task object
+			// stays open so a stray key cannot fail the batch at pi's validation layer.
+			// The share itself is refused here instead, by name and before any pane opens.
+			const shareProblem = refuseUnpermittedShare(config, mode.requests);
+			if (shareProblem) return failure(shareProblem);
 
 			// Names identify subagents in results; they do not reserve a name against
 			// another request, either in this batch or a concurrent call.
@@ -242,6 +249,9 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					parentThinking: parentThinking(ctx),
 					columns,
 					reportedWarnings: deps.reportedWarnings,
+					// Read once for the batch, and only when the capability is on: a share the
+					// config never permitted must not reach a task even if the flag did.
+					sharedContext: config.canShareContext ? readSharedContext(ctx.sessionManager) : null,
 				};
 			} catch (error) {
 				throw error;

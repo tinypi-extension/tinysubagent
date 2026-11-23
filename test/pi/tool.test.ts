@@ -16,10 +16,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { Check } from "typebox/value";
 import { type TinysubagentConfig } from "../../src/config/config.ts";
 import { LiveSubPanes } from "../../src/herdr/layout.ts";
-import { buildParameters, buildToolDescription } from "../../src/present/describe.ts";
+import { buildParameters, buildPromptGuidelines, buildToolDescription } from "../../src/present/describe.ts";
 import { createTool } from "../../src/pi/tool.ts";
 import { createRouteFn, type RouteFn, type RouteInput } from "../../src/systemone/route.ts";
 import type { AgentDef } from "../../src/types.ts";
@@ -75,7 +76,7 @@ const workerAgent: AgentDef = {
 function harness(
 	config: TinysubagentConfig,
 	route: (ctx: ExtensionContext) => RouteFn,
-	options: { columns?: LiveSubPanes } = {},
+	options: { columns?: LiveSubPanes; branch?: SessionEntry[] } = {},
 ) {
 	const watchers = new Set<AbortController>();
 	const tool = createTool({
@@ -110,6 +111,8 @@ function harness(
 		sessionManager: {
 			getSessionFile: () => join(cwd, "sessions", "sid.jsonl"),
 			getSessionId: () => "sid",
+			buildContextEntries: () => options.branch ?? [],
+			getHeader: () => ({ type: "session", id: "sid", timestamp: "2026-11-23T06:00:00.000Z", cwd, version: 3 }),
 		},
 	};
 
@@ -698,6 +701,51 @@ test("only classifierModel set keeps the profile list and parameter", () => {
 	assert.match(buildToolDescription([workerAgent], routed), /Profiles:/);
 	assert.match(buildToolDescription([workerAgent], routed), /choose automatically/);
 	assert.ok(JSON.stringify(buildParameters(routed)).includes('"profile"'));
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// The sharing gate: a knob the model is never offered when it is off
+// ────────────────────────────────────────────────────────────────────────────
+
+/** The task object's property names, as the model is offered them. */
+function taskProperties(config: TinysubagentConfig): string[] {
+	const schema = buildParameters(config) as unknown as {
+		properties: { tasks: { items: { properties: Record<string, unknown> } } };
+	};
+	return Object.keys(schema.properties.tasks.items.properties);
+}
+
+test("`shareContext` is on the task object only when the gate is on", () => {
+	const off: TinysubagentConfig = { ...routingConfig(null), canShareContext: false };
+	const on: TinysubagentConfig = { ...off, canShareContext: true };
+
+	assert.deepEqual(taskProperties(off), ["agent", "task", "name", "profile"]);
+	assert.ok(taskProperties(on).includes("shareContext"));
+});
+
+test("pi-level validation still accepts a role name in `profile` with profiles off", () => {
+	// pi validates every call against the schema before `execute` runs, so a closed
+	// task object turned a benign extra key into a dead batch. The task object stays
+	// open; a key the gate does not permit is refused by the tool body instead.
+	const config: TinysubagentConfig = { ...routingConfig(null), enableProfiles: false, canShareContext: false };
+	const call = { tasks: [{ agent: "worker", task: "x", profile: "worker" }] };
+
+	assert.equal(Check(buildParameters(config), call), true);
+});
+
+test("the prompt stops claiming a subagent cannot see the conversation when sharing is available", () => {
+	const off: TinysubagentConfig = { ...routingConfig(null), canShareContext: false };
+	const on: TinysubagentConfig = { ...off, canShareContext: true };
+
+	assert.match(buildToolDescription([workerAgent], off), /isolated context window/);
+	assert.match(buildPromptGuidelines(off).join("\n"), /cannot see this conversation/);
+
+	assert.doesNotMatch(buildToolDescription([workerAgent], on), /isolated context window/);
+	assert.doesNotMatch(buildPromptGuidelines(on).join("\n"), /cannot see this conversation/);
+	// The brief is still what the child answers to: sharing is background, not an
+	// instruction, and the description names the knob the model may now set.
+	assert.match(buildToolDescription([workerAgent], on), /`shareContext: true`/);
+	assert.match(buildPromptGuidelines(on).join("\n"), /brief must still stand on its own/);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1540,5 +1588,83 @@ test("an abort mid-spawn leaves the remaining requests unlaunched and their labe
 		h.stop();
 		h.cleanup();
 		rmSync(gateDir, { recursive: true, force: true });
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// A share reaches the child as a fork of this conversation, or not at all
+// ────────────────────────────────────────────────────────────────────────────
+
+/** The child session files this batch left behind, under the project agent dir. */
+function childSessionFiles(cwd: string): string[] {
+	const sessions = join(cwd, ".pi", "agent", "sessions");
+	if (!existsSync(sessions)) return [];
+	return readdirSync(sessions, { recursive: true, encoding: "utf8" })
+		.filter((file) => file.endsWith(".jsonl"))
+		.map((file) => join(sessions, file));
+}
+
+/** The branch this conversation holds when `subagent` is called. */
+function orchestratorBranch(): SessionEntry[] {
+	const at = "2026-11-23T06:00:00.000Z";
+	const entry = (id: string, parentId: string | null, role: string, content: unknown): SessionEntry => ({
+		type: "message",
+		id,
+		parentId,
+		timestamp: at,
+		message: { role, content } as never,
+	});
+	return [
+		entry("s1", null, "system", ""),
+		entry("u1", "s1", "user", "ship the thing"),
+		entry("a1", "u1", "assistant", "on it"),
+		entry("u2", "a1", "user", "delegate the rest"),
+		entry("a2", "u2", "assistant", [{ type: "toolCall", id: "c1", name: "subagent", arguments: {} }]),
+	];
+}
+
+test("a shared task hands the child a fork of this conversation", async () => {
+	const config: TinysubagentConfig = { ...routingConfig(null), canShareContext: true };
+	const h = harness(config, () => async () => ({ choice: "current" }), { branch: orchestratorBranch() });
+	try {
+		await withSpawnHerdrStub(() =>
+			executeSettled(h, { tasks: [{ agent: "worker", task: "the rest", shareContext: true }] }),
+		);
+		const [file] = childSessionFiles(h.cwd);
+		assert.ok(file, "the child was given no session file at all");
+		const [headerLine, ...entryLines] = readFileSync(file, "utf8").trimEnd().split("\n");
+		const header = JSON.parse(headerLine ?? "") as { id: string; cwd: string; parentSession: string };
+		assert.equal(header.parentSession, join(h.cwd, "sessions", "sid.jsonl"));
+		assert.equal(header.cwd, h.cwd);
+		assert.equal(header.id, file.split("/").pop()?.replace(/\.jsonl$/, "").split("_").slice(1).join("_"));
+		// The child answers to the brief, so the share stops before the delegation.
+		const entries = entryLines.map((line) => JSON.parse(line) as { message?: { role: string } });
+		assert.equal(entries.at(-1)?.message?.role, "user");
+		assert.equal(entries.some((entry) => entry.message?.role === "system"), false);
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("with the gate off a `shareContext` call is refused by name and opens no pane", async () => {
+	// The schema merely omits the key, so a stray `shareContext` still reaches
+	// `execute` (pi must never fail a whole batch over a benign extra key). The
+	// refusal therefore happens here, before any child launches, and names the gate
+	// and the file that would set it.
+	const h = harness(routingConfig(null), () => async () => ({ choice: "current" }), { branch: orchestratorBranch() });
+	try {
+		const result = await withSpawnHerdrStub(() =>
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "the rest", shareContext: true }] }),
+		);
+		const text = contentText(result);
+		assert.equal(isErrorFlag(result), true, `a share the gate refuses was accepted: ${text}`);
+		assert.match(text, /canShareContext/, `the refusal did not name the gate: ${text}`);
+		assert.match(text, /tinysubagent\.json/, `the refusal did not name the config file: ${text}`);
+		assert.equal(writtenScripts(h.cwd).length, 0, "a refused share still spawned");
+		assert.deepEqual(childSessionFiles(h.cwd), []);
+	} finally {
+		h.stop();
+		h.cleanup();
 	}
 });

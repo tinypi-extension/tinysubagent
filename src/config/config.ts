@@ -70,6 +70,13 @@ export interface ConfigSource {
 
 export interface TinysubagentConfig {
 	enableProfiles: boolean;
+	/**
+	 * Whether a spawn may fork this session's branch into the child
+	 * (`shareContext` on a task). Off unless the highest-precedence file that
+	 * states the key says `true`. Optional in the type only so a hand-built config
+	 * literal need not restate a default it does not exercise.
+	 */
+	canShareContext?: boolean;
 	profiles: Record<string, Profile>;
 	/** Plain `NAME` → value pairs exported into the child's shell. Always present. */
 	env: Record<string, string>;
@@ -603,6 +610,10 @@ function resolveBaseUrl(
  * Profiles are only active when `enableProfiles` is literally `true`. When it is
  * false, the `profile` parameter is removed from the tool schema entirely, so
  * the model is never offered a knob that does nothing.
+ *
+ * `canShareContext` follows the same rule for the same reason: a task may only
+ * fork this conversation into a child when the key is literally `true`, and until
+ * then `shareContext` is not in the schema at all.
  */
 export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	const warnings: string[] = [];
@@ -619,6 +630,7 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	// routing resolver can walk them highest-first without re-reading anything.
 	const read: { source: ConfigSource; root: Record<string, unknown> }[] = [];
 	let enableProfiles = false;
+	let canShareContext = false;
 
 	// Lowest precedence first, so a later (higher-precedence) read overwrites.
 	for (const source of [...candidates].reverse()) {
@@ -632,6 +644,11 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 			// decision to this scope. `=== true` stays the only way to switch it on, so
 			// a typo cannot enable profiles.
 			enableProfiles = root.enableProfiles === true;
+		}
+		if (Object.hasOwn(root, "canShareContext")) {
+			// The same rule as `enableProfiles`: stating the key hands the decision to
+			// this scope, and only a literal `true` permits it.
+			canShareContext = root.canShareContext === true;
 		}
 		mergeProfiles(root, source.file, profiles, warnings);
 		mergeEnv(root, source.file, env, warnings);
@@ -658,7 +675,7 @@ export function loadConfig(cwd: string, agentDir: string): LoadedConfig {
 	}
 
 	return {
-		config: { enableProfiles, profiles, env, defaultTools, systemOne, classifier, sources },
+		config: { enableProfiles, canShareContext, profiles, env, defaultTools, systemOne, classifier, sources },
 		warnings,
 	};
 }

@@ -14,7 +14,7 @@ Two gates, and nothing else:
 
 | Gate | Where | Meaning |
 |---|---|---|
-| `canShareContext` | `tinysubagent.json` / `.jsonc`, top-level boolean, default `false` | Permits the capability. When `false`, `shareContext` is not in the tool schema at all. |
+| `canShareContext` | `tinysubagent.json` / `.jsonc`, top-level boolean, default `false` | Permits the capability. When `false`, `shareContext` is not in the tool schema at all, and a call that names it anyway is refused by the tool, by name. |
 | `shareContext` | `subagent` tool, per task, boolean, default `false` | Decides it for this spawn. |
 
 Profiles are not involved. A profile stays harness + model + thinking; sharing is not one of its

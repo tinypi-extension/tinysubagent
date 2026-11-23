@@ -10,6 +10,7 @@
  */
 
 import { buildLaunchPaths, buildLaunchScript, buildTaskMarkdown, resolveLaunchPrefix, runId, writeLaunchFiles, writeReportFile } from "./launch.ts";
+import { buildSharedContextFork } from "./shared-context.ts";
 import { harnessFor } from "./harness/index.ts";
 import { agyBinAvailable } from "./harness/agy.ts";
 import { childExtensionPath } from "../paths.ts";
@@ -147,9 +148,25 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		harness: profile.harness,
 	});
 
+	// The shared context: a fork of the orchestrator's branch, written where the
+	// child's own `--session` already points, before the pane opens. Argv needs no
+	// change for it. Two things make a request unavailable rather than a failure —
+	// a harness with no session file of its own (agy would never read it) and a
+	// session with no file to fork. Both launch a clean child for now; refusing
+	// them by name is a separate ticket.
+	const fork = request.shareContext && harness.writesSession && context.sharedContext
+		? buildSharedContextFork({
+			source: context.sharedContext,
+			childSessionFile: paths.childSessionFile,
+			// The header's cwd is the directory the child runs in, not the orchestrator's.
+			cwd: context.cwd,
+		})
+		: null;
+
 	writeLaunchFiles([
 		{ path: paths.taskFile, content: buildTaskMarkdown({ body: agent.body, task: request.task, harness: profile.harness }) },
 		{ path: paths.scriptFile, content: script },
+		...(fork ? [{ path: paths.childSessionFile, content: fork.jsonl }] : []),
 	]);
 
 	// One source for both layout reads below: the pane this pi is running in is
@@ -203,6 +220,10 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			paneId,
 			writesSession: harness.writesSession,
 			sessionFile: paths.childSessionFile,
+			// A shared child's file already holds the fork when it launches, so the
+			// watcher's never-started grace counts from there. `+ 1` is the header
+			// line; a spawn without a fork starts with no file at all.
+			sessionEntriesAtLaunch: fork ? fork.entries + 1 : 0,
 			exitCodeFile: paths.exitCodeFile,
 			reportFile: paths.reportFile,
 			startedAt: Date.now(),
