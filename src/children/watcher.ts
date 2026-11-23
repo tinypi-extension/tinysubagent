@@ -28,11 +28,16 @@
  * A child pi that refuses its prompt — no API key, an unknown model — throws
  * before the agent phase and writes nothing at all: no report, no exit code, and
  * a pane that stays alive at its prompt. Nothing would ever settle it. So after
- * `NEVER_STARTED_MS` an empty session file is itself a signal: the run never
- * began, and the wait ends `failed (never-started)` rather than hanging on the
- * blocking call. A session file with *any* entry, of any role, means a run
- * happened and the ordinary rules apply; and the pane is deliberately left open,
- * because `/login` in it is still the fix.
+ * `NEVER_STARTED_MS` a session file that has not grown since the child launched
+ * is itself a signal: the run never began, and the wait ends `failed
+ * (never-started)` rather than hanging on the blocking call. More entries than it
+ * launched with, of any role, mean a run happened and the ordinary rules apply;
+ * and the pane is deliberately left open, because `/login` in it is still the fix.
+ *
+ * "Grown since the child launched" rather than "non-empty" is what makes this
+ * hold for a shared child: its session file holds a fork of the orchestrator's
+ * branch before the pane opens, so an empty file is never the signal there. Only
+ * the run's own appends past {@link RunningSubagent.sessionEntriesAtLaunch} count.
  *
  * That reading only holds for a harness that writes the session file we watch —
  * pi. A child on another harness (agy) never writes an entry at the pi-format
@@ -50,10 +55,10 @@ const POLL_INTERVAL_MS = 1_000;
 /** Check pane liveness every N polls — one host call per 5s, not per second. */
 const PANE_CHECK_EVERY = 5;
 /**
- * How long a child may go without writing a single session entry before the run
- * is called never-started. Generous on purpose: a cold start that writes its
+ * How long a child may go without writing a session entry of its own before the
+ * run is called never-started. Generous on purpose: a cold start that writes its
  * first entry slowly is not a failure, and the answer is only terminal once the
- * file has stayed empty for this long.
+ * file has stayed at its launch size for this long.
  */
 const NEVER_STARTED_MS = 90_000;
 
@@ -96,6 +101,13 @@ export interface RunningSubagent {
 	 */
 	writesSession: boolean;
 	sessionFile: string;
+	/**
+	 * Session entries the file already held when the child launched: a shared
+	 * child's file starts with the fork's header and body, while an ordinary
+	 * spawn's starts with no file at all (0). The never-started grace counts this
+	 * as the baseline and reads the run as started only once the file holds more.
+	 */
+	sessionEntriesAtLaunch: number;
 	exitCodeFile: string;
 	reportFile: string;
 	startedAt: number;
@@ -295,9 +307,9 @@ export function waitForSubagent(
 		let settled = false;
 		let ticks = 0;
 		/**
-		 * Memoized positive for the never-started grace: once any session entry has
-		 * been seen, the run happened and this file never needs parsing again. The
-		 * negative has to be re-read — an entry can still appear.
+		 * Memoized positive for the never-started grace: once an entry past the launch
+		 * baseline has been seen, the run happened and this file never needs parsing
+		 * again. The negative has to be re-read — an entry can still appear.
 		 */
 		let startedRun = false;
 
@@ -327,14 +339,14 @@ export function waitForSubagent(
 				return;
 			}
 
-			// No signal, and nothing written at all: a prompt pi refused never starts
-			// a run, so the empty session file is the only trace it leaves. The pane
-			// stays open — a human can still fix the credential and drive it on.
+			// No signal, and nothing written since launch: a prompt pi refused never
+			// starts a run, so an unchanged session file is the only trace it leaves.
+			// The pane stays open — a human can still fix the credential and drive it on.
 			// Only a harness that writes this file can be read this way: for any other
-			// the empty file is the normal state of a healthy run.
+			// the unchanged file is the normal state of a healthy run.
 			const graceElapsed = Date.now() - running.startedAt >= neverStartedMs;
 			if (running.writesSession && !startedRun && graceElapsed) {
-				startedRun = readSessionEntries(running.sessionFile).length > 0;
+				startedRun = readSessionEntries(running.sessionFile).length > running.sessionEntriesAtLaunch;
 				if (!startedRun) {
 					// A report can land between `classify` and here. It is the child's own
 					// word, so it outranks the inference; the next tick reads it properly.

@@ -220,6 +220,10 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			paneId,
 			writesSession: harness.writesSession,
 			sessionFile: paths.childSessionFile,
+			// A shared child's file already holds the fork when it launches, so the
+			// watcher's never-started grace counts from there. `+ 1` is the header
+			// line; a spawn without a fork starts with no file at all.
+			sessionEntriesAtLaunch: fork ? fork.entries + 1 : 0,
 			exitCodeFile: paths.exitCodeFile,
 			reportFile: paths.reportFile,
 			startedAt: Date.now(),

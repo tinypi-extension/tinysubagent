@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -36,6 +36,7 @@ function scenario(options: { session?: string | null } = {}) {
 		paneId: "w1:p9",
 		writesSession: true,
 		sessionFile,
+		sessionEntriesAtLaunch: 0,
 		exitCodeFile: `${sessionFile}.exitcode`,
 		reportFile: `${sessionFile}.done`,
 		startedAt: Date.now(),
@@ -57,6 +58,10 @@ function scenario(options: { session?: string | null } = {}) {
 		},
 		write(file: string, content: string) {
 			writeFileSync(file, content, "utf8");
+		},
+		/** Append the way a running pi does: the fork already in the file stays. */
+		append(file: string, content: string) {
+			appendFileSync(file, content, "utf8");
 		},
 		cleanup() {
 			rmSync(dir, { recursive: true, force: true });
@@ -518,6 +523,74 @@ test("an empty session file ends the wait as never-started once the grace expire
 	}
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// A shared child's file is not empty at launch
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A shared child as `spawnOne` hands it to the watcher: the session file already
+ * holds the fork's header and body before the pane opens. The run's own appends
+ * are what the grace has to see.
+ */
+function sharedScenario() {
+	const s = scenario({ session: null });
+	const fork = [
+		JSON.stringify({
+			type: "session",
+			id: "child",
+			version: 3,
+			timestamp: "2026-11-23T06:00:00.000Z",
+			cwd: s.dir,
+			parentSession: join(s.dir, "orchestrator.jsonl"),
+		}),
+		JSON.stringify({
+			type: "message",
+			id: "u1",
+			parentId: null,
+			timestamp: "2026-11-23T06:00:00.000Z",
+			message: { role: "user", content: [{ type: "text", text: "ship it" }] },
+		}),
+	];
+	s.write(s.running.sessionFile, `${fork.join("\n")}\n`);
+	s.running.sessionEntriesAtLaunch = fork.length;
+	return s;
+}
+
+test("a shared child that writes nothing new is called never-started once the grace expires", async () => {
+	const s = sharedScenario();
+	try {
+		// The fork is in the file from the first tick, so a count against zero would
+		// call this run started and the blocking wait would hang forever.
+		const outcome = await waitForSubagent(s.running, undefined, { ...s.deps, neverStartedMs: 30 });
+		assert.deepEqual(outcome, { kind: "failed", reason: "never-started", exitCode: null, summary: null });
+		assert.equal(existsSync(s.running.reportFile), false, "a never-started run consumed a report");
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a shared child that appends an entry is not called never-started", async () => {
+	const s = sharedScenario();
+	try {
+		const pending = waitForSubagent(s.running, undefined, { ...s.deps, neverStartedMs: 120 });
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		s.append(
+			s.running.sessionFile,
+			`${JSON.stringify({ type: "message", id: "a1", parentId: "u1", timestamp: "2026-11-23T06:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "on it" }] } })}\n`,
+		);
+		const raced = await Promise.race([
+			pending.then(() => "settled"),
+			new Promise((resolve) => setTimeout(() => resolve("still waiting"), 250)),
+		]);
+		assert.equal(raced, "still waiting", "a shared run that had started was called never-started");
+
+		s.write(s.running.reportFile, '{"type":"done"}');
+		assert.equal((await pending).kind, "completed");
+	} finally {
+		s.cleanup();
+	}
+});
+
 test("a session entry of any role suppresses never-started", async () => {
 	const s = scenario({ session: null });
 	try {
@@ -623,6 +696,7 @@ test("a report that lands during the grace check is not lost as never-started", 
 		paneId: "w1:p9",
 		writesSession: true,
 		sessionFile,
+		sessionEntriesAtLaunch: 0,
 		exitCodeFile: `${sessionFile}.exitcode`,
 		reportFile,
 		startedAt: Date.now(),

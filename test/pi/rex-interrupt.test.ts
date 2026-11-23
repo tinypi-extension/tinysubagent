@@ -32,6 +32,7 @@ function running(dir: string, name: string, paneId: string): RunningSubagent {
 		paneId,
 		writesSession: false,
 		sessionFile,
+		sessionEntriesAtLaunch: 0,
 		exitCodeFile: `${sessionFile}.exitcode`,
 		reportFile: `${sessionFile}.done`,
 		startedAt: Date.now(),

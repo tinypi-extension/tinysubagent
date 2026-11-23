@@ -1029,6 +1029,9 @@ test("a shared spawn writes the fork where the child's own --session opens it", 
 		const entries = entryLines.map((line) => JSON.parse(line) as { message?: { role: string } });
 		assert.equal(entries.at(-1)?.message?.role, "user");
 		assert.equal(entries.some((entry) => entry.message?.role === "system"), false);
+		// The watcher's never-started grace counts from the whole file it launched
+		// with, header included, so a shared child is not mistaken for a started run.
+		assert.equal(result.ok && result.running.sessionEntriesAtLaunch, entryLines.length + 1);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -1042,6 +1045,7 @@ test("a spawn without the flag writes no fork at all", async () => {
 	try {
 		assert.equal(result.ok, true);
 		assert.deepEqual(files, []);
+		assert.equal(result.ok && result.running.sessionEntriesAtLaunch, 0);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
