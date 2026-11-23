@@ -49,6 +49,7 @@
 import { readFileSync, rmSync } from "node:fs";
 import { paneHost } from "../pane-host/index.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
+import type { ShareCost } from "./contract.ts";
 import { readFailureNote, readFinalMessage, readSessionEntries } from "./session.ts";
 
 const POLL_INTERVAL_MS = 1_000;
@@ -108,6 +109,12 @@ export interface RunningSubagent {
 	 * as the baseline and reads the run as started only once the file holds more.
 	 */
 	sessionEntriesAtLaunch: number;
+	/**
+	 * What the fork cost, when this spawn shared the orchestrator's context. Absent
+	 * for a child launched clean, and carried all the way to its report so the
+	 * human reads the same figures the acknowledgment gave at launch.
+	 */
+	sharedContext?: ShareCost;
 	exitCodeFile: string;
 	reportFile: string;
 	startedAt: number;

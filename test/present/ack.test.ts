@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { ackLine, ackParts, roleLabel, spawnNotice } from "../../src/present/ack.ts";
+import { ackLine, ackParts, formatShareCost, roleLabel, spawnNotice } from "../../src/present/ack.ts";
 
 test("a role reads as a title, however the agent id is punctuated", () => {
 	assert.equal(roleLabel("scout"), "Scout");
@@ -53,8 +53,37 @@ test("the parts are exposed separately, so a coloured line cannot drift from the
 			profile: "light",
 			model: "oc-openai/deepseek-flash",
 			thinking: "low",
+			share: null,
 		},
 	);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// What a share cost
+// ────────────────────────────────────────────────────────────────────────────
+
+test("a shared child's row states what the share cost, after the facts it already gave", () => {
+	const line = ackLine({
+		agent: "scout",
+		name: "finder",
+		profile: { name: "current", model: "oc-openai/deepseek-flash", thinking: "medium" },
+		sharedContext: { entries: 42, tokens: 18_400 },
+	});
+	assert.equal(
+		line,
+		"Scout (finder) [current] oc-openai/deepseek-flash (medium) shared 42 entries · ~18k tokens",
+	);
+});
+
+test("a child spawned without a share says nothing about one", () => {
+	const line = ackLine({ agent: "worker", name: "job", profile: { name: "current", model: "m" } });
+	assert.doesNotMatch(line, /shared/);
+});
+
+test("one entry is an entry, and a small share is not rounded into thousands", () => {
+	assert.equal(formatShareCost({ entries: 1, tokens: 900 }), "shared 1 entry · ~900 tokens");
+	// The token figure is an order of magnitude, so the last digits are not claimed.
+	assert.equal(formatShareCost({ entries: 42, tokens: 1_499 }), "shared 42 entries · ~1k tokens");
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -71,6 +100,20 @@ test("a spawned child is announced with its role, label, profile, model and thin
 			},
 		]),
 		"tinysubagent: spawned Scout (finder) [current] oc-openai/deepseek-flash (medium)",
+	);
+});
+
+test("a shared child's notice carries the size right after the model and thinking", () => {
+	assert.equal(
+		spawnNotice([
+			{
+				agent: "scout",
+				name: "finder",
+				profile: { name: "current", model: "oc-openai/deepseek-flash", thinking: "medium" },
+				sharedContext: { entries: 42, tokens: 18_400 },
+			},
+		]),
+		"tinysubagent: spawned Scout (finder) [current] oc-openai/deepseek-flash (medium) shared 42 entries · ~18k tokens",
 	);
 });
 

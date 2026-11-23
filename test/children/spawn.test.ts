@@ -1032,6 +1032,10 @@ test("a shared spawn writes the fork where the child's own --session opens it", 
 		// The watcher's never-started grace counts from the whole file it launched
 		// with, header included, so a shared child is not mistaken for a started run.
 		assert.equal(result.ok && result.running.sessionEntriesAtLaunch, entryLines.length + 1);
+		// The figures the acknowledgment reports are the body that was actually
+		// written — the header is not context and the prompt was dropped.
+		assert.equal(result.ok && result.running.sharedContext?.entries, entryLines.length);
+		assert.equal(result.ok && (result.running.sharedContext?.tokens ?? 0) > 0, true);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -1046,6 +1050,8 @@ test("a spawn without the flag writes no fork at all", async () => {
 		assert.equal(result.ok, true);
 		assert.deepEqual(files, []);
 		assert.equal(result.ok && result.running.sessionEntriesAtLaunch, 0);
+		// No fork, no size line: the spawn must not claim a cost it never paid.
+		assert.equal(result.ok && result.running.sharedContext, undefined);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

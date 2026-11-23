@@ -119,6 +119,7 @@ export async function watchBatch(
 					outcome,
 					elapsedMs: Date.now() - running.startedAt,
 					sessionFile: running.sessionFile,
+					sharedContext: running.sharedContext,
 				} satisfies SubagentResult;
 			}),
 		);

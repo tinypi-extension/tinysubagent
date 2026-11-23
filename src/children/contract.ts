@@ -40,6 +40,18 @@ export interface SpawnRequest {
 }
 
 /**
+ * What a share cost a child, in the two figures a human reads: the fork body's
+ * entry count and its rough token count. Absent from a spawn that shared
+ * nothing, and from any result whose child was launched clean.
+ */
+export interface ShareCost {
+	/** Entries copied into the fork's body — never the header, never a `system` entry. */
+	entries: number;
+	/** Rough token count of that same body: an order of magnitude, not accounting. */
+	tokens: number;
+}
+
+/**
  * The orchestrator's own branch, as a spawn that asked for it needs it. Absent
  * from a `SpawnContext` when this session has no file to fork.
  */

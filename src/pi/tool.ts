@@ -27,7 +27,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { ackLine, spawnNotice, type SpawnNoticeEntry } from "../present/ack.ts";
+import { ackLine, formatShareCost, spawnNotice, type SpawnNoticeEntry } from "../present/ack.ts";
 import {
 	NOTE_NOTHING,
 	renderAck,
@@ -84,6 +84,7 @@ function renderReport(details: AckDetails, theme: Theme): string[] {
 			entry.agent ? `agent \`${entry.agent}\`` : null,
 			entry.profile ? `profile \`${entry.profile}\`` : null,
 			`pane \`${entry.paneId}\``,
+			formatShareCost(entry.sharedContext),
 		].filter((part): part is string => part !== null);
 		lines.push(theme.fg("muted", meta.join(" · ")));
 
@@ -285,6 +286,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 								name: result.running.name,
 								paneId: result.running.paneId,
 								profile: result.running.profile,
+								sharedContext: result.running.sharedContext,
 								warnings: result.warnings,
 							});
 						} else {
@@ -303,6 +305,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					agent: entry.agent,
 					name: entry.name,
 					profile: entry.profile,
+					sharedContext: entry.sharedContext,
 					routedByClassifier: classifierRouted.has(entry.name),
 				}));
 				ctx.ui?.notify(spawnNotice(entries), "info");

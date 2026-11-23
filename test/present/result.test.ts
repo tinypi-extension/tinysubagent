@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import type { ResolvedProfile } from "../../src/config/profiles.ts";
 import { buildResultDetails, buildResultText, formatDuration, statusLabel } from "../../src/present/result.ts";
+import type { ShareCost } from "../../src/children/contract.ts";
 import type { SubagentOutcome } from "../../src/children/watcher.ts";
 
 /** The profile every result is reported under unless a test overrides it. */
@@ -11,7 +12,13 @@ const LIGHT: ResolvedProfile = { name: "light", model: "oc-openai/deepseek-flash
 function result(
 	name: string,
 	outcome: SubagentOutcome,
-	overrides: { task?: string; profile?: ResolvedProfile | null; paneId?: string; elapsedMs?: number } = {},
+	overrides: {
+		task?: string;
+		profile?: ResolvedProfile | null;
+		paneId?: string;
+		elapsedMs?: number;
+		sharedContext?: ShareCost;
+	} = {},
 ) {
 	return {
 		name,
@@ -22,6 +29,7 @@ function result(
 		sessionFile: "/sessions/x.jsonl",
 		outcome,
 		elapsedMs: overrides.elapsedMs ?? 4_000,
+		sharedContext: overrides.sharedContext,
 	};
 }
 
@@ -250,6 +258,25 @@ test("a silent result points at the pane rather than showing nothing", () => {
 		result("quiet", { kind: "failed", reason: "exit", exitCode: 1, summary: "  " }),
 	]);
 	assert.match(text, /_\(no output captured — inspect pane `w1:p2`\)_/);
+});
+
+test("a shared child's meta states what the share cost, beside the facts it already gave", () => {
+	const text = buildResultText([result("finder", done, { sharedContext: { entries: 42, tokens: 18_400 } })]);
+	assert.match(text, /pane `w1:p2` · shared 42 entries · ~18k tokens/);
+});
+
+test("a child that shared nothing says nothing about a share, and its detail has no figures", () => {
+	const text = buildResultText([result("finder", done)]);
+	assert.doesNotMatch(text, /shared/);
+
+	const [row] = buildResultDetails([result("finder", done)]).results;
+	assert.equal(row?.sharedContext, null);
+});
+
+test("the share's figures survive into the machine-readable detail", () => {
+	const [row] = buildResultDetails([result("finder", done, { sharedContext: { entries: 42, tokens: 18_400 } })])
+		.results;
+	assert.deepEqual(row?.sharedContext, { entries: 42, tokens: 18_400 });
 });
 
 test("the message never reaches for a heading deeper than the report itself", () => {

@@ -9,7 +9,9 @@
 
 import { resolvedProfileLabel } from "../config/profiles.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
+import type { ShareCost } from "../children/contract.ts";
 import type { SubagentOutcome } from "../children/watcher.ts";
+import { formatShareCost } from "./ack.ts";
 
 export interface SubagentResult {
 	name: string;
@@ -20,6 +22,8 @@ export interface SubagentResult {
 	outcome: SubagentOutcome;
 	elapsedMs: number;
 	sessionFile: string;
+	/** What the fork cost, for a child spawned with the orchestrator's context. */
+	sharedContext?: ShareCost;
 }
 
 export function formatDuration(ms: number): string {
@@ -140,6 +144,7 @@ function section(result: SubagentResult, index: number, total: number): string {
 		result.agent ? `agent \`${result.agent}\`` : null,
 		result.profile ? `profile \`${resolvedProfileLabel(result.profile)}\`` : null,
 		`pane \`${result.paneId}\``,
+		formatShareCost(result.sharedContext),
 	].filter((part): part is string => part !== null);
 
 	const heading =
@@ -186,6 +191,8 @@ export interface ResultDetail {
 	reason?: string;
 	exitCode?: number | null;
 	summary: string | null;
+	/** The share's two figures, or null for a child launched without one. */
+	sharedContext: ShareCost | null;
 }
 
 export interface ResultDetails {
@@ -215,6 +222,7 @@ export function buildResultDetails(results: readonly SubagentResult[]): ResultDe
 				reason: outcome.kind === "failed" ? outcome.reason : undefined,
 				exitCode: outcome.kind === "failed" ? outcome.exitCode : undefined,
 				summary: outcome.kind === "interrupted" ? null : outcome.summary,
+				sharedContext: result.sharedContext ?? null,
 			} satisfies ResultDetail;
 		}),
 	};

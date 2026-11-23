@@ -5,19 +5,27 @@
  *
  *   Scout (scout-mcp-capability-check) [current] oc-openai/deepseek-flash (medium)
  *
- * role, label, the profile it was launched under, and the model/thinking that
- * profile resolved to. Splitting the line into parts here (rather than into a
- * string) is what lets `index.ts` colour each part for the TUI while the model
- * reads the plain form — the two renderings are built from the same parts, so
- * they cannot drift apart.
+ * role, label, the profile it was launched under, the model/thinking that
+ * profile resolved to, and — when the child was given the orchestrator's own
+ * context — what that share cost. Splitting the line into parts here (rather
+ * than into a string) is what lets `index.ts` colour each part for the TUI while
+ * the model reads the plain form: the two renderings are built from the same
+ * parts, so they cannot drift apart.
  */
 
+import type { ShareCost } from "../children/contract.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
 
 export interface SpawnAck {
 	agent: string;
 	name: string;
 	profile: ResolvedProfile | null;
+	/**
+	 * What the fork cost, when this spawn shared the orchestrator's context. Absent
+	 * for a child that was launched clean — it says nothing about a share it never
+	 * got.
+	 */
+	sharedContext?: ShareCost;
 }
 
 /** One child as the spawn notice reports it: the ack parts plus who picked the profile. */
@@ -39,6 +47,7 @@ export interface AckParts {
 	profile: string | null;
 	model: string | null;
 	thinking: string | null;
+	share: string | null;
 }
 
 /**
@@ -60,7 +69,25 @@ export function ackParts(ack: SpawnAck): AckParts {
 		profile: ack.profile?.name ?? null,
 		model: ack.profile?.model ?? null,
 		thinking: ack.profile?.thinking ?? null,
+		share: formatShareCost(ack.sharedContext),
 	};
+}
+
+/**
+ * What a share cost, as one line reads it: `shared 42 entries · ~18k tokens`.
+ * The spawn row and the result meta both use this, so the size of a child's
+ * context cannot be stated twice and differently. `null` when nothing was
+ * shared, because a clean child has nothing to declare.
+ */
+export function formatShareCost(cost: ShareCost | null | undefined): string | null {
+	if (!cost) return null;
+	const entries = cost.entries === 1 ? "1 entry" : `${cost.entries} entries`;
+	return `shared ${entries} · ${formatTokens(cost.tokens)} tokens`;
+}
+
+/** The token figure is an order of magnitude: the last digits are not claimed. */
+function formatTokens(tokens: number): string {
+	return tokens < 1_000 ? `~${tokens}` : `~${Math.round(tokens / 1_000)}k`;
 }
 
 /** The parts as one line: whatever resolved, in a fixed order, nothing empty. */
@@ -71,6 +98,7 @@ function joinParts(parts: AckParts): string {
 		parts.profile === null ? null : `[${parts.profile}]`,
 		parts.model,
 		parts.thinking === null ? null : `(${parts.thinking})`,
+		parts.share,
 	]
 		.filter((part): part is string => part !== null)
 		.join(" ");
