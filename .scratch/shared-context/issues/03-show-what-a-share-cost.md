@@ -9,9 +9,13 @@ what makes the choice visible.
 
 **Blocked by:** 01 (a subagent can be given the orchestrator's context)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A shared child's acknowledgment row states the entry count and the rough token count of the fork
-- [ ] The same figures appear in the result metadata for that child, not only in the TUI row
-- [ ] A child spawned without a share shows no such line
-- [ ] The figures describe what was written to the child's session file, excluding the dropped `system` entries
+- [x] A shared child's acknowledgment row states the entry count and the rough token count of the fork
+- [x] The same figures appear in the result metadata for that child, not only in the TUI row
+- [x] A child spawned without a share shows no such line
+- [x] The figures describe what was written to the child's session file, excluding the dropped `system` entries
+
+## Resolution
+
+Landed on `integration/shared-context`: `478d495`, with the plumbing tidied by `34024af` so the figures are the fork's own (`cost`, `lines`) and describe what was actually written rather than what was projected into it.

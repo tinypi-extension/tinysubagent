@@ -22,13 +22,17 @@ half-finished batch it may read as its own work.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `canShareContext` is read from the highest-precedence config source like `enableProfiles`, default `false`, and documented in the README config table
-- [ ] `shareContext` appears on the task object in the tool schema only when the gate is on; the task object stays open, so a call that passes it anyway is refused by the tool, by name
-- [ ] `shareContext: true` on a task produces a child session file whose header has a fresh `id`, the request's `cwd`, and `parentSession` pointing at the orchestrator's session file
-- [ ] That file contains the orchestrator's branch up to and including its last `user` entry, and every entry's `parentId` chains under the new header `id`
-- [ ] No `system` entry survives the copy, and the tail is not the assistant message that called `subagent`
-- [ ] Tool description and prompt guidelines stop claiming a subagent cannot see the conversation when the gate is on, and still say so when it is off
-- [ ] A spawn with `shareContext` false, or with the gate off, is byte-for-byte the launch it is today
-- [ ] A share never reaches a harness that cannot honour it (an `agy` profile does not get a fork file it would never read)
+- [x] `canShareContext` is read from the highest-precedence config source like `enableProfiles`, default `false`, and documented in the README config table
+- [x] `shareContext` appears on the task object in the tool schema only when the gate is on; the task object stays open, so a call that passes it anyway is refused by the tool, by name
+- [x] `shareContext: true` on a task produces a child session file whose header has a fresh `id`, the request's `cwd`, and `parentSession` pointing at the orchestrator's session file
+- [x] That file contains the orchestrator's branch up to and including its last `user` entry, and every entry's `parentId` chains under the new header `id`
+- [x] No `system` entry survives the copy, nor the system prompt pi embeds on a `compaction` entry, and the tail is not the assistant message that called `subagent`
+- [x] Tool description and prompt guidelines stop claiming a subagent cannot see the conversation when the gate is on, and still say so when it is off
+- [x] A spawn with `shareContext` false, or with the gate off, is byte-for-byte the launch it is today
+- [x] A share never reaches a harness that cannot honour it (an `agy` profile does not get a fork file it would never read)
+
+## Resolution
+
+Landed on `integration/shared-context`: `44ce948`, `5b2197d`, `4238347`, `0aa71ed`, then review fixes `8be77f9` (a benign extra key no longer fails the batch) and `9da7695` (the copied branch is scrubbed of any embedded system prompt — pi 1.5.2 stores one on a `compaction` entry and replays it on load). The fork's own cost and line count are reported by `shared-context.ts` rather than recomputed by its callers.

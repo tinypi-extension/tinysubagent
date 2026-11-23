@@ -1,6 +1,6 @@
 # Spec: Sharing the orchestrator's context with a subagent
 
-Status: ready-for-agent
+Status: resolved
 
 Tickets: `issues/01` (the share itself), `issues/02` (refusals), `issues/03` (the size line).
 

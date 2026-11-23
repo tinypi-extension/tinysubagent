@@ -11,9 +11,13 @@ written as if the child knows things it does not.
 
 **Blocked by:** 01 (a subagent can be given the orchestrator's context)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `shareContext: true` with an `agy`-profile request fails that request with an error naming the harness, and no pane opens for it
-- [ ] `shareContext: true` when the orchestrator has no session file fails that request with an error naming that cause
-- [ ] An unshared sibling in the same batch is unaffected by either refusal
-- [ ] The refusal happens before the launch files are written, so no orphan fork file or script is left behind
+- [x] `shareContext: true` with an `agy`-profile request fails that request with an error naming the harness, and no pane opens for it
+- [x] `shareContext: true` when the orchestrator has no session file fails that request with an error naming that cause
+- [x] An unshared sibling in the same batch is unaffected by either refusal
+- [x] The refusal happens before the launch files are written, so no orphan fork file or script is left behind
+
+## Resolution
+
+Landed on `integration/shared-context`: `2c59410`, then unified by `533db2f` so every share refusal — the gate off, an `agy` profile, no session file, and a branch with no user entry to fork — fails only its own request, before any launch file is written.
