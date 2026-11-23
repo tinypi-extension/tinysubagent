@@ -39,8 +39,15 @@ import { buildPromptGuidelines, buildToolDescription } from "../present/describe
 import { readSharedContext } from "../children/shared-context.ts";
 import { discoverAgents } from "../config/agents.ts";
 import { type TinysubagentConfig } from "../config/config.ts";
-import { resolveProfile } from "../config/profiles.ts";
-import { collectRequests, refuseUnpermittedShare, resolveCwd, resolveProjectAgentDir } from "../children/requests.ts";
+import { type ResolvedProfile, resolveProfile } from "../config/profiles.ts";
+import {
+	collectRequests,
+	refuseUnhonourableShare,
+	refuseUnpermittedShare,
+	resolveCwd,
+	resolveProjectAgentDir,
+} from "../children/requests.ts";
+import { harnessFor } from "../children/harness/index.ts";
 import { errorMessage } from "../children/contract.ts";
 import { parentModelSpec, parentThinking, spawnOne } from "../children/spawn.ts";
 import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.ts";
@@ -204,6 +211,8 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				accepted.filter((request) => !request.profile?.trim()).map((request) => request.name),
 			);
 			const classifierRouted = new Set<string>();
+			// Filled by the validation loop below, read again by the share refusal.
+			const profiles = new Map<string, ResolvedProfile>();
 			let context: SpawnContext;
 			try {
 				if (routingActive(config)) {
@@ -222,7 +231,8 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				}
 
 				// Validate every profile before opening any pane, so a bad batch fails
-				// whole rather than halfway.
+				// whole rather than halfway. The resolved profiles are kept: a share has to
+				// be judged against the harness a request actually runs on.
 				for (const request of accepted) {
 					const profile = resolveProfile(config, request.profile, {
 						model: parentModelSpec(ctx),
@@ -231,6 +241,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					if (!profile.ok) {
 						return failure(profile.error);
 					}
+					profiles.set(request.name, profile);
 				}
 
 				const sessionFile = ctx.sessionManager.getSessionFile();
@@ -257,6 +268,23 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 				throw error;
 			}
 
+			// A share this child cannot be given fails on its own row instead of taking
+			// the batch with it: the brief was written as if the child knows this
+			// conversation, so a silently clean child would be a different spawn than the
+			// one asked for — while its siblings are still exactly what the caller
+			// wanted. Decided here, before a single launch file is written.
+			const refusedShares = new Map<SpawnRequest, string>();
+			for (const request of accepted) {
+				const profile = profiles.get(request.name);
+				if (!profile) continue;
+				const problem = refuseUnhonourableShare({
+					request,
+					harness: harnessFor(profile),
+					sharedContext: context.sharedContext,
+				});
+				if (problem) refusedShares.set(request, problem);
+			}
+
 			// Launch sequentially: panes are created one at a time anyway, and a
 			// partly-failed batch reports exactly which children did start.
 			const spawned: SpawnedEntry[] = [];
@@ -269,6 +297,14 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					// settled below. The Esc into the panes that do exist is the watcher's,
 					// once this loop is done.
 					if (signal?.aborted) break;
+					// Refused before any launch file was written, so nothing of this request
+					// is left on disk: its pane was never opened and its siblings are launched
+					// as if it had not been asked for.
+					const refused = refusedShares.get(request);
+					if (refused) {
+						failures.push({ agent: request.agent, error: refused });
+						continue;
+					}
 					// A throw is a spawn refusal like any other, and this loop is the seam
 					// that keeps one from taking the batch with it: `spawnOne` can fail after
 					// a pane is already open, and letting that escape `execute` would strand

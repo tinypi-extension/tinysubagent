@@ -76,7 +76,7 @@ const workerAgent: AgentDef = {
 function harness(
 	config: TinysubagentConfig,
 	route: (ctx: ExtensionContext) => RouteFn,
-	options: { columns?: LiveSubPanes; branch?: SessionEntry[] } = {},
+	options: { columns?: LiveSubPanes; branch?: SessionEntry[]; sessionFile?: string | null } = {},
 ) {
 	const watchers = new Set<AbortController>();
 	const tool = createTool({
@@ -109,7 +109,9 @@ function harness(
 		model: undefined,
 		thinkingLevel: undefined,
 		sessionManager: {
-			getSessionFile: () => join(cwd, "sessions", "sid.jsonl"),
+			// `null` is `--no-session`: this orchestrator has no file to fork.
+			getSessionFile: () =>
+				options.sessionFile === undefined ? join(cwd, "sessions", "sid.jsonl") : options.sessionFile,
 			getSessionId: () => "sid",
 			buildContextEntries: () => options.branch ?? [],
 			getHeader: () => ({ type: "session", id: "sid", timestamp: "2026-11-23T06:00:00.000Z", cwd, version: 3 }),
@@ -1664,6 +1666,124 @@ test("with the gate off a `shareContext` call is refused by name and opens no pa
 		assert.equal(writtenScripts(h.cwd).length, 0, "a refused share still spawned");
 		assert.deepEqual(childSessionFiles(h.cwd), []);
 	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// A share the child cannot be given fails that request, not the batch
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The labels a batch left behind under `sessionDir`, for one kind of artifact:
+ * a script or a brief, named `<label>-<id>(-<stamp>).(sh|md)`. The refused
+ * request's label must not appear in either list.
+ */
+function leavings(sessionDir: string, kind: "context" | "subagent-scripts"): string[] {
+	try {
+		return readdirSync(join(sessionDir, "artifacts", "sid", kind)).map((file) =>
+			file.replace(/-[0-9a-f]{8}(-.*)?\.(sh|md)$/, ""),
+		);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Settle children as they launch, until the call returns. A refused request
+ * never writes a launch script, so counting scripts up front would either settle
+ * too few or wait for a child that was never meant to exist.
+ */
+async function settleAsTheyLaunch(pending: Promise<unknown>, cwd: string, text = "PONG"): Promise<unknown> {
+	let settled = false;
+	const done = pending.then((result) => {
+		settled = true;
+		return result;
+	});
+	while (!settled) {
+		for (const script of writtenScripts(cwd)) {
+			const reportFile = reportFileFrom(script);
+			if (!existsSync(reportFile)) writeFileSync(reportFile, JSON.stringify({ type: "done", result: text }));
+		}
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	return done;
+}
+
+test("a share on an agy profile fails that request and its sibling spawns untouched", async () => {
+	// agy keeps no session file, so there is nothing to fork into. The brief of
+	// that request was written as if the child knows this conversation, so a clean
+	// child is the wrong spawn — while the sibling is still exactly what was asked
+	// for.
+	const base = routingConfig(null);
+	const config: TinysubagentConfig = {
+		...base,
+		canShareContext: true,
+		profiles: { ...base.profiles, gemini: { harness: "agy", model: "gpt-oss-120b" } },
+	};
+	const h = harness(config, () => async () => ({ choice: "current" }), { branch: orchestratorBranch() });
+	try {
+		const result = await withSpawnHerdrStub(() =>
+			settleAsTheyLaunch(
+				executeTool(h.tool, h.ctx, {
+					tasks: [
+						{ agent: "worker", task: "the agy one", name: "shared-agy", profile: "gemini", shareContext: true },
+						{ agent: "worker", task: "the sibling", name: "plain" },
+					],
+				}),
+				h.cwd,
+				"PONG from plain",
+			),
+		);
+		const text = contentText(result);
+		assert.match(text, /failed worker: .*agy harness/, `the refusal did not name the harness: ${text}`);
+		assert.match(text, /## plain — completed/);
+		// The sibling launched exactly as it would have: one script, one brief — and
+		// nothing at all named after the refused request, fork included.
+		assert.deepEqual(leavings(join(h.cwd, "sessions"), "subagent-scripts"), ["plain"]);
+		assert.deepEqual(leavings(join(h.cwd, "sessions"), "context"), ["plain"]);
+		assert.deepEqual(childSessionFiles(h.cwd), []);
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
+
+test("a share is refused when this session has no file to fork, and its sibling spawns untouched", async () => {
+	// `--no-session`: there is no branch on disk to fork, and a silent clean child
+	// would answer a brief written as if it had read this conversation.
+	const config: TinysubagentConfig = { ...routingConfig(null), canShareContext: true };
+	const h = harness(config, () => async () => ({ choice: "current" }), {
+		branch: orchestratorBranch(),
+		sessionFile: null,
+	});
+	// Without a session file the artifacts are planned under the agent dir, so it is
+	// pointed at the scratch project: nothing this test writes can land in the real one.
+	const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = h.cwd;
+	try {
+		const result = await withSpawnHerdrStub(() =>
+			settleAsTheyLaunch(
+				executeTool(h.tool, h.ctx, {
+					tasks: [
+						{ agent: "worker", task: "the shared one", name: "shared", shareContext: true },
+						{ agent: "worker", task: "the sibling", name: "plain" },
+					],
+				}),
+				h.cwd,
+				"PONG from plain",
+			),
+		);
+		const text = contentText(result);
+		assert.match(text, /failed worker: .*no session file/, `the refusal did not name the cause: ${text}`);
+		assert.match(text, /## plain — completed/);
+		assert.deepEqual(leavings(join(h.cwd, "sessions"), "subagent-scripts"), ["plain"]);
+		assert.deepEqual(leavings(join(h.cwd, "sessions"), "context"), ["plain"]);
+		assert.deepEqual(childSessionFiles(h.cwd), []);
+	} finally {
+		if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
 		h.stop();
 		h.cleanup();
 	}
