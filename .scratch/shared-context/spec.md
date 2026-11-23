@@ -91,7 +91,8 @@ would break the "one blocking call, N reports" contract.
 - `src/children/requests.ts` / `src/types.ts`: carry the flag on `SpawnRequest`, and refuse it per
   request — the gate off, the profile agy, no session file to fork, or nothing forkable on the branch.
 - New module (e.g. `src/children/shared-context.ts`): read the branch from the `ExtensionContext`,
-  render the fork JSONL, return `{ entries, tokens }` for the ack. Pure enough to test without panes.
+  render the fork JSONL, and return it with what it cost and the line count it wrote. Pure enough to
+  test without panes.
 - `src/children/spawn.ts` + `src/children/launch.ts`: write the fork file to `paths.childSessionFile`
   before the pane opens; the argv is unchanged (`--session <file>` already opens it).
 - `src/present/ack.ts` / `ack-render.ts` / `result.ts`: the `shared 42 entries · ~18k tokens` line.
