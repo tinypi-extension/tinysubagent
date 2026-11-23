@@ -35,7 +35,8 @@ import {
 	type SpawnedEntry,
 } from "../present/ack-render.ts";
 import { buildResultDetails, buildResultText, emptySummaryText, oneLine } from "../present/result.ts";
-import { PROMPT_GUIDELINES, buildToolDescription } from "../present/describe.ts";
+import { buildPromptGuidelines, buildToolDescription } from "../present/describe.ts";
+import { readSharedContext } from "../children/shared-context.ts";
 import { discoverAgents } from "../config/agents.ts";
 import { type TinysubagentConfig } from "../config/config.ts";
 import { resolveProfile } from "../config/profiles.ts";
@@ -148,7 +149,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 		label: "Subagent",
 		description: buildToolDescription(advertisedAgents, config),
 		promptSnippet: "Delegate a task to a subagent running in its own herdr pane",
-		promptGuidelines: PROMPT_GUIDELINES,
+		promptGuidelines: buildPromptGuidelines(config),
 		parameters,
 
 		async execute(_toolCallId, rawParams, signal, _onUpdate, ctx: ExtensionContext) {
@@ -242,6 +243,9 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					parentThinking: parentThinking(ctx),
 					columns,
 					reportedWarnings: deps.reportedWarnings,
+					// Read once for the batch, and only when the capability is on: a share the
+					// config never permitted must not reach a task even if the flag did.
+					sharedContext: config.canShareContext ? readSharedContext(ctx.sessionManager) : null,
 				};
 			} catch (error) {
 				throw error;
