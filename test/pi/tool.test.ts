@@ -1649,21 +1649,31 @@ test("a shared task hands the child a fork of this conversation", async () => {
 	}
 });
 
-test("with the gate off a `shareContext` call is refused by name and opens no pane", async () => {
+test("with the gate off a `shareContext` call fails that request and its sibling spawns untouched", async () => {
 	// The schema merely omits the key, so a stray `shareContext` still reaches
 	// `execute` (pi must never fail a whole batch over a benign extra key). The
-	// refusal therefore happens here, before any child launches, and names the gate
-	// and the file that would set it.
+	// refusal therefore names the gate and the file that would set it, on that
+	// request's own row: a sibling the gate does not touch still spawns.
 	const h = harness(routingConfig(null), () => async () => ({ choice: "current" }), { branch: orchestratorBranch() });
 	try {
 		const result = await withSpawnHerdrStub(() =>
-			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "the rest", shareContext: true }] }),
+			settleAsTheyLaunch(
+				executeTool(h.tool, h.ctx, {
+					tasks: [
+						{ agent: "worker", task: "the rest", name: "shared", shareContext: true },
+						{ agent: "worker", task: "the sibling", name: "plain" },
+					],
+				}),
+				h.cwd,
+				"PONG from plain",
+			),
 		);
 		const text = contentText(result);
-		assert.equal(isErrorFlag(result), true, `a share the gate refuses was accepted: ${text}`);
-		assert.match(text, /canShareContext/, `the refusal did not name the gate: ${text}`);
+		assert.match(text, /failed worker: .*canShareContext/, `the refusal did not name the gate: ${text}`);
 		assert.match(text, /tinysubagent\.json/, `the refusal did not name the config file: ${text}`);
-		assert.equal(writtenScripts(h.cwd).length, 0, "a refused share still spawned");
+		assert.match(text, /## plain — completed/, `the refused share took its sibling with it: ${text}`);
+		assert.deepEqual(leavings(join(h.cwd, "sessions"), "subagent-scripts"), ["plain"]);
+		assert.deepEqual(leavings(join(h.cwd, "sessions"), "context"), ["plain"]);
 		assert.deepEqual(childSessionFiles(h.cwd), []);
 	} finally {
 		h.stop();
@@ -1710,6 +1720,47 @@ async function settleAsTheyLaunch(pending: Promise<unknown>, cwd: string, text =
 	}
 	return done;
 }
+
+test("a share with no conversation to fork fails that request instead of spawning it clean", async () => {
+	// A branch holding no user entry has no body a fork could carry: the child would
+	// start with an empty context while its brief was written as if it had read this
+	// conversation. A silent clean spawn is the failure this refusal exists to stop.
+	const config: TinysubagentConfig = { ...routingConfig(null), canShareContext: true };
+	const h = harness(config, () => async () => ({ choice: "current" }), {
+		branch: [
+			{
+				type: "message",
+				id: "s1",
+				parentId: null,
+				timestamp: "2026-11-23T06:00:00.000Z",
+				message: { role: "system", content: "" } as never,
+			},
+		],
+	});
+	try {
+		const result = await withSpawnHerdrStub(() =>
+			settleAsTheyLaunch(
+				executeTool(h.tool, h.ctx, {
+					tasks: [
+						{ agent: "worker", task: "the shared one", name: "shared", shareContext: true },
+						{ agent: "worker", task: "the sibling", name: "plain" },
+					],
+				}),
+				h.cwd,
+				"PONG from plain",
+			),
+		);
+		const text = contentText(result);
+		assert.match(text, /failed worker: .*no user message/, `the refusal did not name the cause: ${text}`);
+		assert.match(text, /## plain — completed/);
+		assert.deepEqual(leavings(join(h.cwd, "sessions"), "subagent-scripts"), ["plain"]);
+		assert.deepEqual(leavings(join(h.cwd, "sessions"), "context"), ["plain"]);
+		assert.deepEqual(childSessionFiles(h.cwd), []);
+	} finally {
+		h.stop();
+		h.cleanup();
+	}
+});
 
 test("a share on an agy profile fails that request and its sibling spawns untouched", async () => {
 	// agy keeps no session file, so there is nothing to fork into. The brief of

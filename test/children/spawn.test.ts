@@ -1049,7 +1049,9 @@ test("a spawn without the flag writes no fork at all", async () => {
 	try {
 		assert.equal(result.ok, true);
 		assert.deepEqual(files, []);
-		assert.equal(result.ok && result.running.sessionEntriesAtLaunch, 0);
+		// No fork, no launch baseline: the watcher's never-started grace counts a
+		// clean child from an empty file, not from a share it never got.
+		assert.equal(result.ok && (result.running.sessionEntriesAtLaunch ?? 0), 0);
 		// No fork, no size line: the spawn must not claim a cost it never paid.
 		assert.equal(result.ok && result.running.sharedContext, undefined);
 	} finally {

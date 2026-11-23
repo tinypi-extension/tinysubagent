@@ -179,12 +179,6 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			const mode = collectRequests(params);
 			if (!mode.ok) return failure(mode.error);
 
-			// The schema omits `shareContext` while the gate is off, but the task object
-			// stays open so a stray key cannot fail the batch at pi's validation layer.
-			// The share itself is refused here instead, by name and before any pane opens.
-			const shareProblem = refuseUnpermittedShare(config, mode.requests);
-			if (shareProblem) return failure(shareProblem);
-
 			// Names identify subagents in results; they do not reserve a name against
 			// another request, either in this batch or a concurrent call.
 			const accepted = mode.requests;
@@ -273,16 +267,21 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// the batch with it: the brief was written as if the child knows this
 			// conversation, so a silently clean child would be a different spawn than the
 			// one asked for — while its siblings are still exactly what the caller
-			// wanted. Decided here, before a single launch file is written.
+			// wanted. Every reason lands here, the gate included: the schema leaves the
+			// key out while the capability is off, but the task object stays open, so a
+			// call that names it anyway is refused by name like the rest. Decided before a
+			// single launch file is written.
 			const refusedShares = new Map<SpawnRequest, string>();
 			for (const request of accepted) {
 				const profile = profiles.get(request.name);
 				if (!profile) continue;
-				const problem = refuseUnhonourableShare({
-					request,
-					harness: harnessFor(profile),
-					sharedContext: context.sharedContext,
-				});
+				const problem =
+					refuseUnpermittedShare(config, request) ??
+					refuseUnhonourableShare({
+						request,
+						harness: harnessFor(profile),
+						sharedContext: context.sharedContext,
+					});
 				if (problem) refusedShares.set(request, problem);
 			}
 

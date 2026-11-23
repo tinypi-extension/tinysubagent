@@ -222,13 +222,13 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			paneId,
 			writesSession: harness.writesSession,
 			sessionFile: paths.childSessionFile,
-			// A shared child's file already holds the fork when it launches, so the
-			// watcher's never-started grace counts from there. `+ 1` is the header
-			// line; a spawn without a fork starts with no file at all.
-			sessionEntriesAtLaunch: fork ? fork.entries + 1 : 0,
-			// The same body count the acknowledgment shows, so what a share cost is
-			// read off the file the child was actually handed.
-			sharedContext: fork ? { entries: fork.entries, tokens: fork.tokens } : undefined,
+			// The whole file the child launches with, header included: the watcher's
+			// never-started grace counts from there. A spawn without a fork starts with
+			// no file at all, which the watcher reads as zero.
+			sessionEntriesAtLaunch: fork?.lines,
+			// What the share cost, straight off the fork — the same two figures the
+			// acknowledgment shows.
+			sharedContext: fork?.cost,
 			exitCodeFile: paths.exitCodeFile,
 			reportFile: paths.reportFile,
 			startedAt: Date.now(),

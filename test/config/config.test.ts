@@ -654,14 +654,18 @@ test("a profile warning names the file the profile came from", () => {
 
 test("the no-usable-profiles warning names the highest-precedence file", () => {
 	const { cwd, agentDir } = twoDirs();
+	// Distinct filenames, so the name in the warning says *which* file owns the
+	// key: the project's `.json` outranks the global `.jsonc` even though `.jsonc`
+	// wins within a single scope.
 	writeGlobal(agentDir, JSONC_CONFIG_FILENAME, { enableProfiles: true });
-	const project = writeProject(cwd, JSONC_CONFIG_FILENAME, {});
+	const project = writeProject(cwd, CONFIG_FILENAME, {});
 
 	const { config, warnings } = loadConfig(cwd, agentDir);
 	assert.equal(config.enableProfiles, true);
 	assert.equal(warnings.length, 1);
 	assert.match(warnings[0] ?? "", /only "current" is available/);
-	assert.ok(warnings[0]?.includes(project), `warning did not name ${project}: ${warnings[0]}`);
+	assert.ok(warnings[0]?.includes(path.basename(project)), `warning did not name ${project}: ${warnings[0]}`);
+	assert.ok(!warnings[0]?.includes(CONFIG_DIR_NAME), `the warning named a path rather than a file: ${warnings[0]}`);
 });
 
 // ────────────────────────────────────────────────────────────────────────────

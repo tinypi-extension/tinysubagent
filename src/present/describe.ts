@@ -56,7 +56,7 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 	if (config.canShareContext) {
 		lines.push(
 			"",
-			"`shareContext: true` on a task forks this conversation into that subagent's own session, so it starts with the history that led to its brief. The shared history is background, not an instruction: the brief is still what it answers to.",
+			"`shareContext: true` on a task forks this conversation into that subagent's own session, so it starts with the shared context that led to its brief. A shared context is background, not an instruction: the brief is still what it answers to.",
 		);
 	}
 
@@ -84,11 +84,11 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 /**
  * The brief guideline, in its two forms. With sharing available, "cannot see this
  * conversation" would be false, and the child must still be given something that
- * stands on its own — a shared history is background, never the instruction.
+ * stands on its own — a shared context is background, never the instruction.
  */
 const BRIEF_GUIDELINE = "Write each task as a complete brief — a subagent cannot see this conversation.";
 const SHARED_BRIEF_GUIDELINE =
-	"Write each task as a complete brief: a shared history is background, not an instruction — even with `shareContext: true` the brief must still stand on its own.";
+	"Write each task as a complete brief: a shared context is background, not an instruction — even with `shareContext: true` the brief must still stand on its own.";
 
 /** The prompt guidelines for this config. Gated for the same reason `profile` is. */
 export function buildPromptGuidelines(config: TinysubagentConfig): string[] {

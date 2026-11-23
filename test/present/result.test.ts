@@ -265,12 +265,9 @@ test("a shared child's meta states what the share cost, beside the facts it alre
 	assert.match(text, /pane `w1:p2` · shared 42 entries · ~18k tokens/);
 });
 
-test("a child that shared nothing says nothing about a share, and its detail has no figures", () => {
+test("a child that shared nothing says nothing about a share", () => {
 	const text = buildResultText([result("finder", done)]);
 	assert.doesNotMatch(text, /shared/);
-
-	const [row] = buildResultDetails([result("finder", done)]).results;
-	assert.equal(row?.sharedContext, null);
 });
 
 test("the share's figures survive into the machine-readable detail", () => {

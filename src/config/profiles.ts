@@ -11,8 +11,7 @@
  * session replays a call — which is reported as an error rather than ignored.
  */
 
-import * as path from "node:path";
-import { CONFIG_FILENAME, CURRENT_PROFILE, type TinysubagentConfig } from "./config.ts";
+import { CURRENT_PROFILE, owningConfigFile, type TinysubagentConfig } from "./config.ts";
 import type { Harness, Profile, ThinkingLevel } from "../types.ts";
 
 /** Model + thinking of the orchestrator, used as the fallback for every profile. */
@@ -98,17 +97,13 @@ export function resolveProfile(
 
 	if (!config.enableProfiles) {
 		// Any *named* profile is refused when profiles are off, because that is a
-		// request this configuration genuinely cannot honour. The highest-precedence
-		// file is the one that owned the switch, so it is the one to name — as a
-		// basename, because this string ends up in a tool error, not a log.
-		const source = config.sources[0];
-		const named = source ? path.basename(source.file) : CONFIG_FILENAME;
+		// request this configuration genuinely cannot honour.
 		return {
 			ok: false,
-		error:
-			`profile "${wanted}" cannot be used: profiles are disabled ` +
-			`("enableProfiles" is not true in ${named}). ` +
-			`Only "${CURRENT_PROFILE}" is available.`,
+			error:
+				`profile "${wanted}" cannot be used: profiles are disabled ` +
+				`("enableProfiles" is not true in ${owningConfigFile(config.sources)}). ` +
+				`Only "${CURRENT_PROFILE}" is available.`,
 		};
 	}
 

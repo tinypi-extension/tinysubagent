@@ -104,11 +104,12 @@ export interface RunningSubagent {
 	sessionFile: string;
 	/**
 	 * Session entries the file already held when the child launched: a shared
-	 * child's file starts with the fork's header and body, while an ordinary
-	 * spawn's starts with no file at all (0). The never-started grace counts this
-	 * as the baseline and reads the run as started only once the file holds more.
+	 * child's file starts with the fork's header and body, while an ordinary spawn's
+	 * starts with no file at all. The never-started grace counts this as the
+	 * baseline and reads the run as started only once the file holds more. Absent
+	 * means zero — a spawn that wrote no fork had nothing to launch with.
 	 */
-	sessionEntriesAtLaunch: number;
+	sessionEntriesAtLaunch?: number;
 	/**
 	 * What the fork cost, when this spawn shared the orchestrator's context. Absent
 	 * for a child launched clean, and carried all the way to its report so the
@@ -353,7 +354,7 @@ export function waitForSubagent(
 			// the unchanged file is the normal state of a healthy run.
 			const graceElapsed = Date.now() - running.startedAt >= neverStartedMs;
 			if (running.writesSession && !startedRun && graceElapsed) {
-				startedRun = readSessionEntries(running.sessionFile).length > running.sessionEntriesAtLaunch;
+				startedRun = readSessionEntries(running.sessionFile).length > (running.sessionEntriesAtLaunch ?? 0);
 				if (!startedRun) {
 					// A report can land between `classify` and here. It is the child's own
 					// word, so it outranks the inference; the next tick reads it properly.
