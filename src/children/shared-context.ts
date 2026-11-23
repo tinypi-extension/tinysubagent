@@ -75,7 +75,7 @@ export function buildSharedContextFork(input: BuildSharedContextForkInput): Shar
 	// forks: one root, one link per entry, ids and timestamps untouched.
 	let parentId: string | null = null;
 	const body = copied.map((entry) => {
-		const rendered = { ...entry, parentId };
+		const rendered = { ...withoutSystemPrompt(entry), parentId };
 		parentId = entry.id;
 		return rendered;
 	});
@@ -108,6 +108,26 @@ function shareableEntries(branch: readonly SessionEntry[]): SessionEntry[] {
 /** A message entry's role, or undefined for any other entry kind. */
 function roleOf(entry: SessionEntry): string | undefined {
 	return entry.type === "message" ? (entry.message as { role?: string }).role : undefined;
+}
+
+/**
+ * The orchestrator's prompt, stripped from an entry that carries it.
+ *
+ * pi records its system message — every prompt section and the tool declarations —
+ * on the compaction entry as `systemMessage`, and replays that field as a context
+ * message when the session is loaded. Inheriting it would advertise `subagent` to a
+ * child that cannot spawn and overwrite the allowlist its role declared, which is
+ * exactly what the fork exists to prevent. Removed by key from every entry rather
+ * than from `compaction` alone: the entry types that exist today are not a promise
+ * about where pi writes the prompt next, and the pinned types do not list the
+ * field at all. The summary on the same entry stays — an already-compacted branch
+ * is still shared compacted.
+ */
+function withoutSystemPrompt(entry: SessionEntry): SessionEntry {
+	if (!("systemMessage" in entry)) return entry;
+	const kept: Record<string, unknown> = { ...entry };
+	delete kept.systemMessage;
+	return kept as unknown as SessionEntry;
 }
 
 /** `<timestamp>_<session-id>.jsonl` → `<session-id>`. */

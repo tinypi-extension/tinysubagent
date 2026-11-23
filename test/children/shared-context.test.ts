@@ -115,6 +115,35 @@ test("a compacted branch is copied compacted, summary and all", () => {
 	assert.match(JSON.stringify(body[0]), /they agreed to ship the thing/);
 });
 
+test("a compacted branch carries its summary but never the orchestrator's prompt", () => {
+	// pi 1.5.x records the orchestrator's system message — prompt sections and tool
+	// declarations — on the compaction entry as `systemMessage`, and replays that
+	// field as a context message when the session is loaded. Copied verbatim it
+	// would hand the child exactly what the ADR forbids, so it is stripped; the
+	// summary itself stays, because that is the conversation it is standing in for.
+	// The pinned pi types predate the field, which is why it is cast in.
+	const compaction = {
+		type: "compaction",
+		id: "c0",
+		parentId: null,
+		timestamp: "2026-11-23T06:00:00.000Z",
+		summary: "they agreed to ship the thing",
+		firstKeptEntryId: "m2",
+		tokensBefore: 900,
+		systemMessage: {
+			role: "system",
+			content: [{ type: "text", text: "You are Javis. Tools: subagent({tasks})" }],
+			timestamp: 1,
+		},
+	} as unknown as SessionEntry;
+
+	const { body, jsonl } = render([compaction, message("user", "go on then")]);
+
+	assert.match(jsonl, /they agreed to ship the thing/);
+	assert.doesNotMatch(jsonl, /You are Javis/, "the child inherited the orchestrator's prompt");
+	assert.equal("systemMessage" in (body[0] ?? {}), false);
+});
+
 test("a branch with no user entry has nothing to fork", () => {
 	// Only a prompt was written, so the child would learn nothing but the
 	// orchestrator's system text — which is excluded anyway.
