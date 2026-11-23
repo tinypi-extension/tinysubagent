@@ -488,6 +488,34 @@ test("a project file defining profiles while enableProfiles is off stays silent"
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// canShareContext: one switch, from the highest file that states it
+// ────────────────────────────────────────────────────────────────────────────
+
+test("sharing the orchestrator's context is off unless a file says otherwise", () => {
+	assert.equal(read(missingFile()).config.canShareContext, false);
+	// Literally true, like enableProfiles: a typo must not permit a share.
+	assert.equal(read(writeConfig({ canShareContext: "true" })).config.canShareContext, false);
+	assert.equal(read(writeConfig({ canShareContext: true })).config.canShareContext, true);
+});
+
+test("a project file can switch canShareContext off for its repository", () => {
+	// The gate is a permission, so the scope choosing to withhold it must win — a
+	// merge of the two files (either flag true) would grant what the repo refused.
+	const { cwd, agentDir } = twoDirs();
+	writeGlobal(agentDir, JSONC_CONFIG_FILENAME, { canShareContext: true });
+	writeProject(cwd, JSONC_CONFIG_FILENAME, { canShareContext: false });
+
+	assert.equal(loadConfig(cwd, agentDir).config.canShareContext, false);
+});
+
+test("canShareContext is independent of enableProfiles", () => {
+	// Sharing is not a profile dimension: neither switch may decide the other.
+	const { config } = read(writeConfig({ canShareContext: true }));
+	assert.equal(config.canShareContext, true);
+	assert.equal(config.enableProfiles, false);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // env: a plain NAME → value map, merged per key like profiles
 // ────────────────────────────────────────────────────────────────────────────
 
