@@ -164,7 +164,7 @@ test("the figures charged for a share are the body it wrote — not the header, 
 
 	// The header is the child's own session record, and the orchestrator's prompt is
 	// never copied, so neither may be charged to the share a human is shown.
-	assert.equal(fork.entries, body.length);
-	assert.equal(fork.entries, 3);
-	assert.equal(fork.tokens, Math.ceil(JSON.stringify(body).length / 4));
+	assert.equal(fork.cost.entries, body.length);
+	assert.equal(fork.cost.entries, 3);
+	assert.equal(fork.cost.tokens, Math.ceil(JSON.stringify(body).length / 4));
 });

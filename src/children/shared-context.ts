@@ -38,9 +38,17 @@ export function readSharedContext(sessionManager: SharedContextReader): SharedCo
 	};
 }
 
-export interface SharedContextFork extends ShareCost {
+export interface SharedContextFork {
 	/** The fork, header line first — exactly what goes into the child's file. */
 	jsonl: string;
+	/** What this share costs, for the acknowledgment row and the result meta. */
+	cost: ShareCost;
+	/**
+	 * Lines written to the child's session file: the header plus the body. The
+	 * watcher's launch baseline is the file as a whole, not the share's body count,
+	 * so the fork reports it rather than making the caller add the header back on.
+	 */
+	lines: number;
 }
 
 export interface BuildSharedContextForkInput {
@@ -92,8 +100,8 @@ export function buildSharedContextFork(input: BuildSharedContextForkInput): Shar
 	const jsonl = [header, ...body].map((entry) => `${JSON.stringify(entry)}\n`).join("");
 	return {
 		jsonl,
-		entries: body.length,
-		tokens: approximateTokens(body),
+		cost: { entries: body.length, tokens: approximateTokens(body) },
+		lines: body.length + 1,
 	};
 }
 
