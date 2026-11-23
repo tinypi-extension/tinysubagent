@@ -242,6 +242,7 @@ Everything `tinysubagent.jsonc` accepts:
 | Key | Type | Values |
 | --- | --- | --- |
 | `enableProfiles` | boolean | `true`, `false` |
+| `canShareContext` | boolean | `true`, `false` — permits `shareContext` on a task |
 | `profiles` | object | `{ "<name>": { "harness"?, "model"?, "thinking"? } }` |
 | `defaultTools` | string[] | tool names and `*` patterns |
 | `env` | object | `{ "<VAR>": "<string>" }` |
