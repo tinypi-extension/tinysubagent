@@ -74,7 +74,9 @@ export interface SpawnContext {
 	/**
 	 * The orchestrator's conversation, when a share is possible at all. Omitted
 	 * when `canShareContext` is off or the session has no file (`--no-session`), so
-	 * a request carrying the flag for any reason still launches a clean child.
+	 * a request carrying the flag with no file to fork still launches a clean
+	 * child. A flag with the gate off never reaches here: the tool refuses it by
+	 * name before this context is built.
 	 */
 	sharedContext?: SharedContextSource | null;
 	/**

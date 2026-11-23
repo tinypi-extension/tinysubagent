@@ -707,23 +707,30 @@ test("only classifierModel set keeps the profile list and parameter", () => {
 // The sharing gate: a knob the model is never offered when it is off
 // ────────────────────────────────────────────────────────────────────────────
 
+/** The task object's property names, as the model is offered them. */
+function taskProperties(config: TinysubagentConfig): string[] {
+	const schema = buildParameters(config) as unknown as {
+		properties: { tasks: { items: { properties: Record<string, unknown> } } };
+	};
+	return Object.keys(schema.properties.tasks.items.properties);
+}
+
 test("`shareContext` is on the task object only when the gate is on", () => {
 	const off: TinysubagentConfig = { ...routingConfig(null), canShareContext: false };
 	const on: TinysubagentConfig = { ...off, canShareContext: true };
 
-	assert.equal(JSON.stringify(buildParameters(off)).includes("shareContext"), false);
-	assert.equal(JSON.stringify(buildParameters(on)).includes("shareContext"), true);
+	assert.deepEqual(taskProperties(off), ["agent", "task", "name", "profile"]);
+	assert.ok(taskProperties(on).includes("shareContext"));
 });
 
-test("a call passing `shareContext` while the gate is off fails schema validation", () => {
-	// pi validates the model's arguments with TypeBox before `execute` runs, so the
-	// closed task object is what makes the refusal real rather than cosmetic.
-	const off: TinysubagentConfig = { ...routingConfig(null), canShareContext: false };
-	const on: TinysubagentConfig = { ...off, canShareContext: true };
-	const call = { tasks: [{ agent: "worker", task: "one job", shareContext: true }] };
+test("pi-level validation still accepts a role name in `profile` with profiles off", () => {
+	// pi validates every call against the schema before `execute` runs, so a closed
+	// task object turned a benign extra key into a dead batch. The task object stays
+	// open; a key the gate does not permit is refused by the tool body instead.
+	const config: TinysubagentConfig = { ...routingConfig(null), enableProfiles: false, canShareContext: false };
+	const call = { tasks: [{ agent: "worker", task: "x", profile: "worker" }] };
 
-	assert.equal(Check(buildParameters(off), call), false);
-	assert.equal(Check(buildParameters(on), call), true);
+	assert.equal(Check(buildParameters(config), call), true);
 });
 
 test("the prompt stops claiming a subagent cannot see the conversation when sharing is available", () => {
@@ -1640,14 +1647,21 @@ test("a shared task hands the child a fork of this conversation", async () => {
 	}
 });
 
-test("with the gate off a `shareContext` flag reaches no child, whatever the caller sends", async () => {
-	// The schema already refuses the key; this is the second line of defence, so a
-	// config that never permitted a share cannot produce one.
+test("with the gate off a `shareContext` call is refused by name and opens no pane", async () => {
+	// The schema merely omits the key, so a stray `shareContext` still reaches
+	// `execute` (pi must never fail a whole batch over a benign extra key). The
+	// refusal therefore happens here, before any child launches, and names the gate
+	// and the file that would set it.
 	const h = harness(routingConfig(null), () => async () => ({ choice: "current" }), { branch: orchestratorBranch() });
 	try {
-		await withSpawnHerdrStub(() =>
-			executeSettled(h, { tasks: [{ agent: "worker", task: "the rest", shareContext: true }] }),
+		const result = await withSpawnHerdrStub(() =>
+			executeTool(h.tool, h.ctx, { tasks: [{ agent: "worker", task: "the rest", shareContext: true }] }),
 		);
+		const text = contentText(result);
+		assert.equal(isErrorFlag(result), true, `a share the gate refuses was accepted: ${text}`);
+		assert.match(text, /canShareContext/, `the refusal did not name the gate: ${text}`);
+		assert.match(text, /tinysubagent\.json/, `the refusal did not name the config file: ${text}`);
+		assert.equal(writtenScripts(h.cwd).length, 0, "a refused share still spawned");
 		assert.deepEqual(childSessionFiles(h.cwd), []);
 	} finally {
 		h.stop();

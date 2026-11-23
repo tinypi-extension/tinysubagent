@@ -8,7 +8,8 @@
  */
 
 import { existsSync } from "node:fs";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { basename, isAbsolute, join, resolve as resolvePath } from "node:path";
+import { CONFIG_FILENAME, type TinysubagentConfig } from "../config/config.ts";
 import type { SpawnRequest, ToolParams } from "./contract.ts";
 
 export const MAX_PARALLEL_TASKS = 4;
@@ -64,6 +65,29 @@ export function collectRequests(
 // ────────────────────────────────────────────────────────────────────────────
 // Session-derived values
 // ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Refuse a share the config never permitted, naming the key and the file that
+ * would set it. The schema leaves `shareContext` out of the task object while the
+ * gate is off, but a benign extra key must never fail a whole batch at pi's
+ * validation layer — so an impossible share is refused here, before any pane
+ * opens, rather than by the schema.
+ */
+export function refuseUnpermittedShare(
+	config: TinysubagentConfig,
+	requests: readonly SpawnRequest[],
+): string | null {
+	if (config.canShareContext === true) return null;
+	if (!requests.some((request) => request.shareContext === true)) return null;
+	// The highest-precedence file owns the switch, so it is the one to name — as a
+	// basename, because this string ends up in a tool error, not a log.
+	const source = config.sources[0];
+	const named = source ? basename(source.file) : CONFIG_FILENAME;
+	return (
+		`shareContext cannot be used: sharing this conversation is disabled ` +
+		`("canShareContext" is not true in ${named}).`
+	);
+}
 
 /** A project-local `.pi/agent` shadows the user's agent dir for the child. */
 export function resolveProjectAgentDir(cwd: string): string | null {

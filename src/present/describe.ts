@@ -106,9 +106,12 @@ export function buildPromptGuidelines(config: TinysubagentConfig): string[] {
  * Per-task `profile` exists whenever profiles are enabled. During automatic
  * routing, an explicitly supplied profile overrides the router.
  *
- * `shareContext` exists only when the capability is on. The task object is closed
- * (`additionalProperties: false`) so pi's schema validation rejects the key
- * outright while the gate is off, rather than silently ignoring it.
+ * `shareContext` exists only when the capability is on: the key is left out of
+ * the task object while the gate is off, so the model is never offered it. The
+ * task object stays open (`additionalProperties` is not closed) because pi
+ * validates every call against this schema before `execute` runs: a benign extra
+ * key must never fail a whole batch. A share the gate does not permit is refused
+ * by name in the tool body, before any pane opens.
  */
 export function buildParameters(config: TinysubagentConfig) {
 	const profileOffered = config.enableProfiles;
@@ -131,7 +134,7 @@ export function buildParameters(config: TinysubagentConfig) {
 						),
 					}
 					: {}),
-			}, { additionalProperties: false }),
+			}),
 			{
 				minItems: 1,
 				maxItems: MAX_PARALLEL_TASKS,

@@ -40,7 +40,7 @@ import { readSharedContext } from "../children/shared-context.ts";
 import { discoverAgents } from "../config/agents.ts";
 import { type TinysubagentConfig } from "../config/config.ts";
 import { resolveProfile } from "../config/profiles.ts";
-import { collectRequests, resolveCwd, resolveProjectAgentDir } from "../children/requests.ts";
+import { collectRequests, refuseUnpermittedShare, resolveCwd, resolveProjectAgentDir } from "../children/requests.ts";
 import { errorMessage } from "../children/contract.ts";
 import { parentModelSpec, parentThinking, spawnOne } from "../children/spawn.ts";
 import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.ts";
@@ -170,6 +170,12 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 
 			const mode = collectRequests(params);
 			if (!mode.ok) return failure(mode.error);
+
+			// The schema omits `shareContext` while the gate is off, but the task object
+			// stays open so a stray key cannot fail the batch at pi's validation layer.
+			// The share itself is refused here instead, by name and before any pane opens.
+			const shareProblem = refuseUnpermittedShare(config, mode.requests);
+			if (shareProblem) return failure(shareProblem);
 
 			// Names identify subagents in results; they do not reserve a name against
 			// another request, either in this batch or a concurrent call.
