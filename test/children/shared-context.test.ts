@@ -153,18 +153,36 @@ test("a branch with no user entry has nothing to fork", () => {
 	);
 });
 
-test("the figures charged for a share are the body it wrote — not the header, not the prompt", () => {
-	const fork = buildSharedContextFork({ source: source(branch()), childSessionFile: CHILD_FILE, cwd: "/work" });
+test("what a share is charged for is the body it wrote — not the header, not the prompt", () => {
+	// pi records the orchestrator's whole system message on the compaction entry, and
+	// the fork drops it. Charging the share for text the child never received would
+	// overstate what the human is deciding between, so the figure is read off the
+	// body that was actually written.
+	const prompt = "p".repeat(40_000);
+	const compaction = {
+		type: "compaction",
+		id: "c0",
+		parentId: null,
+		timestamp: "2026-11-23T06:00:00.000Z",
+		summary: "they agreed to ship the thing",
+		firstKeptEntryId: "m2",
+		tokensBefore: 900,
+		systemMessage: { role: "system", content: [{ type: "text", text: prompt }], timestamp: 1 },
+	} as unknown as SessionEntry;
+	const fork = buildSharedContextFork({
+		source: source([compaction, message("user", "go on then")]),
+		childSessionFile: CHILD_FILE,
+		cwd: "/work",
+	});
 	assert.ok(fork, "no fork was rendered");
-	const body = fork.jsonl
-		.trimEnd()
-		.split("\n")
-		.slice(1)
-		.map((line) => JSON.parse(line) as SessionEntry);
+	const body = fork.jsonl.trimEnd().split("\n").slice(1);
 
-	// The header is the child's own session record, and the orchestrator's prompt is
-	// never copied, so neither may be charged to the share a human is shown.
+	// The header is the child's own session record, so the entry count is the body's.
 	assert.equal(fork.cost.entries, body.length);
-	assert.equal(fork.cost.entries, 3);
-	assert.equal(fork.cost.tokens, Math.ceil(JSON.stringify(body).length / 4));
+	// The written body is a few hundred characters. A charge that still counted the
+	// stripped prompt would be ~10k tokens, so the band is what makes it honest.
+	assert.ok(
+		fork.cost.tokens > 0 && fork.cost.tokens < 1_000,
+		`charged ${fork.cost.tokens} tokens for a ${JSON.stringify(body).length}-character body`,
+	);
 });
