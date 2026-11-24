@@ -4,17 +4,21 @@
 
 **Blocked by:** 01.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] With no pane host detected, the tool registers and a batch of children runs; nothing about detection changes for herdr or Rex, which still win when present.
-- [ ] A detected-but-unready pane host keeps its existing readiness problem and its one-step fix; it never degrades into a headless run.
-- [ ] A plain-terminal child is started with no pty and piped stdio, in pi's JSON event mode chosen explicitly in the argv rather than as a side effect of a non-tty, and behaves identically when the orchestrator's own stdio happens to be a tty.
-- [ ] A plain-terminal child keeps the same wrapper, environment, direnv/launch-prefix handling, session file, tool list, brief and role as a pane-host child; only the supervision differs.
-- [ ] The child's stdout is read continuously and never synchronously, and a child does not stall when its output outruns the reader.
-- [ ] A wait ends on a report or on process exit, whichever comes first.
-- [ ] Exit zero with no report is the existing content-free completion: no summary, and no process left behind.
-- [ ] Exit non-zero with no report is a failure carrying the exit code.
-- [ ] A report that declares failure is reported as a failure on the same footing as a non-zero exit.
-- [ ] The reminder for an unreported turn end still works in a non-interactive run, with the same budget and the same content-free completion after it.
-- [ ] The registration test that asserts the tool registers nothing outside a pane host is replaced by tests for: registers under a pane host, registers in a plain terminal, and prefers the pane host when one is detected.
-- [ ] Every pane-host behaviour asserted today still passes unchanged.
+- [x] With no pane host detected, the tool registers and a batch of children runs; nothing about detection changes for herdr or Rex, which still win when present.
+- [x] A detected-but-unready pane host keeps its existing readiness problem and its one-step fix; it never degrades into a headless run.
+- [x] A plain-terminal child is started with no pty and piped stdio, in pi's JSON event mode chosen explicitly in the argv rather than as a side effect of a non-tty, and behaves identically when the orchestrator's own stdio happens to be a tty.
+- [x] A plain-terminal child keeps the same wrapper, environment, direnv/launch-prefix handling, session file, tool list, brief and role as a pane-host child; only the supervision differs.
+- [x] The child's stdout is read continuously and never synchronously, and a child does not stall when its output outruns the reader.
+- [x] A wait ends on a report or on process exit, whichever comes first.
+- [x] Exit zero with no report is the existing content-free completion: no summary, and no process left behind.
+- [x] Exit non-zero with no report is a failure carrying the exit code.
+- [x] A report that declares failure is reported as a failure on the same footing as a non-zero exit.
+- [x] The reminder for an unreported turn end still works in a non-interactive run, with the same budget and the same content-free completion after it.
+- [x] The registration test that asserts the tool registers nothing outside a pane host is replaced by tests for: registers under a pane host, registers in a plain terminal, and prefers the pane host when one is detected.
+- [x] Every pane-host behaviour asserted today still passes unchanged.
+
+## Resolution
+
+Landed on `plain-terminal`: `b4caa55` (merge 1df9a1e). The plain-terminal kind (`src/pane-host/plain.ts`): pi's JSON event mode chosen in the argv, piped stdio, own process group, no pty, no hold-open, injectable spawn for tests. The tool now registers unconditionally and detection only picks the supervisor. Wait ends on a report or a process exit; `paneId` became optional on `RunningSubagent`/`SubagentResult`. The old "registers nothing outside a pane host" test was replaced by registers-under-a-host / registers-in-plain / host-wins.

@@ -4,13 +4,17 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Herdr and Rex registration, spawn, layout, rename, reports, Esc interrupt and close behaviour are unchanged.
-- [ ] Every existing pane-host test passes without modification.
-- [ ] The seam carries host detection, the capability probe, opening a child, a liveness signal, stopping a child, and closing a child.
-- [ ] Pane-only operations — layout read, resize, rename, focus, relay-interrupt-by-typing-Esc — are reachable only through the pane-host kind, not through the supervision seam.
-- [ ] The pane-host adapter is wrapped for conformance rather than rewritten; its operations and behaviour are untouched.
-- [ ] No call site outside the seam inspects a host's environment variables or speaks a host's CLI.
-- [ ] Waiting, report reading, reminding and batch result assembly remain shared code, not per-kind branches.
-- [ ] No plain-terminal behaviour, no new registration path and no new spawn recipe is introduced by this ticket.
+- [x] Herdr and Rex registration, spawn, layout, rename, reports, Esc interrupt and close behaviour are unchanged.
+- [x] Every existing pane-host test passes without modification.
+- [x] The seam carries host detection, the capability probe, opening a child, a liveness signal, stopping a child, and closing a child.
+- [x] Pane-only operations — layout read, resize, rename, focus, relay-interrupt-by-typing-Esc — are reachable only through the pane-host kind, not through the supervision seam.
+- [x] The pane-host adapter is wrapped for conformance rather than rewritten; its operations and behaviour are untouched.
+- [x] No call site outside the seam inspects a host's environment variables or speaks a host's CLI.
+- [x] Waiting, report reading, reminding and batch result assembly remain shared code, not per-kind branches.
+- [x] No plain-terminal behaviour, no new registration path and no new spawn recipe is introduced by this ticket.
+
+## Resolution
+
+Landed on `plain-terminal`: `f8c3865` (merge d6c0b23). `PaneHost` widened into a `Supervisor` seam (`open`/`ended`/`stop`/`close`, plus a carried `SupervisorHandle` so a child is closed by the supervisor that opened it). Pane-only members stayed behind a `PaneHostSupervisor` conformance wrapper; `herdr.ts` and `rex.ts` are byte-identical. All 594 pre-existing tests pass unmodified; 6 new seam tests.

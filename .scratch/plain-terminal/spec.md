@@ -1,6 +1,6 @@
 # Spec: a plain terminal is a supervisor too
 
-Status: ready-for-agent
+Status: resolved
 
 Spec approved in session with the user; every decision below is a decision, not a proposal.
 Vocabulary follows `GLOSSARY.md` (`Supervisor`, `Plain terminal`, `Live line`, `Pane host`,
@@ -287,3 +287,5 @@ unchanged, so the skip is proven additive rather than a quiet regression.
   stdout is entirely ignored, which is why switching that stream to JSON events costs nothing.
 - A pane host being present but unready stays an error with a fix. If users later want to force a
   headless batch from inside herdr, that is a separate change with its own setting.
+
+Tickets: `issues/01`–`07`. Implemented on `plain-terminal`, seven tickets, then one review-fix commit (`3635147`) closing nine defects the two-axis review found — a turn-end report that still promised a pane, a plain wait that could hang on a killed wrapper, a scraped summary that should not exist without a pane, a `stop` that missed a lingering process group, glossary rows still asserting every child owns a pane, two stale gate comments, an optional member that was always implemented, a per-batch leak for pane-less children, and a detached-process comment that overclaimed.
