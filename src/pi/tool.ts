@@ -102,11 +102,18 @@ function renderReport(details: AckDetails, theme: Theme): string[] {
 		const summary = entry.summary?.trim() ?? "";
 		lines.push(
 			summary === ""
-				? theme.fg("muted", emptySummaryText({ kind: entry.outcome, via: entry.via, cause: entry.cause }, entry.paneId))
+				? theme.fg("muted", emptySummaryText({ kind: entry.outcome, via: entry.via, cause: entry.cause, reason: entry.reason }, entry.paneId))
 				: entry.outcome === "failed"
 					? theme.fg("error", `Error: ${summary}`)
 					: summary,
 		);
+
+		// The same evidence the model reads: a failure's stderr tail, indented so no
+		// line of a program's output can pose as this report's own prose.
+		if (entry.stderr !== undefined && entry.stderr.trim() !== "") {
+			lines.push(theme.fg("muted", "Failure output (stderr tail):"));
+			for (const line of entry.stderr.split("\n")) lines.push(theme.fg("muted", `    ${line}`));
+		}
 	}
 
 	// What never became a child, after the children that did.

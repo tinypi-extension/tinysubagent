@@ -163,6 +163,13 @@ export interface Supervisor {
 	 * present and inert.
 	 */
 	output?(child: SupervisorHandle, onText: (chunk: string) => void): () => void;
+	/**
+	 * The end of a child's stderr as it stands, for a failure report; empty when the
+	 * child wrote nothing there. Only a kind that gives a child a stderr stream of
+	 * its own has this: a pane child's crash is readable on its pane, so the member
+	 * is absent there rather than present and empty.
+	 */
+	stderr?(child: SupervisorHandle): string;
 }
 
 /** A supervisor whose kind is a pane host: the only home of the pane-only operations. */
