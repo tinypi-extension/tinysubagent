@@ -62,6 +62,18 @@ export function statusLabel(outcome: SubagentOutcome): string {
 	}
 }
 
+/**
+ * How one child's ending is named in the report.
+ *
+ * The pane wording {@link statusLabel} carries is true only of a child that has a
+ * pane. A plain child's interrupt stopped its processes and closed nothing, so it
+ * says that instead of naming a pane that never existed.
+ */
+function endingLabel(result: SubagentResult): string {
+	if (result.outcome.kind === "interrupted" && result.paneId === undefined) return "interrupted (process stopped)";
+	return statusLabel(result.outcome);
+}
+
 /** Collapse a task to a single readable line for the result header. */
 export function oneLine(task: string, limit = 160): string {
 	const flat = task.replace(/\s+/g, " ").trim();
@@ -92,6 +104,13 @@ function header(results: readonly SubagentResult[]): string {
 function interruptNote(results: readonly SubagentResult[]): string | null {
 	const interrupted = results.filter((result) => result.outcome.kind === "interrupted");
 	if (interrupted.length === 0) return null;
+	// A child with no pane was stopped as a process, so there is no pane fate to
+	// report — not even a shutdown's, because that kill runs here too.
+	if (interrupted.every((result) => result.paneId === undefined)) {
+		if (interrupted.length === results.length) return "The batch was interrupted: every child was stopped.";
+		if (interrupted.length === 1) return "The batch was interrupted: the interrupted child was stopped.";
+		return "The batch was interrupted: the interrupted children were stopped.";
+	}
 	const leftOpen = interrupted.some(
 		(result) => result.outcome.kind === "interrupted" && result.outcome.cause === "shutdown",
 	);
@@ -150,6 +169,9 @@ export function emptySummaryText(
 			: "_(no summary: the child never reported before its session exited)_";
 	}
 	if (outcome.kind === "interrupted") {
+		if (paneId === undefined) {
+			return "_(no summary: the child was interrupted and its processes were stopped)_";
+		}
 		return outcome.cause === "shutdown"
 			? "_(no summary: the child was interrupted and its pane was left open)_"
 			: "_(no summary: the child was interrupted and its pane was closed)_";
@@ -182,8 +204,8 @@ function section(result: SubagentResult, index: number, total: number): string {
 
 	const heading =
 		total === 1
-			? `## ${result.name} — ${statusLabel(result.outcome)}, ${formatDuration(result.elapsedMs)}`
-			: `## ${index + 1}. ${result.name} — ${statusLabel(result.outcome)}, ${formatDuration(result.elapsedMs)}`;
+			? `## ${result.name} — ${endingLabel(result)}, ${formatDuration(result.elapsedMs)}`
+			: `## ${index + 1}. ${result.name} — ${endingLabel(result)}, ${formatDuration(result.elapsedMs)}`;
 
 	return [
 		heading,
@@ -273,7 +295,7 @@ export function buildResultDetails(results: readonly SubagentResult[]): ResultDe
 				task: result.task,
 				elapsedMs: result.elapsedMs,
 				elapsed: formatDuration(result.elapsedMs),
-				status: statusLabel(outcome),
+				status: endingLabel(result),
 				outcome: outcome.kind,
 				via: outcome.kind === "completed" ? outcome.via : undefined,
 				cause: outcome.kind === "interrupted" ? outcome.cause : undefined,
