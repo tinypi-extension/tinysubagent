@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 
 import { piHarness } from "./harness/index.ts";
+import type { LaunchMode } from "./harness/types.ts";
 
 /** Single-quote a string for bash. The only quoting form used in generated scripts. */
 export function shellEscape(value: string): string {
@@ -38,6 +39,11 @@ export interface LaunchScriptOptions {
 	/** Plain NAME → value pairs from the settings file, exported before launch-owned vars. */
 	env?: Record<string, string>;
 	harness?: "pi" | "agy";
+	/**
+	 * How the child is supervised. Absent or `"pane"` produces the pane wrapper
+	 * byte for byte; `"headless"` drops what only a pane can act on.
+	 */
+	mode?: LaunchMode;
 }
 
 export const DEFAULT_HOLD_OPEN_SECS = 15;
@@ -47,12 +53,18 @@ export const DEFAULT_HOLD_OPEN_SECS = 15;
  *
  *   - run pi in the child session,
  *   - always stamp `<sessionFile>.exitcode` with `"<code> <runId>"`,
- *   - exit with pi's code, so the pane closes itself.
+ *   - exit with pi's code, so the child ends by itself.
  *
  * A non-zero exit shortly after start is almost always a launch problem (bad
- * model, bad flag), so the pane is held open briefly to let a human read it.
+ * model, bad flag), so a pane is held open briefly to let a human read it. A
+ * headless child has no pane to hold and nobody to press Enter: its exit code is
+ * the whole report, so the wrapper simply ends.
  */
 export function buildLaunchScript(opts: LaunchScriptOptions): string {
+	// Properties of the supervision kind, not of a failure: a headless child has
+	// no pane id to forward and no terminal to be held open in.
+	const headless = opts.mode === "headless";
+
 	const piCommand =
 		(opts.launchPrefix ? `${opts.launchPrefix} ` : "") +
 		opts.piArgv.map((arg) => shellEscape(arg)).join(" ");
@@ -89,9 +101,12 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
 		`export PI_TINYSUBAGENT_ID=${shellEscape(opts.id)}`,
 		`export PI_TINYSUBAGENT_SESSION=${shellEscape(opts.childSessionFile)}`,
 		`export PI_TINYSUBAGENT_REPORT=${shellEscape(opts.reportFile)}`,
-		// The pane id only exists inside the pane — forward what herdr injected.
-		'export PI_TINYSUBAGENT_PANE="${HERDR_PANE_ID:-}"',
 	);
+
+	if (!headless) {
+		// The pane id only exists inside the pane — forward what herdr injected.
+		lines.push('export PI_TINYSUBAGENT_PANE="${HERDR_PANE_ID:-}"');
+	}
 
 	if (opts.agent) {
 		lines.push(`export PI_TINYSUBAGENT_AGENT=${shellEscape(opts.agent)}`);
@@ -112,7 +127,7 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
 	}
 	lines.push(`echo "$code $PI_TINYSUBAGENT_ID" > ${shellEscape(opts.exitCodeFile)}`);
 
-	const holdOpenSecs = opts.holdOpenSecs ?? DEFAULT_HOLD_OPEN_SECS;
+	const holdOpenSecs = headless ? 0 : (opts.holdOpenSecs ?? DEFAULT_HOLD_OPEN_SECS);
 	if (holdOpenSecs > 0) {
 		lines.push(
 			`if [ "$code" -ne 0 ] && [ "$SECONDS" -lt ${holdOpenSecs} ]; then`,
@@ -136,6 +151,8 @@ export interface PiArgvOptions {
 	thinking?: string | null;
 	tools?: string[] | null;
 	taskFile: string;
+	/** Supervision kind, passed to the harness; absent means a pane host. */
+	mode?: LaunchMode;
 }
 
 /**

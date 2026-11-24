@@ -96,8 +96,11 @@ export interface PaneHost {
 	relayInterrupt(paneIds: readonly string[]): Promise<void>;
 }
 
-/** The kinds of supervisor this extension can choose. A pane host is one. */
-export type SupervisorKind = PaneHostKind;
+/**
+ * The kinds of supervisor this extension can choose: a pane host, or the plain
+ * terminal that has none.
+ */
+export type SupervisorKind = PaneHostKind | "plain";
 
 /**
  * Where a child's pane is born, when the chosen kind of supervisor is a pane
@@ -152,6 +155,14 @@ export interface Supervisor {
 	/** Stop one child: the operator's interrupt, not a kill. Never rejects. */
 	stop(child: SupervisorHandle): Promise<void>;
 	close(child: SupervisorHandle): Promise<boolean>;
+	/**
+	 * Subscribe to a child's stdout as text; returns the unsubscribe.
+	 *
+	 * Only a kind that reads a child's output has this: a pane child is addressed
+	 * by its pane, not by a stream, so the member is absent there rather than
+	 * present and inert.
+	 */
+	output?(child: SupervisorHandle, onText: (chunk: string) => void): () => void;
 }
 
 /** A supervisor whose kind is a pane host: the only home of the pane-only operations. */

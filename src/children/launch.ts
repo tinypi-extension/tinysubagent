@@ -12,4 +12,5 @@ export {
 	shellEscape, DEFAULT_HOLD_OPEN_SECS, buildLaunchScript, buildPiArgv, resolvePiBin,
 	resolveLaunchPrefix, type LaunchScriptOptions, type PiArgvOptions,
 } from "./launch-script.ts";
+export type { LaunchMode } from "./harness/types.ts";
 export { buildTaskMarkdown } from "./task-markdown.ts";

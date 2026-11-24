@@ -1,10 +1,12 @@
 /**
- * Turning a validated request into a running pane.
+ * Turning a validated request into a running child.
  *
  * This module owns the whole spawn recipe: resolve the role, resolve the
  * profile, plan the artifact paths, generate the wrapper script, write it, and
- * ask the pane host for a pane. It is deliberately free of any pi extension API so the
- * recipe can be exercised directly by tests and by the smoke harness.
+ * ask the chosen supervisor to start it — a pane where a pane host owns this
+ * terminal, a detached process where none does. It is deliberately free of any
+ * pi extension API so the recipe can be exercised directly by tests and by the
+ * smoke harness.
  *
  * Nothing here waits for a child. Waiting is the watcher's job.
  */
@@ -20,14 +22,16 @@ import {
 	paneHostOf,
 	planPlacement,
 	planResizes,
-	supervisor,
+	supervisor as activeSupervisor,
 	type PaneHost,
 	type Placement,
+	type Supervisor,
 	type SupervisorHandle,
 } from "../pane-host/index.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { declaresSpawnTool, resolveToolList } from "../tool-list.ts";
 import { isThinkingLevel, TOOL_NAME, type ThinkingLevel } from "../types.ts";
+import type { LaunchMode } from "./harness/types.ts";
 import { errorMessage, type SpawnContext, type SpawnFailed, type SpawnRequest, type Spawned } from "./contract.ts";
 
 /**
@@ -115,6 +119,18 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// The one entry a role's list cannot have is the way to hand the result back.
 	// The resolver appends it whenever an allowlist exists.
 	const id = runId();
+
+	// Which supervisor runs this child, decided once and read twice: once here, to
+	// say how the child is launched, and once below, to open it. A context may name
+	// its own supervisor (a test with an injected spawn); otherwise the seam's
+	// active kind decides, and no call site reads a terminal's environment itself.
+	const seam: Supervisor = context.supervisor ?? activeSupervisor;
+	const panes = paneHostOf(seam);
+	// The mode is a property of the supervision kind, not of an argv default: a
+	// pane renders the child's UI, so a pane child is interactive; a plain terminal
+	// has nowhere to render it, so a plain child runs headless and exits on its own.
+	const mode: LaunchMode = panes === null ? "headless" : "pane";
+
 	const paths = buildLaunchPaths({
 		sessionDir: context.sessionDir,
 		sessionId: context.sessionId,
@@ -133,6 +149,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		thinking: profile.thinking,
 		tools,
 		taskFile: paths.taskFile,
+		mode,
 	});
 
 	const script = buildLaunchScript({
@@ -149,6 +166,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		exitCodeFile: paths.exitCodeFile,
 		launchPrefix: resolveLaunchPrefix(context.env, context.cwd),
 		harness: profile.harness,
+		mode,
 	});
 
 	// The shared context: a fork of the orchestrator's branch, written where the
@@ -178,7 +196,6 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// the orchestrator, so it is both the birth split target and the reference
 	// rect the 3/5 pass measures against. The pane-only operations come from the
 	// chosen supervisor's pane kind; another kind of supervisor simply has none.
-	const panes = paneHostOf(supervisor);
 	const orchestratorPaneId = panes?.currentPaneId(context.env) ?? null;
 	const columns = context.columns;
 
@@ -192,14 +209,21 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 	let child: SupervisorHandle;
 	try {
-		child = await supervisor.open({
+		child = await seam.open({
 			cwd: context.cwd,
 			scriptPath: paths.scriptFile,
 			label: request.name,
-			pane: { targetPaneId, direction, focus: false },
+			// A placement only means something to a kind that has panes. Asking a plain
+			// terminal for one would be asking it to place something it does not have.
+			...(panes ? { pane: { targetPaneId, direction, focus: false } } : {}),
 		});
 	} catch (error) {
-		return { ok: false, error: `could not open a pane: ${errorMessage(error)}` };
+		return {
+			ok: false,
+			error: panes
+				? `could not open a pane: ${errorMessage(error)}`
+				: `could not start the child: ${errorMessage(error)}`,
+		};
 	}
 
 	// The resize pass only runs when the pane is tracked. It reads the layout a
@@ -211,7 +235,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		await applySpawnResizes(panes, columns, orchestratorPaneId, child.id, warnings);
 	}
 
-	// Cosmetic: a rename failure must not fail the spawn.
+	// Cosmetic: a rename failure must not fail the spawn. Only a pane can be named.
 	if (panes) void panes.renameChild(child.id, request.name);
 
 	return {
@@ -222,7 +246,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			name: request.name,
 			agent: request.agent,
 			profile: { name: profile.name, model: profile.model, thinking: profile.thinking },
-			paneId: child.id,
+			paneId: panes ? child.id : undefined,
 			child,
 			writesSession: harness.writesSession,
 			sessionFile: paths.childSessionFile,

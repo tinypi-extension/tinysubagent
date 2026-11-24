@@ -1,10 +1,11 @@
 /**
  * Registration wiring.
  *
- * Who registers nothing is as important as who registers something: outside
- * herdr there is no pane to split, so the tool must not appear at all. Both
- * sides of that decision are pinned here, and the capability probe is only a
- * matter of the environment, so the stub API needs no herdr.
+ * The tool is registered in every session, and detection only chooses how a child
+ * is supervised: a pane host gives it a pane, a plain terminal runs it as a
+ * headless process. Both sides of that choice are pinned here, and the
+ * capability probe is only a matter of the environment, so the stub API needs no
+ * herdr.
  */
 
 import { strict as assert } from "node:assert";
@@ -18,6 +19,7 @@ import { discoverAgents } from "../../src/config/agents.ts";
 import { loadConfig } from "../../src/config/config.ts";
 import { PLUGIN_ID, type TabLayout } from "../../src/herdr/cli.ts";
 import { LiveSubPanes } from "../../src/herdr/layout.ts";
+import { supervisor } from "../../src/pane-host/index.ts";
 import { MAX_PARALLEL_TASKS } from "../../src/children/requests.ts";
 import { TOOL_NAME } from "../../src/types.ts";
 
@@ -87,23 +89,46 @@ function withEnv(env: Record<string, string | undefined>, run: () => void): void
 
 const INSIDE = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/tmp/herdr.sock" };
 
-test("outside herdr and Rex the tool is not registered at all", () => {
+test("in a plain terminal the tool is registered, with no pane host anywhere", () => {
 	const stub = stubApi();
 	withEnv({}, () => {
-		// Inside a host for real in this shell, but pretending not to be: the gate is the point.
+		// Inside a host for real in this shell, but pretending not to be: the choice
+		// under test is which kind of supervisor this registration gets.
 		tinysubagent(stub.api as never);
+		// No pane to split is not a reason to refuse: a plain child runs as a process.
+		assert.equal(supervisor.kind, "plain");
 	});
-	assert.deepEqual(stub.tools, []);
-	// Nothing is even listened for, so a stray session cannot wake anything up.
-	assert.equal(stub.listeners.size, 0);
+	assert.deepEqual(
+		stub.tools.map((tool) => tool.name),
+		[TOOL_NAME],
+	);
+	// The session hooks come with the tool, so its watchers can still be ended.
+	assert.equal(typeof stub.listeners.get("session_start"), "function");
 });
 
-test("a half-set herdr environment still counts as outside herdr", () => {
+test("a half-set herdr environment counts as a plain terminal", () => {
 	const stub = stubApi();
 	withEnv({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: undefined }, () => {
 		tinysubagent(stub.api as never);
+		assert.equal(supervisor.kind, "plain");
 	});
-	assert.deepEqual(stub.tools, []);
+	assert.deepEqual(
+		stub.tools.map((tool) => tool.name),
+		[TOOL_NAME],
+	);
+});
+
+test("a detected pane host wins over the plain terminal it would otherwise be", () => {
+	const stub = stubApi();
+	withEnv({ ...INSIDE, REX_SESSION: "sess-1", REX_BLOCK: "block-full-1", REX_SERVER: "server-1" }, () => {
+		tinysubagent(stub.api as never);
+		// Both are readable; herdr is the one this pi is actually inside.
+		assert.equal(supervisor.kind, "herdr");
+	});
+	assert.deepEqual(
+		stub.tools.map((tool) => tool.name),
+		[TOOL_NAME],
+	);
 });
 
 test("inside herdr it registers exactly one tool under the expected name", () => {

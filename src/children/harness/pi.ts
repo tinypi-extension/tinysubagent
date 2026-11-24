@@ -23,9 +23,14 @@ function resolvePiBin(env: NodeJS.ProcessEnv): string {
  * Child argv. Model and thinking are two independent flags — the `model:thinking`
  * colon syntax is not used here. The task is delivered as a file reference so
  * the prompt never appears in `ps` output and never needs escaping.
+ *
+ * Headless mode is explicit rather than inferred from a missing terminal: a child
+ * with no pane to render into runs pi's JSON event mode, which runs the prompt
+ * and then exits. The pane argv keeps no mode flag at all.
  */
 function buildPiArgv(spec: HarnessArgvSpec): string[] {
 	const argv = [spec.bin, "--session", spec.childSessionFile, "-e", spec.childExtensionPath];
+	if (spec.mode === "headless") argv.push("--mode", "json");
 	if (spec.name) argv.push("--name", spec.name);
 	if (spec.model) argv.push("--model", spec.model);
 	if (spec.thinking) argv.push("--thinking", spec.thinking);

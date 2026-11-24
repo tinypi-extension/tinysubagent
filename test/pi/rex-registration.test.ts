@@ -7,6 +7,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import tinysubagent from "../../index.ts";
+import { supervisor } from "../../src/pane-host/index.ts";
 import { TOOL_NAME } from "../../src/types.ts";
 
 function stubApi() {
@@ -55,10 +56,16 @@ test("a Rex block registers the subagent tool", () => {
 	);
 });
 
-test("a half-set Rex context stays outside the pane hosts", () => {
+test("a half-set Rex context counts as a plain terminal", () => {
 	const stub = stubApi();
 	withEnv({ REX_SESSION: "sess-1" }, () => {
 		tinysubagent(stub.api as never);
+		// Neither host is fully detected, so there is no pane to split — and a plain
+		// terminal supervises the child as a process instead.
+		assert.equal(supervisor.kind, "plain");
 	});
-	assert.deepEqual(stub.tools, []);
+	assert.deepEqual(
+		stub.tools.map((tool) => tool.name),
+		[TOOL_NAME],
+	);
 });
