@@ -27,7 +27,7 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./src/config/agents.ts";
 import { loadConfig } from "./src/config/config.ts";
-import { activatePaneHost, detectPaneHost, LiveSubPanes, paneHost } from "./src/pane-host/index.ts";
+import { activatePaneHost, detectPaneHost, LiveSubPanes, supervisor } from "./src/pane-host/index.ts";
 import { buildParameters } from "./src/present/describe.ts";
 import { registerLifecycle } from "./src/pi/lifecycle.ts";
 import { offerPluginFix, type PluginFixGuard } from "./src/pi/plugin-fix.ts";
@@ -68,7 +68,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 	const fixOffered: PluginFixGuard = { value: false };
 
 	/** Cached capability probe for this registration. */
-	const capability = paneHost.createCapability();
+	const capability = supervisor.createCapability();
 
 	/**
 	 * The sub panes this registration opened, tracked for the layout planner. One

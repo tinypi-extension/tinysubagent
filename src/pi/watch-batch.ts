@@ -24,9 +24,9 @@
  * child from being left behind with nobody waiting on it.
  */
 
-import { paneHost, type LiveSubPanes } from "../pane-host/index.ts";
+import { paneChild, type LiveSubPanes } from "../pane-host/index.ts";
 import { relayInterrupt } from "../children/interrupt.ts";
-import { waitForSubagent, type RunningSubagent } from "../children/watcher.ts";
+import { childHandle, waitForSubagent, type RunningSubagent } from "../children/watcher.ts";
 import type { SubagentResult } from "../present/result.ts";
 
 export interface WatchBatchDeps {
@@ -82,7 +82,8 @@ export async function watchBatch(
 			for (const controller of controllers) controller.abort("interrupt");
 			for (const paneId of paneIds) {
 				columns.drop(paneId);
-				void paneHost.closeChild(paneId);
+				const child = paneChild(paneId);
+				void child.supervisor.close(child);
 			}
 		});
 	};
@@ -95,6 +96,7 @@ export async function watchBatch(
 		const results = await Promise.all(
 			runnings.map(async (running, index) => {
 				const controller = controllers[index];
+				const child = childHandle(running);
 				const outcome = await waitForSubagent(running, controller?.signal);
 				if (controller) watchers.delete(controller);
 				// A wait that ended because the child is over closes its pane: a report and a
@@ -106,8 +108,8 @@ export async function watchBatch(
 				// already closed by the relay that ended it. No rebalance runs here: the layout
 				// is set at spawn time and a close never revisits it.
 				if (outcome.kind === "completed" && outcome.via !== "turn-end") {
-					columns.drop(running.paneId);
-					void paneHost.closeChild(running.paneId);
+					columns.drop(child.id);
+					void child.supervisor.close(child);
 				}
 
 				return {

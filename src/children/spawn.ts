@@ -17,10 +17,13 @@ import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	LiveSubPanes,
-	paneHost,
+	paneHostOf,
 	planPlacement,
 	planResizes,
+	supervisor,
+	type PaneHost,
 	type Placement,
+	type SupervisorHandle,
 } from "../pane-host/index.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { declaresSpawnTool, resolveToolList } from "../tool-list.ts";
@@ -173,27 +176,27 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 	// One source for both layout reads below: the pane this pi is running in is
 	// the orchestrator, so it is both the birth split target and the reference
-	// rect the 3/5 pass measures against.
-	const orchestratorPaneId = paneHost.currentPaneId(context.env);
+	// rect the 3/5 pass measures against. The pane-only operations come from the
+	// chosen supervisor's pane kind; another kind of supervisor simply has none.
+	const panes = paneHostOf(supervisor);
+	const orchestratorPaneId = panes?.currentPaneId(context.env) ?? null;
 	const columns = context.columns;
 
 	// Without a tracker this stays the original call: split right off the
 	// orchestrator. With one, the placement decides target and direction.
-	const placement = columns && orchestratorPaneId
-		? await resolvePlacement(columns, orchestratorPaneId, warnings)
+	const placement = panes && columns && orchestratorPaneId
+		? await resolvePlacement(panes, columns, orchestratorPaneId, warnings)
 		: null;
 	const targetPaneId = placement?.targetPaneId ?? orchestratorPaneId;
 	const direction = placement?.direction ?? "right";
 
-	let paneId: string;
+	let child: SupervisorHandle;
 	try {
-		paneId = await paneHost.openChild({
+		child = await supervisor.open({
 			cwd: context.cwd,
-			targetPaneId,
-			direction,
 			scriptPath: paths.scriptFile,
 			label: request.name,
-			focus: false,
+			pane: { targetPaneId, direction, focus: false },
 		});
 	} catch (error) {
 		return { ok: false, error: `could not open a pane: ${errorMessage(error)}` };
@@ -204,12 +207,12 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// produced — the first read's geometry is stale the moment the pane opens.
 	// Both the read and every resize are best-effort: a failed read means no
 	// pass, and a failed resize leaves the pane open and usable.
-	if (columns && orchestratorPaneId) {
-		await applySpawnResizes(columns, orchestratorPaneId, paneId, warnings);
+	if (panes && columns && orchestratorPaneId) {
+		await applySpawnResizes(panes, columns, orchestratorPaneId, child.id, warnings);
 	}
 
 	// Cosmetic: a rename failure must not fail the spawn.
-	void paneHost.renameChild(paneId, request.name);
+	if (panes) void panes.renameChild(child.id, request.name);
 
 	return {
 		ok: true,
@@ -219,7 +222,8 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			name: request.name,
 			agent: request.agent,
 			profile: { name: profile.name, model: profile.model, thinking: profile.thinking },
-			paneId,
+			paneId: child.id,
+			child,
 			writesSession: harness.writesSession,
 			sessionFile: paths.childSessionFile,
 			// The whole file the child launches with, header included: the watcher's
@@ -239,11 +243,12 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 /** Resolve where a new pane should be placed, using the current layout. */
 async function resolvePlacement(
+	panes: PaneHost,
 	columns: LiveSubPanes,
 	orchestratorPaneId: string,
 	warnings: string[],
 ): Promise<Placement> {
-	const layout = await paneHost.readLayout(orchestratorPaneId);
+	const layout = await panes.readLayout(orchestratorPaneId);
 	if (!layout) warnings.push("could not read the pane layout; placement falls back to the orchestrator pane");
 	// A failed read must not prune the tracker, so the empty case skips
 	// `liveIn` (which forgets every id the tab does not report) and plans a
@@ -254,19 +259,20 @@ async function resolvePlacement(
 
 /** Record the pane and apply the initial resize pass. */
 async function applySpawnResizes(
+	panes: PaneHost,
 	columns: LiveSubPanes,
 	orchestratorPaneId: string,
 	paneId: string,
 	warnings: string[],
 ): Promise<void> {
 	columns.place(paneId);
-	const layout = await paneHost.readLayout(orchestratorPaneId);
+	const layout = await panes.readLayout(orchestratorPaneId);
 	if (!layout) {
 		warnings.push("could not read the pane layout after opening the sub pane; the layout pass was skipped");
 		return;
 	}
 	for (const op of planResizes(layout, orchestratorPaneId, columns.liveIn(layout), paneId)) {
-		if (!await paneHost.resizeChild(op)) {
+		if (!await panes.resizeChild(op)) {
 			warnings.push(`could not resize sub pane ${op.paneId}; the sub pane is still open and usable`);
 		}
 	}
