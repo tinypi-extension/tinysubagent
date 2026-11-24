@@ -26,12 +26,20 @@
  *      which is what keeps a second Esc from being typed.
  */
 
-import { paneHost } from "../pane-host/index.ts";
+import { paneChild } from "../pane-host/index.ts";
 
 /**
- * Type one Esc into each pane. Awaits the host's relay, never throws and never
- * reports failure; an empty list sends nothing.
+ * Stop every pane this batch can see by typing one Esc into it. Awaits the
+ * supervisors that own the panes, never throws and never reports failure; an
+ * empty list stops nothing.
+ *
+ * A pane id is handed in because the column tracker, and the panes an earlier
+ * call left idle, are addressed by pane id alone: each one is a pane child of
+ * the pane supervisor, and stopping it is that supervisor's own operation.
  */
 export async function relayInterrupt(paneIds: readonly string[]): Promise<void> {
-	await paneHost.relayInterrupt(paneIds);
+	await Promise.all(paneIds.map((paneId) => {
+		const child = paneChild(paneId);
+		return child.supervisor.stop(child);
+	}));
 }

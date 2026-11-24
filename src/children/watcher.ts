@@ -47,7 +47,7 @@
  */
 
 import { readFileSync, rmSync } from "node:fs";
-import { paneHost } from "../pane-host/index.ts";
+import { paneChild, type SupervisorHandle } from "../pane-host/index.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
 import type { ShareCost } from "./contract.ts";
 import { readFailureNote, readFinalMessage, readSessionEntries } from "./session.ts";
@@ -94,7 +94,18 @@ export interface RunningSubagent {
 	agent: string | null;
 	/** Resolved profile, for display only. */
 	profile: ResolvedProfile | null;
+	/**
+	 * The pane this child owns, for the report's ``pane `x` `` line. A child
+	 * supervised as a pane always has one.
+	 */
 	paneId: string;
+	/**
+	 * The supervisor that owns this child and the address it gave back. Absent
+	 * when a child is described by a bare pane id alone — a fixture, or a caller
+	 * that predates the supervision seam; {@link childHandle} then addresses it
+	 * through the pane host.
+	 */
+	child?: SupervisorHandle;
 	/**
 	 * Whether this child's harness appends to {@link sessionFile} as it runs (pi),
 	 * or keeps its transcript elsewhere (agy). The never-started grace reads that
@@ -283,11 +294,22 @@ function classify(running: RunningSubagent): Classification | null {
 }
 
 /**
+ * The handle a child is addressed through: the one its spawn returned, or — for
+ * a child described by a bare pane id — a pane child of the pane supervisor.
+ */
+export function childHandle(running: RunningSubagent): SupervisorHandle {
+	return running.child ?? paneChild(running.paneId);
+}
+
+/**
  * Overridable bits of the wait loop. Only tests pass these; the defaults are what
  * production uses.
  */
 export interface WatcherDeps {
-	/** Pane liveness probe. Returns null when the answer is unknown. */
+	/**
+	 * Pane liveness probe, for a child addressed by its pane id. The default asks
+	 * the child's own supervisor whether it has ended. Returns null when unknown.
+	 */
 	paneExists?: (paneId: string) => Promise<boolean | null>;
 	pollIntervalMs?: number;
 	/** Empty-session grace before a run is called never-started. */
@@ -308,7 +330,8 @@ export function waitForSubagent(
 	signal?: AbortSignal,
 	deps: WatcherDeps = {},
 ): Promise<SubagentOutcome> {
-	const paneExists = deps.paneExists ?? ((paneId: string) => paneHost.childExists(paneId));
+	const paneExists = deps.paneExists;
+	const child = childHandle(running);
 	const neverStartedMs = deps.neverStartedMs ?? NEVER_STARTED_MS;
 
 	return new Promise((resolve) => {
@@ -367,9 +390,11 @@ export function waitForSubagent(
 			ticks += 1;
 			if (ticks % PANE_CHECK_EVERY !== 0) return;
 
-			// No signal yet. If the pane itself is gone, nothing more will arrive.
-			const alive = await paneExists(running.paneId);
-			if (alive === false) {
+			// No signal yet. If the child itself is over, nothing more will arrive.
+			const over = paneExists
+				? (await paneExists(running.paneId)) === false
+				: (await child.supervisor.ended(child)) === true;
+			if (over) {
 				finish({ kind: "cancelled", summary: readFinalMessage(running.sessionFile) });
 			}
 		};
