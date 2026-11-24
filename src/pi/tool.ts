@@ -29,6 +29,7 @@ import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import { ackLine, formatShareCost, spawnNotice, type SpawnNoticeEntry } from "../present/ack.ts";
 import {
+	liveLinesComponent,
 	NOTE_NOTHING,
 	renderAck,
 	type AckDetails,
@@ -54,7 +55,8 @@ import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.t
 import type { SpawnContext, SpawnRequest, ToolParams } from "../children/contract.ts";
 import type { RunningSubagent } from "../children/watcher.ts";
 import { TOOL_NAME, type AgentDef } from "../types.ts";
-import type { CapabilityCheck, LiveSubPanes } from "../pane-host/index.ts";
+import type { CapabilityCheck, LiveSubPanes, Supervisor } from "../pane-host/index.ts";
+import type { LiveLineTuning } from "./live-lines.ts";
 import { watchBatch } from "./watch-batch.ts";
 
 function failure(message: string) {
@@ -147,6 +149,18 @@ export interface ToolDeps {
 	 * `ctx.modelRegistry`; injectable so tests never touch the network.
 	 */
 	route: (ctx: ExtensionContext) => RouteFn;
+	/**
+	 * The supervisor every child of this registration goes through. Absent means
+	 * the seam's active kind; present so a test can spawn into a memory-only kind
+	 * and drive its output without a process.
+	 */
+	supervisor?: Supervisor;
+	/**
+	 * The live view's cadence, ticker and clock. Production takes the defaults;
+	 * a test supplies its own so a redraw happens when it asks, not on a wall
+	 * clock.
+	 */
+	live?: LiveLineTuning;
 }
 
 export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> {
@@ -160,7 +174,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 		promptGuidelines: buildPromptGuidelines(config),
 		parameters,
 
-		async execute(_toolCallId, rawParams, signal, _onUpdate, ctx: ExtensionContext) {
+		async execute(_toolCallId, rawParams, signal, onUpdate, ctx: ExtensionContext) {
 			const params = rawParams as ToolParams;
 
 			const problem = await capability.ensureReady();
@@ -254,6 +268,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					parentModel: parentModelSpec(ctx),
 					parentThinking: parentThinking(ctx),
 					columns,
+					supervisor: deps.supervisor,
 					reportedWarnings: deps.reportedWarnings,
 					// Read once for the batch, and only when the capability is on: a share the
 					// config never permitted must not reach a task even if the flag did.
@@ -381,7 +396,25 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// the turn is relayed by this wait: one Esc into every live sub pane, every
 			// wait ends as `interrupted`, and the panes the relay typed into are closed
 			// behind it. Nothing is left running once the call returns.
-			const results = await watchBatch(runnings, signal, { watchers, columns });
+			//
+			// While it runs, the batch's live view travels the tool's partial channel:
+			// one line per child, redrawn on `watchBatch`'s cadence, never per chunk.
+			// The view is read here as `live` and drawn by `renderResult` below; when the
+			// report arrives it clears, so the finished result carries no tail.
+			const liveView = onUpdate
+				? (lines: readonly string[]): void => {
+					onUpdate({
+						content: [{ type: "text" as const, text: lines.join("\n") }],
+						details: { status: "running", live: [...lines] },
+					});
+				}
+				: undefined;
+			const results = await watchBatch(runnings, signal, {
+				watchers,
+				columns,
+				onLines: liveView,
+				live: deps.live,
+			});
 
 			// The batch ran, so its report is content whatever it says: a failed,
 			// cancelled or interrupted child is an ending the orchestrator has to read,
@@ -407,8 +440,12 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 		 * plain, so nothing here affects what the model reads — it is the same parts
 		 * with the theme applied.
 		 */
-		renderResult(result, _options, theme) {
+		renderResult(result, options, theme) {
 			const details = result.details as AckDetails | undefined;
+
+			// The batch is still running: draw only its live lines, cut to the width,
+			// never wrapped. The final report replaces them when the call returns.
+			if (options.isPartial && details?.live) return liveLinesComponent(details.live);
 
 			// A finished batch: the report is the result, so draw it as one.
 			if (details?.status === "finished" && details.results) {

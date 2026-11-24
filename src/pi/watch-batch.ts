@@ -28,12 +28,32 @@ import { paneChild, type LiveSubPanes } from "../pane-host/index.ts";
 import { relayInterrupt } from "../children/interrupt.ts";
 import { childHandle, waitForSubagent, type RunningSubagent } from "../children/watcher.ts";
 import type { SubagentResult } from "../present/result.ts";
+import { createLiveLines, type LiveChild, type LiveLineTuning } from "./live-lines.ts";
 
 export interface WatchBatchDeps {
 	/** Watchers still running, so a shutdown can end them; owned by the caller. */
 	watchers: Set<AbortController>;
 	/** The sub panes this registration opened; a child whose pane was closed is dropped here. */
 	columns: LiveSubPanes;
+	/**
+	 * The tool call's partial channel, in the shape a live view draws: the whole
+	 * batch as one line per child, then an empty view when the result arrives.
+	 * Absent when the caller has no partial state to draw into.
+	 */
+	onLines?: (lines: readonly string[]) => void;
+	/** The live view's cadence, ticker and clock; production's defaults when absent. */
+	live?: LiveLineTuning;
+}
+
+/** One child as the live view needs it. */
+function liveChild(running: RunningSubagent): LiveChild {
+	return {
+		agent: running.agent ?? running.name,
+		name: running.name,
+		profile: running.profile,
+		sharedContext: running.sharedContext,
+		startedAt: running.startedAt,
+	};
 }
 
 /**
@@ -56,6 +76,27 @@ export async function watchBatch(
 		const controller = new AbortController();
 		watchers.add(controller);
 		return controller;
+	});
+	const children = runnings.map(childHandle);
+
+	// The live view exists only where the children stream their output. A pane
+	// child has no `output` member — it is addressed by its pane, and the pane is
+	// the view — so a pane-host batch draws no lines even when a channel was
+	// offered. This is the seam's own distinction, not a second kind check.
+	const live =
+		deps.onLines !== undefined &&
+		children.every((child) => child !== null && typeof child.supervisor.output === "function")
+			? createLiveLines(runnings.map(liveChild), { onLines: deps.onLines, ...deps.live })
+			: null;
+
+	// Subscribe before the first wait: a child starts writing as soon as it is
+	// spawned, and a stream nobody reads is a pipe that fills. Each reader only
+	// updates its own tail; the ticker is the sole redraw. A child's subscription
+	// ends with its own wait, so a settled child adds no text to the view while
+	// its siblings still run.
+	const stops = children.map((child, index) => {
+		if (child === null) return () => {};
+		return child.supervisor.output?.(child, live?.reader(index) ?? (() => {})) ?? (() => {});
 	});
 
 	// The call's signal is not a pane's fate on its own: forwarding it relays the
@@ -93,17 +134,12 @@ export async function watchBatch(
 	if (signal?.aborted) forward();
 
 	try {
+		live?.start();
 		const results = await Promise.all(
 			runnings.map(async (running, index) => {
 				const controller = controllers[index];
-				const child = childHandle(running);
-				// Wired now, rendered next: a child supervised as a process streams its
-				// output, and the lines belong on screen while this wait runs. Nothing draws
-				// them yet, so the text is read and dropped — but the subscription is taken,
-				// because it is the only door to that output and the place the renderer
-				// hangs off. A pane child has no such door, and says so by having no
-				// `output` member at all.
-				const stopOutput = child === null ? () => {} : (child.supervisor.output?.(child, () => {}) ?? (() => {}));
+				const child = children[index] ?? null;
+				const stopOutput = stops[index] ?? (() => {});
 				const outcome = await waitForSubagent(running, controller?.signal);
 				stopOutput();
 				if (controller) watchers.delete(controller);
@@ -140,6 +176,10 @@ export async function watchBatch(
 		await forwarded;
 		return results;
 	} finally {
+		// The report is the result now: the live lines go with the frame that drew
+		// them. The empty view is sent before this function returns, so a host never
+		// has to guess that a finished call means the old lines are stale.
+		live?.clear();
 		signal?.removeEventListener("abort", forward);
 		for (const controller of controllers) watchers.delete(controller);
 	}
