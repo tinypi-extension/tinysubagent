@@ -106,6 +106,20 @@ function interruptNote(results: readonly SubagentResult[]): string | null {
 }
 
 /**
+ * What a never-started child's report says where there is no pane to open.
+ *
+ * Under a pane host the remedy *is* the pane: it is left open at the child's
+ * prompt, so logging in there fixes the next attempt. A plain child has no pane,
+ * so the report carries the instruction instead — and it names the causes that
+ * actually produce this: no credential, a `pi` that will not run, and whatever
+ * the child printed before it gave up.
+ */
+const NEVER_STARTED_REMEDY =
+	"_(no output captured: pi never started, so no run happened. Log in to the provider its profile " +
+	"names — or fix the `pi` it launches — and delegate again; anything it printed before giving up " +
+	"is the diagnostic, quoted below when it wrote one.)_";
+
+/**
  * What to print in place of a summary a child did not leave.
  *
  * A failed child's pane is worth pointing at — the error is on screen there. A
@@ -116,10 +130,18 @@ function interruptNote(results: readonly SubagentResult[]): string | null {
  * the operator's interrupt closed it, a shutdown left it open.
  *
  * A child with no pane has nothing to point at, so the failure says what happened
- * instead of sending the reader to an address that does not exist.
+ * instead of sending the reader to an address that does not exist — and a
+ * never-started run, whose whole remedy used to be the pane it was left at, is
+ * told what to do instead (see {@link NEVER_STARTED_REMEDY}).
  */
 export function emptySummaryText(
-	outcome: { kind: SubagentOutcome["kind"]; via?: string; cause?: "interrupt" | "shutdown" },
+	outcome: {
+		kind: SubagentOutcome["kind"];
+		via?: string;
+		cause?: "interrupt" | "shutdown";
+		/** The failure's kind, for the one remedy that is not about a pane. */
+		reason?: string;
+	},
 	paneId?: string,
 ): string {
 	if (outcome.kind === "completed") {
@@ -132,6 +154,7 @@ export function emptySummaryText(
 			? "_(no summary: the child was interrupted and its pane was left open)_"
 			: "_(no summary: the child was interrupted and its pane was closed)_";
 	}
+	if (outcome.reason === "never-started" && paneId === undefined) return NEVER_STARTED_REMEDY;
 	return paneId === undefined
 		? "_(no output captured: the child ended without reporting)_"
 		: `_(no output captured — inspect pane \`${paneId}\`)_`;
@@ -167,7 +190,26 @@ function section(result: SubagentResult, index: number, total: number): string {
 		meta.join(" · "),
 		`**Task:** ${oneLine(result.task)}`,
 		body,
-	].join("\n\n");
+		result.outcome.kind === "failed" ? stderrBlock(result.outcome.stderr) : null,
+	]
+		.filter((part): part is string => part !== null)
+		.join("\n\n");
+}
+
+/**
+ * A failed child's stderr, drawn as the last thing in its section.
+ *
+ * Indented rather than fenced: it is a program's own output and may hold any
+ * character, while four leading spaces cannot be closed by the first line of it.
+ * Bounded where it was kept, not here — the tail is already the end of it.
+ *
+ * `null` when there is nothing to quote, so a failure with no stderr stream reads
+ * exactly as it did before the tail existed.
+ */
+function stderrBlock(stderr: string | undefined): string | null {
+	if (stderr === undefined || stderr.trim() === "") return null;
+	const lines = stderr.split("\n").map((line) => `    ${line}`);
+	return ["**Failure output (stderr tail):**", "", ...lines].join("\n");
 }
 
 /** The report body: a header plus one labelled section per child. */
@@ -201,6 +243,11 @@ export interface ResultDetail {
 	cause?: "interrupt" | "shutdown";
 	reason?: string;
 	exitCode?: number | null;
+	/**
+	 * The tail of a failed child's stderr, when it had a stream of its own to write
+	 * one to. Absent for every other ending, and for a failure with nothing there.
+	 */
+	stderr?: string;
 	summary: string | null;
 	/** The share's two figures, or null for a child launched without one. */
 	sharedContext: ShareCost | null;
@@ -232,6 +279,7 @@ export function buildResultDetails(results: readonly SubagentResult[]): ResultDe
 				cause: outcome.kind === "interrupted" ? outcome.cause : undefined,
 				reason: outcome.kind === "failed" ? outcome.reason : undefined,
 				exitCode: outcome.kind === "failed" ? outcome.exitCode : undefined,
+				stderr: outcome.kind === "failed" ? outcome.stderr : undefined,
 				summary: outcome.kind === "interrupted" ? null : outcome.summary,
 				sharedContext: result.sharedContext ?? null,
 			} satisfies ResultDetail;

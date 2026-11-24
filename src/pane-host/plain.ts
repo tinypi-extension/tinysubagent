@@ -15,6 +15,11 @@
  * Nothing here waits for a pane or types into one, so `stop` is a documented
  * no-op: a headless child cannot be steered from outside, and killing it is an
  * interrupt, not a stop.
+ *
+ * stderr is read for the one thing it is: evidence. A crashed pane used to be
+ * read off the screen, so this kind keeps the end of the child's stderr and hands
+ * it to whoever classifies the failure — bounded, because a child that loops on
+ * errors must not be able to grow a report.
  */
 
 import { spawn as spawnProcess, type ChildProcess } from "node:child_process";
@@ -46,6 +51,11 @@ export interface PlainSupervisor extends Supervisor {
 	 * dropped when nobody listens. Present on this kind alone.
 	 */
 	output(child: SupervisorHandle, onText: (chunk: string) => void): () => void;
+	/**
+	 * The end of a child's stderr as it stands, for a failure report; empty when
+	 * the child wrote nothing there. Present on this kind alone.
+	 */
+	stderr?(child: SupervisorHandle): string;
 }
 
 /** One live child, kept only so its handle can be asked about later. */
@@ -54,6 +64,49 @@ interface LiveChild {
 	listeners: Set<(chunk: string) => void>;
 	/** Set by the process exiting, or by the spawn itself failing. */
 	finished: boolean;
+	stderr: StderrTail;
+}
+
+/**
+ * How much of a child's stderr is kept for its failure report: the last lines,
+ * which is what a human would have read at the bottom of a crashed pane. Bounded
+ * because the stream has no end until the child does, and the report can only
+ * ever quote a window of it.
+ */
+const STDERR_TAIL_LINES = 20;
+
+/**
+ * One line's worth of characters is kept; past this it is the middle of a stack
+ * trace, not a cause. Also what keeps a child that never writes a newline from
+ * growing this buffer one megabyte at a time.
+ */
+const STDERR_LINE_CHARS = 2_000;
+
+/** The bounded end of one child's stderr. */
+interface StderrTail {
+	/** Completed lines, oldest first. At most {@link STDERR_TAIL_LINES}. */
+	lines: string[];
+	/** The line still arriving, kept apart so a chunk split mid-line stays one line. */
+	partial: string;
+}
+
+function clipLine(line: string): string {
+	return line.length <= STDERR_LINE_CHARS ? line : `${line.slice(0, STDERR_LINE_CHARS - 1)}…`;
+}
+
+/** Add one chunk to the tail, keeping only the end of it. */
+function keepStderr(tail: StderrTail, chunk: string): void {
+	const parts = `${tail.partial}${chunk}`.split("\n");
+	tail.partial = clipLine(parts.pop() ?? "");
+	for (const line of parts) tail.lines.push(clipLine(line));
+	// Only the end is ever read, so the front ages out as it is replaced.
+	if (tail.lines.length > STDERR_TAIL_LINES) tail.lines.splice(0, tail.lines.length - STDERR_TAIL_LINES);
+}
+
+/** The tail as text: the last {@link STDERR_TAIL_LINES} of what the child wrote. */
+function readStderr(tail: StderrTail): string {
+	const lines = tail.partial === "" ? tail.lines : [...tail.lines, tail.partial];
+	return lines.slice(-STDERR_TAIL_LINES).join("\n");
 }
 
 const herdr = createHerdrPaneHost();
@@ -105,7 +158,7 @@ export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupe
 				stdio: ["ignore", "pipe", "pipe"],
 				detached: true,
 			});
-			const child: LiveChild = { proc, listeners: new Set(), finished: false };
+			const child: LiveChild = { proc, listeners: new Set(), finished: false, stderr: { lines: [], partial: "" } };
 			children.set(id, child);
 
 			const finish = (): void => {
@@ -121,7 +174,10 @@ export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupe
 			proc.stdout?.on("data", (chunk: string) => {
 				for (const listener of child.listeners) listener(chunk);
 			});
-			proc.stderr?.resume();
+			// stderr is evidence, not progress: nothing renders it while the child runs,
+			// but the end of it is what says why a child that never reported died.
+			proc.stderr?.setEncoding("utf8");
+			proc.stderr?.on("data", (chunk: string) => keepStderr(child.stderr, chunk));
 
 			// `detached` makes the child a process of its own, in its own group, so it
 			// outlives a restart of this one. `unref` — the pipes included — keeps it out
@@ -157,6 +213,14 @@ export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupe
 			return () => {
 				record.listeners.delete(onText);
 			};
+		},
+
+		// Read at the moment a failure is classified, so the tail is as complete as
+		// the child left it. No record is no evidence: a child this supervisor never
+		// opened, or one already released, has nothing to quote.
+		stderr: (child: SupervisorHandle) => {
+			const record = children.get(child.id);
+			return record === undefined ? "" : readStderr(record.stderr);
 		},
 	};
 

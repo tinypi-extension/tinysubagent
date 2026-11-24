@@ -73,8 +73,10 @@
  * `agent_end` and no `agent_settled`, so none of the above runs: the child sits
  * at its prompt having written nothing. It is the watcher, not the child, that
  * bounds this wait: a child that wrote no session entry at all within
- * `NEVER_STARTED_MS` is reported `failed (never-started)` with its pane left
- * open, so running `/login` there is still worth something.
+ * `NEVER_STARTED_MS` is reported `failed (never-started)`. Under a pane host its
+ * pane is left open, so running `/login` there is still worth something; in a
+ * plain terminal there is no pane, and the report carries the instruction instead
+ * of an address.
  *
  * The child deliberately does not mirror pi's check. A check here could only
  * write a failure for a run that never existed.
