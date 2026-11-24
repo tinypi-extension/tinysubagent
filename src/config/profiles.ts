@@ -9,8 +9,13 @@
  * When `enableProfiles` is false the `profile` parameter is stripped from the
  * tool schema, so this module is only reachable with a profile name if a stale
  * session replays a call — which is reported as an error rather than ignored.
+ *
+ * The supervision mode is an input here, because a profile is only usable where
+ * its harness can run: an agy profile is configured and valid in a pane host, and
+ * is neither offered nor accepted under a plain terminal.
  */
 
+import { harnessFor, harnessRunsIn, type LaunchMode } from "../children/harness/index.ts";
 import { CURRENT_PROFILE, owningConfigFile, type TinysubagentConfig } from "./config.ts";
 import type { Harness, Profile, ThinkingLevel } from "../types.ts";
 
@@ -37,19 +42,47 @@ export interface ResolvedProfile {
 	harness?: Harness;
 }
 
-export type ProfileResolution = ({ ok: true } & ResolvedProfile) | { ok: false; error: string };
+export type ProfileResolution =
+	| ({ ok: true } & ResolvedProfile)
+	| {
+			ok: false;
+			error: string;
+			/**
+			 * The profile exists and profiles are on, but this terminal's supervision
+			 * mode cannot run it. A batch fails only this child, because the request is
+			 * sound and its siblings may well be runnable here.
+			 */
+			unavailable?: true;
+	  };
 
-/** `current` first, then configured names alphabetically. */
-export function availableProfileNames(config: TinysubagentConfig): string[] {
-	return [CURRENT_PROFILE, ...Object.keys(config.profiles).sort()];
+/**
+ * The offered profile names: `current` first, then the configured names that can
+ * run under `mode`, alphabetically. This is the one list — the routing
+ * candidates, the `profile` parameter's prose and the unknown-name error all
+ * derive from it, so no call site can offer what this terminal cannot start.
+ *
+ * `current` is never filtered: it is this session's own model and thinking, which
+ * needs no child process at all.
+ */
+export function availableProfileNames(config: TinysubagentConfig, mode: LaunchMode = "pane"): string[] {
+	return [
+		CURRENT_PROFILE,
+		...Object.keys(config.profiles)
+			.filter((name) => harnessRunsIn(config.profiles[name]!, mode))
+			.sort(),
+	];
 }
 
 /**
  * Description text for the `profile` parameter, listing the real options so the
  * model does not have to guess or read the config file.
  */
-export function profileParamDescription(config: TinysubagentConfig, autoRoute = false): string {
-	const names = availableProfileNames(config);
+export function profileParamDescription(
+	config: TinysubagentConfig,
+	autoRoute = false,
+	mode: LaunchMode = "pane",
+): string {
+	const names = availableProfileNames(config, mode);
 	const configured = names.filter((name) => name !== CURRENT_PROFILE);
 	const lines = [
 		`Usually omit this parameter unless a specific profile is required. Available profiles: ${names.map((n) => `\`${n}\``).join(", ")}.`,
@@ -84,6 +117,7 @@ export function resolveProfile(
 	config: TinysubagentConfig,
 	name: string | undefined,
 	parent: ParentDefaults,
+	mode: LaunchMode = "pane",
 ): ProfileResolution {
 	const wanted = name?.trim() ?? "";
 
@@ -111,7 +145,19 @@ export function resolveProfile(
 	if (!profile) {
 		return {
 			ok: false,
-			error: `unknown profile "${wanted}". Available: ${availableProfileNames(config).join(", ")}.`,
+			error: `unknown profile "${wanted}". Available: ${availableProfileNames(config, mode).join(", ")}.`,
+		};
+	}
+
+	// A real profile this terminal cannot start: refused by name and by reason, so
+	// the model learns why rather than being told the name does not exist.
+	if (!harnessRunsIn(profile, mode)) {
+		return {
+			ok: false,
+			unavailable: true,
+			error:
+				`profile "${wanted}" cannot be used here: its harness "${harnessFor(profile).id}" needs a pane host, ` +
+				`and this terminal has none. Available here: ${availableProfileNames(config, mode).join(", ")}.`,
 		};
 	}
 

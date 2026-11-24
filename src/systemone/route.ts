@@ -12,6 +12,7 @@
  */
 
 import type { SpawnRequest } from "../children/contract.ts";
+import type { LaunchMode } from "../children/harness/index.ts";
 import { CURRENT_PROFILE, type TinysubagentConfig } from "../config/config.ts";
 import { availableProfileNames } from "../config/profiles.ts";
 import { CHOICE_INSTRUCTIONS, SYSTEMONE_TIMEOUT_MS, routeOnce, type RouteOnceDeps } from "./client.ts";
@@ -99,20 +100,26 @@ export interface RouteDeps {
 	route: RouteFn;
 	agents: readonly AgentDef[];
 	warn?: (message: string) => void;
+	/**
+	 * How this batch's children will be supervised; absent means a pane host, the
+	 * shape routing was written for. It only ever filters the candidate list, so a
+	 * plain terminal cannot be routed onto a profile it cannot start.
+	 */
+	mode?: LaunchMode;
 }
 
 /** Routing is on only when profiles are enabled, either transport resolved, and there is something to choose. */
-export function routingActive(config: TinysubagentConfig): boolean {
+export function routingActive(config: TinysubagentConfig, mode: LaunchMode = "pane"): boolean {
 	return (
 		config.enableProfiles &&
 		(config.classifier !== null || config.systemOne !== null) &&
-		profileCandidates(config).length > 0
+		profileCandidates(config, mode).length > 0
 	);
 }
 
 /** The names routing may choose among: the `current` implicit profile never is one. */
-function namedProfileNames(config: TinysubagentConfig): string[] {
-	return availableProfileNames(config).filter((name) => {
+function namedProfileNames(config: TinysubagentConfig, mode: LaunchMode = "pane"): string[] {
+	return availableProfileNames(config, mode).filter((name) => {
 		const trimmed = name.trim();
 		// An untrimmed key cannot round-trip: a decision rendered as ` current `
 		// resolves to `current`, which is the one name routing must not choose.
@@ -121,14 +128,14 @@ function namedProfileNames(config: TinysubagentConfig): string[] {
 }
 
 /** The profiles offered to the chooser, capped so the question stays small. Pure; never warns. */
-export function profileCandidates(config: TinysubagentConfig): string[] {
-	return namedProfileNames(config).slice(0, MAX_ROUTE_CANDIDATES);
+export function profileCandidates(config: TinysubagentConfig, mode: LaunchMode = "pane"): string[] {
+	return namedProfileNames(config, mode).slice(0, MAX_ROUTE_CANDIDATES);
 }
 
 /** One criterion per candidate, describing what the profile launches with. Preserves candidate order. */
-export function buildCriteria(config: TinysubagentConfig): Record<string, string> {
+export function buildCriteria(config: TinysubagentConfig, mode: LaunchMode = "pane"): Record<string, string> {
 	const criteria: Record<string, string> = {};
-	for (const name of profileCandidates(config)) {
+	for (const name of profileCandidates(config, mode)) {
 		const profile = config.profiles[name];
 		const parts: string[] = [];
 		if (profile?.model) parts.push(`model ${profile.model}`);
@@ -262,16 +269,17 @@ export async function routeProfiles(
 	config: TinysubagentConfig,
 	deps: RouteDeps,
 ): Promise<void> {
-	if (!routingActive(config)) return;
+	const mode = deps.mode ?? "pane";
+	if (!routingActive(config, mode)) return;
 	const warn = deps.warn ?? noopWarn;
 	// The cap is a real limitation worth surfacing, exactly once per batch.
-	if (namedProfileNames(config).length > MAX_ROUTE_CANDIDATES) {
+	if (namedProfileNames(config, mode).length > MAX_ROUTE_CANDIDATES) {
 		warn(
 			`tinysubagent: more than ${MAX_ROUTE_CANDIDATES} profiles are configured; ` +
 				`only the first ${MAX_ROUTE_CANDIDATES} were offered to routing.`,
 		);
 	}
-	const criteria = buildCriteria(config);
+	const criteria = buildCriteria(config, mode);
 	const byName = new Map(deps.agents.map((agent) => [agent.name, agent]));
 	const routable: { request: SpawnRequest; agent: AgentDef }[] = [];
 	for (const request of requests) {

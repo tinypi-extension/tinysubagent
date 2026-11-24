@@ -28,7 +28,7 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./src/config/agents.ts";
 import { loadConfig } from "./src/config/config.ts";
-import { activatePaneHost, LiveSubPanes, supervisor } from "./src/pane-host/index.ts";
+import { activatePaneHost, launchModeOf, LiveSubPanes, supervisor } from "./src/pane-host/index.ts";
 import { buildParameters } from "./src/present/describe.ts";
 import { registerLifecycle } from "./src/pi/lifecycle.ts";
 import { offerPluginFix, type PluginFixGuard } from "./src/pi/plugin-fix.ts";
@@ -56,9 +56,12 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 	// Detection chooses the kind of supervisor, and nothing else: under a pane host
 	// a child gets a pane, and in a plain terminal it runs as a headless process.
 	activatePaneHost();
+	// Read once, right after activation: the schema, the description and every
+	// refusal below advertise what this terminal can run.
+	const mode = launchModeOf(supervisor);
 
 	const { config, warnings: configWarnings } = loadConfig(process.cwd(), getAgentDir());
-	const parameters = buildParameters(config);
+	const parameters = buildParameters(config, mode);
 	// Roles are advertised at registration time, when there is no session context
 	// yet — the process cwd is the best available answer.
 	const advertisedAgents = discoverAgents(process.cwd()).agents;
@@ -105,6 +108,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 			capability,
 			columns,
 			watchers,
+			mode,
 			reportedWarnings,
 			// The pinned devDependency (pi-coding-agent@0.85.1) lags the runtime pi,
 			// whose registry has `findOfType`/`classify`; one cast at the seam.

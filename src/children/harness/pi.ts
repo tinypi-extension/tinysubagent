@@ -52,6 +52,8 @@ export const piHarness: ChildHarness = {
 	resolveBin: resolvePiBin,
 	buildArgv: buildPiArgv,
 	supportsExtension: true,
+	// `--mode json` above is pi's own headless mode: the prompt runs and it exits.
+	runsHeadless: true,
 	sessionFileFor,
 	// pi writes the session jsonl from its first entry on, which is what makes an
 	// empty file a signal about the run rather than about the harness.

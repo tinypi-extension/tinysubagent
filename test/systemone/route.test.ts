@@ -540,3 +540,40 @@ function assertRedacted(warnings: readonly string[]): void {
 		}
 	}
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// The supervision mode the batch will actually run in
+// ────────────────────────────────────────────────────────────────────────────
+
+test("a plain terminal offers the chooser only the profiles that can start there", () => {
+	const config = configWith({
+		profiles: {
+			gemini: { harness: "agy", model: "gm" },
+			light: { model: "m-light" },
+		},
+	});
+	assert.deepEqual(profileCandidates(config, "headless"), ["light"]);
+	assert.deepEqual(Object.keys(buildCriteria(config, "headless")), ["light"]);
+	// A pane host is the mode the agy profile runs in, so nothing is hidden there.
+	assert.deepEqual(profileCandidates(config, "pane"), ["gemini", "light"]);
+});
+
+test("a plain terminal with nothing routable leaves routing off rather than asking an empty question", () => {
+	const config = configWith({ profiles: { gemini: { harness: "agy", model: "gm" } } });
+	assert.equal(routingActive(config, "headless"), false);
+	assert.equal(routingActive(config, "pane"), true);
+});
+
+test("routeProfiles in a plain terminal cannot land on a profile that cannot start", async () => {
+	const config = configWith({
+		profiles: {
+			gemini: { harness: "agy", model: "gm" },
+			light: { model: "m-light" },
+		},
+	});
+	const { route, calls } = fakeRoute({ t1: { choice: "light" } });
+	const requests = [request("worker", "t1")];
+	await routeProfiles(requests, config, { route, agents: [agent("worker")], mode: "headless" });
+	assert.deepEqual(Object.keys(calls[0]?.criteria ?? {}), ["light"]);
+	assert.equal(requests[0]?.profile, "light");
+});

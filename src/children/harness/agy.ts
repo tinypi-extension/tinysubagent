@@ -38,6 +38,9 @@ export const agyHarness: ChildHarness = {
 	resolveBin: resolveAgyBin,
 	buildArgv: buildAgyArgv,
 	supportsExtension: false,
+	// agy is interactive-only: it needs a pane to render into, and its argv has no
+	// headless variant. A plain terminal therefore cannot run an agy profile at all.
+	runsHeadless: false,
 	// The actual transcript path arrives in agy's Stop hook payload, not at spawn.
 	sessionFileFor(): string {
 		return "";

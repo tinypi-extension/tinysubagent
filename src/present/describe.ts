@@ -5,9 +5,14 @@
  * Every string here is part of the tool contract — the model chooses roles and
  * writes briefs from this text — so the wording is deliberate and asserted by
  * tests. Nothing here touches I/O or module state.
+ *
+ * The supervision mode is an input to the description and the schema, because a
+ * pane host is one of two modes rather than the only one: nothing the model reads
+ * here may promise a pane that a plain terminal will not open.
  */
 
 import { Type, type TSchema } from "typebox";
+import type { LaunchMode } from "../children/harness/index.ts";
 import { MAX_PARALLEL_TASKS } from "../children/requests.ts";
 import { CURRENT_PROFILE, type TinysubagentConfig } from "../config/config.ts";
 import { availableProfileNames, profileParamDescription } from "../config/profiles.ts";
@@ -32,7 +37,38 @@ export function advertiseAgents(agents: readonly AgentDef[]): string[] {
 	return lines;
 }
 
-export function buildToolDescription(agents: readonly AgentDef[], config: TinysubagentConfig): string {
+/**
+ * The prompt snippet: the one line the model reads under the tool's name. A pane
+ * host opens a pane per subagent, a plain terminal starts a headless process, and
+ * the line has to say which — it is the first promise the model sees.
+ */
+export function buildPromptSnippet(mode: LaunchMode = "pane"): string {
+	return mode === "pane"
+		? "Delegate a task to a subagent running in its own herdr pane"
+		: "Delegate a task to a subagent running as its own headless process";
+}
+
+/** How a child is supervised, in the words the model is given for it. */
+function supervisionPhrase(mode: LaunchMode): string {
+	return mode === "pane" ? "running in its own herdr pane" : "running as its own process";
+}
+
+/**
+ * What the call's ending is, in this mode. A pane host can relay an interrupt into
+ * the panes and close them after; a plain child cannot be steered, so the honest
+ * promise stops at the wait and at how the children are reported.
+ */
+function interruptSentence(mode: LaunchMode): string {
+	return mode === "pane"
+		? "A human may interrupt the turn: the interrupt is relayed to every live subagent, stopping each turn where it is, the wait returns at once, and the subagents' panes are closed."
+		: "A human may interrupt the turn: the wait returns at once, and every subagent that had started is reported as interrupted.";
+}
+
+export function buildToolDescription(
+	agents: readonly AgentDef[],
+	config: TinysubagentConfig,
+	mode: LaunchMode = "pane",
+): string {
 	// The advice must match the schema: with profiles off, `profile` is not a
 	// parameter at all, and naming a role there kills the whole batch.
 	const taskFields = config.enableProfiles
@@ -42,11 +78,11 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 		// Whether a child can be handed this conversation decides which promise is
 		// true: with the capability off, isolation is the whole point of a subagent.
 		config.canShareContext
-			? "Delegate tasks to subagents, each running in its own herdr pane with its own context window."
-			: "Delegate tasks to subagents, each running in its own herdr pane with an isolated context window.",
+			? `Delegate tasks to subagents, each ${supervisionPhrase(mode)} with its own context window.`
+			: `Delegate tasks to subagents, each ${supervisionPhrase(mode)} with an isolated context window.`,
 		"Calling this tool starts the requested subagent(s) immediately; it does not queue or defer them for later. All requested subagents run concurrently.",
 		"",
-		"This call returns when every subagent has finished, with all their reports in one result. Do nothing else while it runs: you cannot start a second batch until it returns. A human may interrupt the turn: the interrupt is relayed to every live subagent, stopping each turn where it is, the wait returns at once, and the subagents' panes are closed.",
+		`This call returns when every subagent has finished, with all their reports in one result. Do nothing else while it runs: you cannot start a second batch until it returns. ${interruptSentence(mode)}`,
 		"",
 		`Provide a \`tasks\` array with one or more subagents (up to ${MAX_PARALLEL_TASKS}). Subagents run concurrently and their reports come back together in a single result. ${taskFields}`,
 		"",
@@ -87,11 +123,11 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 	if (config.enableProfiles) {
 		lines.push(
 			"",
-			`Profiles: ${availableProfileNames(config)
+			`Profiles: ${availableProfileNames(config, mode)
 				.map((name) => `\`${name}\``)
 				.join(", ")}. \`${CURRENT_PROFILE}\` is the default and runs on this session's model and thinking level.`,
 		);
-		if (routingActive(config)) {
+		if (routingActive(config, mode)) {
 			lines.push("Omit `profile` to choose automatically for each task.");
 		}
 	}
@@ -131,8 +167,12 @@ export function buildPromptGuidelines(config: TinysubagentConfig): string[] {
  * key must never fail a whole batch. A share the gate does not permit is refused
  * by name in the tool body, before any pane opens.
  */
-export function buildParameters(config: TinysubagentConfig) {
+export function buildParameters(config: TinysubagentConfig, mode: LaunchMode = "pane") {
 	const profileOffered = config.enableProfiles;
+	const tasksDescription =
+		mode === "pane"
+			? `Subagents, each with its own pane. The call returns one result with every report. Maximum ${MAX_PARALLEL_TASKS}.`
+			: `Subagents, each started as its own process. The call returns one result with every report. Maximum ${MAX_PARALLEL_TASKS}.`;
 	const properties: Record<string, TSchema> = {
 		tasks: Type.Array(
 			Type.Object({
@@ -156,7 +196,7 @@ export function buildParameters(config: TinysubagentConfig) {
 			{
 				minItems: 1,
 				maxItems: MAX_PARALLEL_TASKS,
-				description: `Subagents, each with its own pane. The call returns one result with every report. Maximum ${MAX_PARALLEL_TASKS}.`,
+				description: tasksDescription,
 			},
 		),
 		cwd: Type.Optional(

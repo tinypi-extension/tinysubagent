@@ -19,6 +19,7 @@
  * environment happens to name at that moment.
  */
 
+import type { LaunchMode } from "../children/harness/index.ts";
 import { createHerdrPaneHost } from "./herdr.ts";
 import { createPlainSupervisor, type PlainSupervisorDeps } from "./plain.ts";
 import { createRexPaneHost } from "./rex.ts";
@@ -206,6 +207,16 @@ export function paneHostOf(candidate: Supervisor): PaneHost | null {
 	// A pane-host supervisor carries its own adapter. The registration's routing
 	// seam carries none, so it gets the adapter the active environment names.
 	return "panes" in candidate ? (candidate as PaneHostSupervisor).panes : paneHost;
+}
+
+/**
+ * How children are supervised under this candidate's kind, in the vocabulary the
+ * rest of the extension speaks: a pane host renders a child in a pane, any other
+ * kind runs it as a headless process. This is the one place the two vocabularies
+ * meet, so a consumer of the mode never has to know what a kind is called.
+ */
+export function launchModeOf(candidate: Supervisor): LaunchMode {
+	return paneHostOf(candidate) === null ? "headless" : "pane";
 }
 
 /**
