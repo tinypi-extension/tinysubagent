@@ -18,7 +18,8 @@ import type { ResultDetail } from "./result.ts";
 export interface SpawnedEntry {
 	agent: string;
 	name: string;
-	paneId: string;
+	/** The child's pane, when it was supervised as one; absent for a process. */
+	paneId?: string;
 	profile: ResolvedProfile | null;
 	/** Present only for a child given the orchestrator's context. */
 	sharedContext?: ShareCost;

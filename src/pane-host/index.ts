@@ -4,7 +4,8 @@
  * Everything this extension does to a live child goes through the neutral
  * operations on {@link Supervisor}: open it, learn when its wait is over, stop
  * it, close it — and the detection and readiness that decide whether this pi
- * process may spawn at all. Today the only kind of supervisor is a pane host.
+ * process may spawn at all. A child is supervised either by a pane host, or, in
+ * a terminal no pane host owns, as its own detached process.
  *
  * A pane host keeps the pane-only operations — layout read, resize, rename,
  * focus, relay-an-interrupt-by-typing-Esc — and stays reachable only through
@@ -12,13 +13,14 @@
  * child may not have. {@link PaneHost} is wrapped for that conformance, not
  * rewritten: its operations and their behaviour are untouched.
  *
- * The adapter behind a pane host is chosen here, so callers never read a host's
- * environment variables or speak its CLI. A child is addressed by the handle its
- * supervisor handed back at open, so a stop or close cannot land on whichever
- * host the environment happens to name at that moment.
+ * The kind is chosen here, so callers never read a host's environment variables
+ * or speak its CLI. A child is addressed by the handle its supervisor handed
+ * back at open, so a stop or close cannot land on whichever host the
+ * environment happens to name at that moment.
  */
 
 import { createHerdrPaneHost } from "./herdr.ts";
+import { createPlainSupervisor, type PlainSupervisorDeps } from "./plain.ts";
 import { createRexPaneHost } from "./rex.ts";
 import type {
 	CapabilityCheck,
@@ -32,6 +34,8 @@ import type {
 
 export { LiveSubPanes, planPlacement, planResizes } from "./layout.ts";
 export type { Placement } from "./layout.ts";
+export { createPlainSupervisor } from "./plain.ts";
+export type { PlainSupervisor, PlainSupervisorDeps, SpawnChild } from "./plain.ts";
 
 export type {
 	CapabilityCheck,
@@ -133,39 +137,75 @@ export function createPaneHost(env: NodeJS.ProcessEnv = process.env): PaneHost {
 }
 
 /** Build a supervisor whose kind is resolved from one environment. */
-export function createSupervisor(env: NodeJS.ProcessEnv = process.env): Supervisor {
-	return paneSupervisorOf(routed(() => env));
+export function createSupervisor(
+	env: NodeJS.ProcessEnv = process.env,
+	deps: PlainSupervisorDeps = {},
+): Supervisor {
+	return detectPaneHost(env) === null ? createPlainSupervisor(deps) : paneSupervisorOf(routed(() => env));
 }
 
 /**
- * The environment whose host owns this extension registration. It starts empty
- * so direct seam consumers keep the herdr passthrough until the extension says
+ * The environment whose host owns this extension registration. It starts null so
+ * direct seam consumers keep the herdr passthrough until the extension says
  * otherwise, even when the surrounding shell happens to be a Rex block.
  */
-let activeEnv: NodeJS.ProcessEnv = {};
+let activeEnv: NodeJS.ProcessEnv | null = null;
 
-/** Choose the adapter for one extension registration. */
+/** Choose the kind for one extension registration. */
 export function activatePaneHost(env: NodeJS.ProcessEnv = process.env): PaneHost {
 	activeEnv = env;
 	return select(env);
 }
 
 /** The pane-only operations, used by the adapter selection below. */
-export const paneHost: PaneHost = routed(() => activeEnv);
+export const paneHost: PaneHost = routed(() => activeEnv ?? {});
+
+/** The pane-host kind as a supervisor, kept whole so handles keep meaning. */
+const paneSupervisor: Supervisor = paneSupervisorOf(paneHost);
+
+/** The kind a terminal with no pane host gets: one, for the whole registration. */
+const plainSupervisor: Supervisor = createPlainSupervisor();
+
+/**
+ * The supervisor this registration's spawn, watch and interrupt call sites use:
+ * the pane host when one is detected, the plain kind otherwise. Selection lives
+ * here, so no call site decides what kind of terminal it is running in.
+ */
+function activeSupervisor(): Supervisor {
+	if (activeEnv === null) return paneSupervisor;
+	return detectPaneHost(activeEnv) === null ? plainSupervisor : paneSupervisor;
+}
 
 /**
  * The seam used by the extension's spawn, watch and interrupt call sites. Its
  * kind resolves from the registration's environment, so activation reaches the
  * supervisor too.
+ *
+ * It delegates instead of choosing once at import: `activatePaneHost` runs after
+ * this module loads. It holds no `panes` of its own, because its kind is not
+ * known until activation.
  */
-export const supervisor: Supervisor = paneSupervisorOf(paneHost);
+export const supervisor: Supervisor = {
+	get kind() {
+		return activeSupervisor().kind;
+	},
+	detectedIn: (env) => activeSupervisor().detectedIn(env),
+	createCapability: () => activeSupervisor().createCapability(),
+	open: (request) => activeSupervisor().open(request),
+	ended: (child) => activeSupervisor().ended(child),
+	stop: (child) => activeSupervisor().stop(child),
+	close: (child) => activeSupervisor().close(child),
+};
 
 /**
  * The pane-only operations of a supervisor, when its kind is a pane host; null
  * for any other kind. This is the only door to layout, resize, rename and Esc.
  */
 export function paneHostOf(candidate: Supervisor): PaneHost | null {
-	return "panes" in candidate ? (candidate as PaneHostSupervisor).panes : null;
+	if (candidate.kind === "plain") return null;
+	// A pane-host supervisor carries its own adapter. The registration's routing
+	// seam carries none, so it gets the adapter the active environment names.
+	return "panes" in candidate ? (candidate as PaneHostSupervisor).panes : paneHost;
 }
 
 /**

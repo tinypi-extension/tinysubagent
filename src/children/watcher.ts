@@ -96,9 +96,10 @@ export interface RunningSubagent {
 	profile: ResolvedProfile | null;
 	/**
 	 * The pane this child owns, for the report's ``pane `x` `` line. A child
-	 * supervised as a pane always has one.
+	 * supervised as a pane always has one; a child supervised as a process has no
+	 * pane identity at all, and no label stands in for it.
 	 */
-	paneId: string;
+	paneId?: string;
 	/**
 	 * The supervisor that owns this child and the address it gave back. Absent
 	 * when a child is described by a bare pane id alone — a fixture, or a caller
@@ -296,9 +297,12 @@ function classify(running: RunningSubagent): Classification | null {
 /**
  * The handle a child is addressed through: the one its spawn returned, or — for
  * a child described by a bare pane id — a pane child of the pane supervisor.
+ * Null only when a child has neither, which a spawn never produces: every child
+ * is opened through a supervisor and keeps its handle.
  */
-export function childHandle(running: RunningSubagent): SupervisorHandle {
-	return running.child ?? paneChild(running.paneId);
+export function childHandle(running: RunningSubagent): SupervisorHandle | null {
+	if (running.child) return running.child;
+	return running.paneId === undefined ? null : paneChild(running.paneId);
 }
 
 /**
@@ -308,7 +312,8 @@ export function childHandle(running: RunningSubagent): SupervisorHandle {
 export interface WatcherDeps {
 	/**
 	 * Pane liveness probe, for a child addressed by its pane id. The default asks
-	 * the child's own supervisor whether it has ended. Returns null when unknown.
+	 * the child's own supervisor whether it has ended — which, for a child
+	 * supervised as a process, is its process exiting. Returns null when unknown.
 	 */
 	paneExists?: (paneId: string) => Promise<boolean | null>;
 	pollIntervalMs?: number;
@@ -391,9 +396,11 @@ export function waitForSubagent(
 			if (ticks % PANE_CHECK_EVERY !== 0) return;
 
 			// No signal yet. If the child itself is over, nothing more will arrive.
-			const over = paneExists
-				? (await paneExists(running.paneId)) === false
-				: (await child.supervisor.ended(child)) === true;
+			const over = child === null
+				? false
+				: paneExists !== undefined && running.paneId !== undefined
+					? (await paneExists(running.paneId)) === false
+					: (await child.supervisor.ended(child)) === true;
 			if (over) {
 				finish({ kind: "cancelled", summary: readFinalMessage(running.sessionFile) });
 			}

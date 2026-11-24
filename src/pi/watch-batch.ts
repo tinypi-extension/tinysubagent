@@ -97,7 +97,15 @@ export async function watchBatch(
 			runnings.map(async (running, index) => {
 				const controller = controllers[index];
 				const child = childHandle(running);
+				// Wired now, rendered next: a child supervised as a process streams its
+				// output, and the lines belong on screen while this wait runs. Nothing draws
+				// them yet, so the text is read and dropped — but the subscription is taken,
+				// because it is the only door to that output and the place the renderer
+				// hangs off. A pane child has no such door, and says so by having no
+				// `output` member at all.
+				const stopOutput = child === null ? () => {} : (child.supervisor.output?.(child, () => {}) ?? (() => {}));
 				const outcome = await waitForSubagent(running, controller?.signal);
+				stopOutput();
 				if (controller) watchers.delete(controller);
 				// A wait that ended because the child is over closes its pane: a report and a
 				// session exit are both the child leaving, so nothing is left to read there.
@@ -107,7 +115,11 @@ export async function watchBatch(
 				// there is a reason to read. An interrupt is not closed here either: it was
 				// already closed by the relay that ended it. No rebalance runs here: the layout
 				// is set at spawn time and a close never revisits it.
-				if (outcome.kind === "completed" && outcome.via !== "turn-end") {
+				//
+				// A child with no handle has nothing to close and nothing tracked, so the
+				// pane tracking is skipped rather than addressed blindly. A child supervised
+				// as a process is never in the tracker to begin with.
+				if (child && outcome.kind === "completed" && outcome.via !== "turn-end") {
 					columns.drop(child.id);
 					void child.supervisor.close(child);
 				}

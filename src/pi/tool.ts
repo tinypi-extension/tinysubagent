@@ -90,7 +90,7 @@ function renderReport(details: AckDetails, theme: Theme): string[] {
 		const meta = [
 			entry.agent ? `agent \`${entry.agent}\`` : null,
 			entry.profile ? `profile \`${entry.profile}\`` : null,
-			`pane \`${entry.paneId}\``,
+			entry.paneId === undefined ? null : `pane \`${entry.paneId}\``,
 			formatShareCost(entry.sharedContext),
 		].filter((part): part is string => part !== null);
 		lines.push(theme.fg("muted", meta.join(" · ")));

@@ -11,6 +11,13 @@
 /** Which CLI a child runs on. */
 export type HarnessId = "pi" | "agy";
 
+/**
+ * How the child is supervised, as the launch sees it: a pane host runs it
+ * interactively in a pane, a plain terminal runs it headless and lets the child
+ * exit on its own.
+ */
+export type LaunchMode = "pane" | "headless";
+
 /** Everything {@link ChildHarness.buildArgv} needs. No env access: the caller resolves the bin. */
 export interface HarnessArgvSpec {
 	/** The resolved binary, argv[0]. */
@@ -24,6 +31,11 @@ export interface HarnessArgvSpec {
 	tools?: string[] | null;
 	/** The task is delivered as a file reference so the prompt never appears in `ps`. */
 	taskFile: string;
+	/**
+	 * How this child is supervised; absent means a pane host, the original shape.
+	 * A harness that needs different argv to run without a terminal says so here.
+	 */
+	mode?: LaunchMode;
 }
 
 /** What scraping the child's transcript for its last turn yields. */

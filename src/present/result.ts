@@ -17,7 +17,12 @@ export interface SubagentResult {
 	name: string;
 	agent: string | null;
 	profile: ResolvedProfile | null;
-	paneId: string;
+	/**
+	 * The pane this child owns, when it is supervised as one. A child supervised as
+	 * a process has no pane and no label standing in for it, so the report simply
+	 * says nothing about a pane for it.
+	 */
+	paneId?: string;
 	task: string;
 	outcome: SubagentOutcome;
 	elapsedMs: number;
@@ -109,10 +114,13 @@ function interruptNote(results: readonly SubagentResult[]): string | null {
  * pane open, while a session exit is gone and there is nothing to inspect. An
  * interrupt is the human's own doing, and its cause says what became of the pane:
  * the operator's interrupt closed it, a shutdown left it open.
+ *
+ * A child with no pane has nothing to point at, so the failure says what happened
+ * instead of sending the reader to an address that does not exist.
  */
 export function emptySummaryText(
 	outcome: { kind: SubagentOutcome["kind"]; via?: string; cause?: "interrupt" | "shutdown" },
-	paneId: string,
+	paneId?: string,
 ): string {
 	if (outcome.kind === "completed") {
 		return outcome.via === "turn-end"
@@ -124,7 +132,9 @@ export function emptySummaryText(
 			? "_(no summary: the child was interrupted and its pane was left open)_"
 			: "_(no summary: the child was interrupted and its pane was closed)_";
 	}
-	return `_(no output captured — inspect pane \`${paneId}\`)_`;
+	return paneId === undefined
+		? "_(no output captured: the child ended without reporting)_"
+		: `_(no output captured — inspect pane \`${paneId}\`)_`;
 }
 
 function section(result: SubagentResult, index: number, total: number): string {
@@ -143,7 +153,7 @@ function section(result: SubagentResult, index: number, total: number): string {
 	const meta = [
 		result.agent ? `agent \`${result.agent}\`` : null,
 		result.profile ? `profile \`${resolvedProfileLabel(result.profile)}\`` : null,
-		`pane \`${result.paneId}\``,
+		result.paneId === undefined ? null : `pane \`${result.paneId}\``,
 		formatShareCost(result.sharedContext),
 	].filter((part): part is string => part !== null);
 
@@ -178,7 +188,8 @@ export interface ResultDetail {
 	name: string;
 	agent: string | null;
 	profile: string | null;
-	paneId: string;
+	/** Absent for a child supervised as a process: it has no pane to name. */
+	paneId?: string;
 	sessionFile: string;
 	task: string;
 	elapsedMs: number;
