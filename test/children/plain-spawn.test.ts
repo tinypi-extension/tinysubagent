@@ -41,6 +41,9 @@ if (env.FAKE_REPORT === "report") {
 if (env.FAKE_REPORT === "failed") {
 	fs.writeFileSync(env.PI_TINYSUBAGENT_REPORT, JSON.stringify({ type: "failed", reason: "error", message: "the child gave up" }));
 }
+if (env.FAKE_REPORT === "turnend") {
+	fs.writeFileSync(env.PI_TINYSUBAGENT_REPORT, JSON.stringify({ type: "done" }));
+}
 process.exit(Number(env.FAKE_EXIT || 0));
 `;
 
@@ -246,6 +249,50 @@ test("a plain child that exits 0 without reporting still completes", async () =>
 		const [result] = await runBatch([spawned.running], new LiveSubPanes());
 		assert.equal(result?.outcome.kind, "completed");
 		assert.equal(result?.outcome.kind === "completed" ? result.outcome.via : null, "session-exit");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a plain child's supervisor record does not outlive the batch", async () => {
+	const { dir, context } = fixture();
+	try {
+		activatePaneHost({});
+		// One child ends as a content-free turn-end (the child stays at its prompt
+		// under a pane host, so its pane would be left open), one dies with an exit
+		// code. Neither has a pane, so neither has a reason to keep its record.
+		const turnEnd = await spawnOne(
+			{ agent: "worker", task: "x", name: "worker" },
+			context({ FAKE_REPORT: "turnend", FAKE_ARGV: join(dir, "argv-1.json") }),
+		);
+		const failed = await spawnOne(
+			{ agent: "worker", task: "y", name: "scout" },
+			context({ FAKE_EXIT: "1", FAKE_ARGV: join(dir, "argv-2.json") }),
+		);
+		assert.equal(turnEnd.ok && failed.ok, true);
+		if (!turnEnd.ok || !failed.ok) return;
+
+		const results = await runBatch([turnEnd.running, failed.running], new LiveSubPanes());
+		assert.deepEqual(
+			results.map((result) => [result.name, result.outcome.kind]),
+			[
+				["worker", "completed"],
+				["scout", "failed"],
+			],
+		);
+
+		// `close` answers whether it released anything: a record the batch left
+		// behind is still there to release, and would leak for the life of the
+		// orchestrator — along with its output listeners and stderr tail.
+		for (const running of [turnEnd.running, failed.running]) {
+			const handle = running.child;
+			assert.ok(handle, `${running.name} had no supervisor handle`);
+			assert.equal(
+				await handle.supervisor.close(handle),
+				false,
+				`${running.name}'s record outlived the batch`,
+			);
+		}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

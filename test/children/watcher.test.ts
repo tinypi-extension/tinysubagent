@@ -7,6 +7,7 @@ import { test } from "node:test";
 
 import type { RunningSubagent } from "../../src/children/watcher.ts";
 import { waitForSubagent } from "../../src/children/watcher.ts";
+import type { Supervisor, SupervisorHandle } from "../../src/pane-host/types.ts";
 
 /**
  * A watcher run with every path pointed at a temp directory, plus a liveness
@@ -491,6 +492,103 @@ test("the liveness probe is polled, not called every tick", async () => {
 		await pending;
 		// Roughly one probe per five ticks; generously bounded so this cannot flake.
 		assert.ok(calls >= 1 && calls <= 6, `expected 1-6 probes, saw ${calls}`);
+	} finally {
+		s.cleanup();
+	}
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// A child with no pane: its own process is the liveness
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A child supervised as a process, as `spawnOne` hands it over: a supervisor and
+ * an id, and no pane id at all. Liveness and status come from the supervisor,
+ * because there is no pane to ask.
+ */
+function plainScenario(
+	answers: { ended?: () => Promise<boolean | null>; exitCode?: () => number | null } = {},
+) {
+	const s = scenario();
+	const supervisor: Supervisor = {
+		kind: "plain",
+		detectedIn: () => true,
+		createCapability: () => ({
+			ensureReady: async () => null,
+			probe: async () => ({ problem: null, fix: null }),
+			reset: () => {},
+		}),
+		open: async () => handle,
+		ended: answers.ended ?? (async () => false),
+		stop: async () => {},
+		close: async () => true,
+		stderr: () => "",
+		exitCode: answers.exitCode ?? (() => null),
+	};
+	const handle: SupervisorHandle = { supervisor, id: "plain-1" };
+	const running: RunningSubagent = { ...s.running, paneId: undefined, child: handle };
+	return { ...s, running };
+}
+
+/**
+ * Await a wait that must end on its own. The abort is there so a defect that
+ * would hang resolves as an interrupt the assertion can report, instead of
+ * stalling the whole suite on a timer nobody clears.
+ */
+async function endsWithoutHuman(pending: Promise<unknown>, controller: AbortController): Promise<void> {
+	const timer = setTimeout(() => controller.abort("shutdown"), 3_000);
+	try {
+		await pending;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+test("a plain child that exits cleanly is not scraped for a summary", async () => {
+	const s = plainScenario();
+	try {
+		// The session holds a turn; the exit says the run is over. Under a pane host
+		// that turn is worth returning. Here there is no pane it would lead back to,
+		// so the same ending is content-free and the turn is not promoted into a
+		// report the child never handed back.
+		s.write(s.running.exitCodeFile, "0 aaaa1111\n");
+		const outcome = await waitForSubagent(s.running, undefined, s.deps);
+		assert.deepEqual(outcome, { kind: "completed", via: "session-exit", summary: null });
+		assert.deepEqual(s.probes, [], "a child with no pane had its pane probed");
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a plain child gone with no sidecar is its own ending, not a wait for one", async () => {
+	const s = plainScenario({ ended: async () => true, exitCode: () => 0 });
+	const controller = new AbortController();
+	try {
+		// Killed before its wrapper could stamp the exit code. Waiting for that file
+		// would wait for the life of this process, so the process's own end is the
+		// signal — and a clean status is still the content-free completion.
+		const pending = waitForSubagent(s.running, controller.signal, { ...s.deps, pollIntervalMs: 5 });
+		await endsWithoutHuman(pending, controller);
+		const outcome = await pending;
+		assert.deepEqual(outcome, { kind: "completed", via: "turn-end", summary: null });
+		assert.deepEqual(s.probes, [], "a child with no pane had its pane probed");
+	} finally {
+		s.cleanup();
+	}
+});
+
+test("a plain child that dies by a signal is a failure carrying no status", async () => {
+	const s = plainScenario({ ended: async () => true, exitCode: () => null });
+	const controller = new AbortController();
+	try {
+		const pending = waitForSubagent(s.running, controller.signal, { ...s.deps, pollIntervalMs: 5 });
+		await endsWithoutHuman(pending, controller);
+		const outcome = await pending;
+		// A signal leaves no exit code behind. The classification is still a failure
+		// rather than a hang, and it says no status was captured instead of inventing
+		// one: a fresh run is the remedy, not a retry with the same code.
+		assert.deepEqual(outcome, { kind: "failed", reason: "exit", exitCode: null, summary: null });
+		assert.deepEqual(s.probes, [], "a child with no pane had its pane probed");
 	} finally {
 		s.cleanup();
 	}

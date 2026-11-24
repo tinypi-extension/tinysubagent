@@ -110,6 +110,10 @@ function fakePlain(): FakePlain {
 				record.unsubscribed += 1;
 			};
 		},
+		// This kind's own streams, present rather than optional: nothing here reads
+		// them, but the supervisor a plain terminal gets always has them.
+		stderr: () => "",
+		exitCode: () => null,
 	};
 
 	return {

@@ -14,7 +14,7 @@
  */
 
 import { strict as assert } from "node:assert";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -22,6 +22,7 @@ import { test } from "node:test";
 import type { TinysubagentConfig } from "../../src/config/config.ts";
 import { LiveSubPanes } from "../../src/herdr/layout.ts";
 import { activatePaneHost } from "../../src/pane-host/index.ts";
+import { createPlainSupervisor } from "../../src/pane-host/plain.ts";
 import { buildParameters } from "../../src/present/describe.ts";
 import { buildResultText, type SubagentResult } from "../../src/present/result.ts";
 import { waitForSubagent, type RunningSubagent, type SubagentOutcome } from "../../src/children/watcher.ts";
@@ -159,6 +160,19 @@ function detailRow(result: unknown): { stderr?: string; exitCode?: number; statu
 		?.results?.[0];
 }
 
+/** Wait for a process to announce its pid in a file, then read it. */
+async function readPid(file: string, timeoutMs = 5_000): Promise<number> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (existsSync(file)) {
+			const pid = Number(readFileSync(file, "utf8").trim());
+			if (Number.isInteger(pid) && pid > 0) return pid;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`no pid was written to ${file}`);
+}
+
 test("a failed plain child hands back its exit code and the tail of its stderr", async () => {
 	// Twenty-five lines of diagnostic, so the window the report keeps is a tail and
 	// not the whole stream: the cause is the end of it.
@@ -261,19 +275,33 @@ test("a never-started child under a pane host is still pointed at the pane left 
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// A dead process is not a vanished pane
+// A dead process is its own ending
 // ────────────────────────────────────────────────────────────────────────────
 
-test("a dead plain child is ended by its exit code, never by the process being gone", async () => {
+/** Await a wait that must end by itself, so a defect fails instead of hanging. */
+async function endsWithoutHuman<T>(pending: Promise<T>, controller: AbortController): Promise<T> {
+	const timer = setTimeout(() => controller.abort("shutdown"), 3_000);
+	try {
+		return await pending;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+test("a dead plain child is classified from its captured status, not waited on", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-plain-failure-wait-"));
 	try {
 		const sessionFile = join(dir, "alpha.jsonl");
-		writeFileSync(sessionFile, "", "utf8");
+		// The session holds a turn. Nothing about a dead process makes that turn a
+		// report, so it must not become the summary.
+		writeFileSync(
+			sessionFile,
+			`${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "half a turn" }] } })}\n`,
+			"utf8",
+		);
 
-		// A plain child whose process is already over, which is all `ended` can say
-		// here. Under a pane host that is a vanished pane and a cancellation; a
-		// process is not a pane, and its death is not an outcome on its own.
-		const asked: string[] = [];
+		// A plain child whose process is over and whose wrapper died before stamping
+		// its exit code. Its own captured status is then the only reading left.
 		const handle: SupervisorHandle = {
 			supervisor: {
 				kind: "plain",
@@ -284,13 +312,11 @@ test("a dead plain child is ended by its exit code, never by the process being g
 					reset: () => {},
 				}),
 				open: async () => handle,
-				ended: async (child) => {
-					asked.push(child.id);
-					return true;
-				},
+				ended: async () => true,
 				stop: async () => {},
 				close: async () => true,
 				stderr: () => "",
+				exitCode: () => 137,
 			},
 			id: "plain-1",
 		};
@@ -300,7 +326,7 @@ test("a dead plain child is ended by its exit code, never by the process being g
 			agent: "worker",
 			profile: null,
 			child: handle,
-			writesSession: false,
+			writesSession: true,
 			sessionFile,
 			exitCodeFile: `${sessionFile}.exitcode`,
 			reportFile: `${sessionFile}.done`,
@@ -308,25 +334,71 @@ test("a dead plain child is ended by its exit code, never by the process being g
 			task: "a job whose process died",
 		};
 
-		let settled: SubagentOutcome | null = null;
-		const pending = waitForSubagent(record, undefined, { pollIntervalMs: 5 }).then((outcome) => {
-			settled = outcome;
-			return outcome;
+		const probed: string[] = [];
+		const controller = new AbortController();
+		const pending = waitForSubagent(record, controller.signal, {
+			pollIntervalMs: 5,
+			paneExists: async (paneId) => {
+				probed.push(paneId);
+				return true;
+			},
 		});
+		const outcome = await endsWithoutHuman(pending, controller);
 
-		// Many polls' worth of a process that is gone, with no signal left behind: a
-		// pane vanishing would have been filed as a cancellation by now.
-		await new Promise((resolve) => setTimeout(resolve, 100));
-		assert.equal(settled, null, `a dead process was reported as ${JSON.stringify(settled)}`);
-		// Not even scraped for a summary: nothing about a vanished pane is read here.
-		assert.equal(existsSync(`${sessionFile}.done`), false);
+		// The exit status, as the wrapper would have stamped it, and no summary: a
+		// death is not a report and half a turn is not one either.
+		assert.deepEqual(outcome, { kind: "failed", reason: "exit", exitCode: 137, summary: null });
+		// A child with no pane id has no pane: nothing was probed, and nothing was
+		// consumed as if a signal had arrived.
+		assert.deepEqual(probed, [], "the wait treated a dead process as a vanished pane");
+		assert.equal(existsSync(record.reportFile), false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
-		// What does end it is the wrapper's sidecar: the exit code, as it always was.
-		writeFileSync(record.exitCodeFile, `1 ${record.id}\n`);
-		const outcome = await pending;
-		assert.deepEqual(outcome, { kind: "failed", reason: "exit", exitCode: 1, summary: null });
-		// Liveness was never the question: a process's survival is not a pane's.
-		assert.deepEqual(asked, [], "the wait treated a dead process as a vanished pane");
+test("a wrapper killed before it writes its exit code is classified, not hung on", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-plain-failure-killed-"));
+	const supervisor = createPlainSupervisor();
+	try {
+		const sessionFile = join(dir, "alpha.jsonl");
+		const pidFile = join(dir, "wrapper.pid");
+		const scriptFile = join(dir, "wrapper.sh");
+		// The real wrapper writes its exit-code sidecar as it exits. This one records
+		// its pid and becomes a long sleep, so it can be killed the way an OOM killer
+		// would: no sidecar, no report, no farewell.
+		writeFileSync(scriptFile, `#!/usr/bin/env bash\necho $$ > '${pidFile}'\nexec sleep 60\n`, "utf8");
+		chmodSync(scriptFile, 0o755);
+
+		const handle = await supervisor.open({ cwd: dir, scriptPath: scriptFile });
+		const record: RunningSubagent = {
+			id: handle.id,
+			name: "alpha",
+			agent: "worker",
+			profile: null,
+			child: handle,
+			writesSession: false,
+			sessionFile,
+			exitCodeFile: `${sessionFile}.exitcode`,
+			reportFile: `${sessionFile}.done`,
+			startedAt: Date.now(),
+			task: "a job whose wrapper is killed",
+		};
+		try {
+			// Wait for the shell to announce itself, then kill it before it can write
+			// anything: the sidecar that used to be the only ending is now missing.
+			const pid = await readPid(pidFile);
+			process.kill(pid, "SIGKILL");
+
+			const controller = new AbortController();
+			const pending = waitForSubagent(record, controller.signal, { pollIntervalMs: 5 });
+			const outcome = await endsWithoutHuman(pending, controller);
+			// The process is gone, so the wait is over. It says the status is unknown
+			// rather than inventing a code or hanging until this process exits.
+			assert.deepEqual(outcome, { kind: "failed", reason: "exit", exitCode: null, summary: null });
+		} finally {
+			await supervisor.close(handle);
+		}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
