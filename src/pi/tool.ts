@@ -36,7 +36,7 @@ import {
 	type SpawnedEntry,
 } from "../present/ack-render.ts";
 import { buildResultDetails, buildResultText, emptySummaryText, oneLine } from "../present/result.ts";
-import { buildPromptGuidelines, buildToolDescription } from "../present/describe.ts";
+import { buildPromptGuidelines, buildPromptSnippet, buildToolDescription } from "../present/describe.ts";
 import { readSharedContext } from "../children/shared-context.ts";
 import { discoverAgents } from "../config/agents.ts";
 import { type TinysubagentConfig } from "../config/config.ts";
@@ -48,7 +48,7 @@ import {
 	resolveCwd,
 	resolveProjectAgentDir,
 } from "../children/requests.ts";
-import { harnessFor } from "../children/harness/index.ts";
+import { harnessFor, type LaunchMode } from "../children/harness/index.ts";
 import { errorMessage } from "../children/contract.ts";
 import { parentModelSpec, parentThinking, spawnOne } from "../children/spawn.ts";
 import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.ts";
@@ -136,6 +136,13 @@ export interface ToolDeps {
 	/** Watchers still running, so a shutdown can end them; owned by the caller. */
 	watchers: Set<AbortController>;
 	/**
+	 * How this registration supervises children. Frozen with the config, because
+	 * the description, the snippet, the parameter schema and the profile refusals
+	 * are all the ones for this mode: what the model is offered here is what this
+	 * terminal can actually run.
+	 */
+	mode: LaunchMode;
+	/**
 	 * Warning keys this registration has already reported. One set per
 	 * registration is the session scope: the extension registers once per pi
 	 * session, and a reload starts a new registration with a fresh set. Optional
@@ -164,13 +171,13 @@ export interface ToolDeps {
 }
 
 export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> {
-	const { pi, config, parameters, advertisedAgents, capability, columns, watchers } = deps;
+	const { pi, config, parameters, advertisedAgents, capability, columns, watchers, mode: launchMode } = deps;
 
 	return {
 		name: TOOL_NAME,
 		label: "Subagent",
-		description: buildToolDescription(advertisedAgents, config),
-		promptSnippet: "Delegate a task to a subagent running in its own herdr pane",
+		description: buildToolDescription(advertisedAgents, config, launchMode),
+		promptSnippet: buildPromptSnippet(launchMode),
 		promptGuidelines: buildPromptGuidelines(config),
 		parameters,
 
@@ -222,12 +229,17 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			const classifierRouted = new Set<string>();
 			// Filled by the validation loop below, read again by the share refusal.
 			const profiles = new Map<string, ResolvedProfile>();
+			// Requests whose profile exists but cannot run in this mode. They fail on
+			// their own row, like a refused share: the request is sound and its
+			// siblings are still exactly what the caller asked for.
+			const refusedProfiles = new Map<SpawnRequest, string>();
 			let context: SpawnContext;
 			try {
-				if (routingActive(config)) {
+				if (routingActive(config, launchMode)) {
 					await routeProfiles(accepted, config, {
 						route: deps.route(ctx),
 						agents: discovered.agents,
+						mode: launchMode,
 						warn: (message) => routeWarnings.push(message),
 					});
 					if (config.classifier !== null) {
@@ -239,15 +251,25 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					}
 				}
 
-				// Validate every profile before opening any pane, so a bad batch fails
-				// whole rather than halfway. The resolved profiles are kept: a share has to
+				// Validate every profile before opening any pane. A name the config does
+				// not have, or profiles turned off, refuses the whole batch before
+				// anything launches; a profile this terminal cannot run is recorded and
+				// fails only its own row. The resolved profiles are kept: a share has to
 				// be judged against the harness a request actually runs on.
 				for (const request of accepted) {
-					const profile = resolveProfile(config, request.profile, {
-						model: parentModelSpec(ctx),
-						thinking: parentThinking(ctx),
-					});
+					const profile = resolveProfile(
+						config,
+						request.profile,
+						{ model: parentModelSpec(ctx), thinking: parentThinking(ctx) },
+						launchMode,
+					);
 					if (!profile.ok) {
+						// A profile this terminal cannot start is a per-row ending; an unknown
+						// name or disabled profiles still fail the batch whole.
+						if (profile.unavailable) {
+							refusedProfiles.set(request, profile.error);
+							continue;
+						}
 						return failure(profile.error);
 					}
 					profiles.set(request.name, profile);
@@ -315,7 +337,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					// Refused before any launch file was written, so nothing of this request
 					// is left on disk: its pane was never opened and its siblings are launched
 					// as if it had not been asked for.
-					const refused = refusedShares.get(request);
+					const refused = refusedProfiles.get(request) ?? refusedShares.get(request);
 					if (refused) {
 						failures.push({ agent: request.agent, error: refused });
 						continue;

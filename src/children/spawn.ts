@@ -19,6 +19,7 @@ import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	LiveSubPanes,
+	launchModeOf,
 	paneHostOf,
 	planPlacement,
 	planResizes,
@@ -31,7 +32,6 @@ import {
 import { resolveProfile } from "../config/profiles.ts";
 import { declaresSpawnTool, resolveToolList } from "../tool-list.ts";
 import { isThinkingLevel, TOOL_NAME, type ThinkingLevel } from "../types.ts";
-import type { LaunchMode } from "./harness/types.ts";
 import { errorMessage, type SpawnContext, type SpawnFailed, type SpawnRequest, type Spawned } from "./contract.ts";
 
 /**
@@ -47,10 +47,24 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		return { ok: false, error: `unknown agent "${request.agent}". Available: ${available}.` };
 	}
 
-	const profile = resolveProfile(context.config, request.profile, {
-		model: context.parentModel,
-		thinking: context.parentThinking,
-	});
+	// Which supervisor runs this child, decided once and read three times: whether
+	// this profile can run here at all, how the child is launched, and how it is
+	// opened below. A context may name its own supervisor (a test with an injected
+	// spawn); otherwise the seam's active kind decides, and no call site reads a
+	// terminal's environment itself.
+	const seam: Supervisor = context.supervisor ?? activeSupervisor;
+	const panes = paneHostOf(seam);
+	// The mode is a property of the supervision kind, not of an argv default: a
+	// pane renders the child's UI, so a pane child is interactive; a plain terminal
+	// has nowhere to render it, so a plain child runs headless and exits on its own.
+	const mode = launchModeOf(seam);
+
+	const profile = resolveProfile(
+		context.config,
+		request.profile,
+		{ model: context.parentModel, thinking: context.parentThinking },
+		mode,
+	);
 	if (!profile.ok) return { ok: false, error: profile.error };
 
 	const harness = harnessFor(profile);
@@ -119,17 +133,6 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// The one entry a role's list cannot have is the way to hand the result back.
 	// The resolver appends it whenever an allowlist exists.
 	const id = runId();
-
-	// Which supervisor runs this child, decided once and read twice: once here, to
-	// say how the child is launched, and once below, to open it. A context may name
-	// its own supervisor (a test with an injected spawn); otherwise the seam's
-	// active kind decides, and no call site reads a terminal's environment itself.
-	const seam: Supervisor = context.supervisor ?? activeSupervisor;
-	const panes = paneHostOf(seam);
-	// The mode is a property of the supervision kind, not of an argv default: a
-	// pane renders the child's UI, so a pane child is interactive; a plain terminal
-	// has nowhere to render it, so a plain child runs headless and exits on its own.
-	const mode: LaunchMode = panes === null ? "headless" : "pane";
 
 	const paths = buildLaunchPaths({
 		sessionDir: context.sessionDir,

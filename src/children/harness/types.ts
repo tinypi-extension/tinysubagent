@@ -53,6 +53,13 @@ export interface ChildHarness {
 	/** Whether the child takes pi's `-e <extension>` hook. */
 	supportsExtension: boolean;
 	/**
+	 * Whether this CLI can run with no pane to render into, as a plain child
+	 * process that exits on its own. This is the whole fact the profile list
+	 * needs to know before it offers a profile: a harness that is pane-only makes
+	 * every profile naming it unavailable in a plain terminal.
+	 */
+	runsHeadless: boolean;
+	/**
 	 * Where this harness keeps its per-run transcript. pi: the child session
 	 * jsonl the sidecars are named after. agy: not knowable up front (the
 	 * transcript path arrives with the Stop hook payload).

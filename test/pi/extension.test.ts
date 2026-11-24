@@ -142,7 +142,21 @@ test("inside herdr it registers exactly one tool under the expected name", () =>
 	assert.equal(tool?.name, TOOL_NAME);
 	assert.equal(tool?.label, "Subagent");
 	assert.equal(typeof tool?.execute, "function");
+	// The snippet is mode-specific: a pane host is the mode that opens one.
 	assert.match(tool?.promptSnippet ?? "", /herdr pane/);
+});
+
+test("in a plain terminal the registration promises a process, not a pane", () => {
+	const stub = stubApi();
+	withEnv({}, () => {
+		tinysubagent(stub.api as never);
+	});
+	const [tool] = stub.tools;
+	assert.ok(tool, "the tool was not registered in a plain terminal");
+	// Nothing the model reads may promise a pane it will not get.
+	assert.doesNotMatch(tool.promptSnippet ?? "", /pane/);
+	assert.match(tool.promptSnippet ?? "", /headless process/);
+	assert.doesNotMatch(tool.description ?? "", /pane/i);
 });
 
 test("both session hooks are registered, so watchers can be ended on shutdown", () => {
