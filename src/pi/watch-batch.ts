@@ -22,6 +22,11 @@
  * idle ones included — every wait ends as `interrupted`, and then each of those
  * panes is closed. The Esc is what stops the turn; the close is what stops the
  * child from being left behind with nobody waiting on it.
+ *
+ * A child with no pane cannot be typed at, so an interrupt ends it the only way
+ * it can: its own supervisor's `stop`, which kills its process group. The same
+ * stop runs when a shutdown aborts the waits directly, because a session going
+ * away must not leave a child's processes behind either.
  */
 
 import { paneChild, type LiveSubPanes } from "../pane-host/index.ts";
@@ -79,6 +84,23 @@ export async function watchBatch(
 	});
 	const children = runnings.map(childHandle);
 
+	// The children a pane relay cannot reach: a child with no pane id is supervised
+	// as a process, and the only way to stop it is its own supervisor's `stop` — a
+	// kill, not an Esc. This is the seam's own distinction, not a second kind
+	// check: a pane child is addressed by the id the column tracker holds.
+	const processChildren = children.filter(
+		(child, index): child is NonNullable<typeof child> => child !== null && runnings[index]?.paneId === undefined,
+	);
+
+	// Started at most once, by whichever path ends the batch: an interrupt's relay
+	// and a shutdown's direct abort must not both kill, and a batch that ends any
+	// other way must kill nothing.
+	let stopping: Promise<void>[] | null = null;
+	const stopProcessChildren = (): Promise<void>[] => {
+		stopping ??= processChildren.map((child) => child.supervisor.stop(child));
+		return stopping;
+	};
+
 	// The live view exists only where the children stream their output. A pane
 	// child has no `output` member — it is addressed by its pane, and the pane is
 	// the view — so a pane-host batch draws no lines even when a channel was
@@ -119,15 +141,28 @@ export async function watchBatch(
 	const forward = (): void => {
 		if (forwarded) return;
 		const paneIds = columns.trackedIds();
-		forwarded = relayInterrupt(paneIds).then(() => {
+		forwarded = relayInterrupt(paneIds).then(async () => {
 			for (const controller of controllers) controller.abort("interrupt");
 			for (const paneId of paneIds) {
 				columns.drop(paneId);
 				const child = paneChild(paneId);
 				void child.supervisor.close(child);
 			}
+			// After the abort, so every wait has already ended as `interrupted`: a child
+			// killed first could exit and be read as a failure instead of an interrupt.
+			await Promise.all(stopProcessChildren());
 		});
 	};
+
+	// The session edge does not pass through `forward`: the lifecycle aborts each
+	// watcher directly, with no relay and no pane close. A child with no pane still
+	// has a process to end, so it is stopped here — and the abort is what makes the
+	// wait read as `shutdown` before an exit code can be classified.
+	for (const controller of controllers) {
+		controller.signal.addEventListener("abort", () => {
+			if (controller.signal.reason === "shutdown") void stopProcessChildren();
+		}, { once: true });
+	}
 	signal?.addEventListener("abort", forward, { once: true });
 	// An abort that landed before this wait was reached still relays: the listener
 	// would never fire for it.
@@ -174,6 +209,9 @@ export async function watchBatch(
 			}),
 		);
 		await forwarded;
+		// A shutdown aborted the waits directly; whatever it started is awaited here,
+		// so the call never returns while a child's group is still being torn down.
+		if (stopping !== null) await Promise.all(stopping);
 		return results;
 	} finally {
 		// The report is the result now: the live lines go with the frame that drew

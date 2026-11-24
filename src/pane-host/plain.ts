@@ -12,9 +12,10 @@
  * someone else's job — {@link output} is the door, and its unsubscribe is the
  * whole lifecycle of a subscription.
  *
- * Nothing here waits for a pane or types into one, so `stop` is a documented
- * no-op: a headless child cannot be steered from outside, and killing it is an
- * interrupt, not a stop.
+ * Nothing here waits for a pane or types into one, so `stop` is this kind's
+ * interrupt: a headless child cannot be steered from outside, so it is ended by
+ * signalling its whole process group — terminate first, kill after a grace —
+ * never by closing something, because there is nothing to close.
  *
  * stderr is read for the one thing it is: evidence. A crashed pane used to be
  * read off the screen, so this kind keeps the end of the child's stderr and hands
@@ -41,7 +42,30 @@ export type SpawnChild = (command: string, args: string[], options: PlainSpawnOp
 
 export interface PlainSupervisorDeps {
 	spawn?: SpawnChild;
+	/**
+	 * How long a stopped child is given to act on the termination signal before its
+	 * group is killed. Present so a test can shorten the grace; production uses
+	 * {@link INTERRUPT_GRACE_MS}.
+	 */
+	graceMs?: number;
 }
+
+/**
+ * The grace a child gets between the termination signal and the kill signal.
+ * Long enough for a child to flush and exit, short enough that an interrupt
+ * still returns promptly when it refuses to.
+ */
+export const INTERRUPT_GRACE_MS = 5_000;
+
+/**
+ * How long the group is given to disappear once it has been killed. SIGKILL
+ * cannot be caught, so this only covers the kernel tearing the processes down;
+ * the bound is what keeps `stop` from waiting on a process that cannot die.
+ */
+const KILL_SETTLE_MS = 2_000;
+
+/** How often a dying group's liveness is re-read while waiting for it to end. */
+const GROUP_POLL_MS = 10;
 
 /** The supervisor a plain terminal gets: a process supervisor, and nothing more. */
 export interface PlainSupervisor extends Supervisor {
@@ -131,12 +155,67 @@ function unrefStream(stream: unknown): void {
 	candidate?.unref?.();
 }
 
+/** True while any process of the group is still there. */
+function groupAlive(pid: number): boolean {
+	try {
+		process.kill(-pid, 0);
+		return true;
+	} catch (error) {
+		// ESRCH is the answer wanted: no process is left in the group.
+		return (error as NodeJS.ErrnoException).code !== "ESRCH";
+	}
+}
+
+/**
+ * Signal a whole process group, which is how a child's own tool subprocesses are
+ * reached: the group id is the leader's pid because the child was spawned
+ * `detached`, and the leading minus is what makes this a group signal rather
+ * than one process's.
+ *
+ * A group that has already ended is not an error — it is the outcome.
+ */
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+	try {
+		process.kill(-pid, signal);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+	}
+}
+
+/** Resolve true once no process of the group is left, false when the bound passes. */
+async function groupEnded(pid: number, timeoutMs: number): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (groupAlive(pid)) {
+		if (Date.now() >= deadline) return false;
+		await new Promise((resolve) => setTimeout(resolve, GROUP_POLL_MS));
+	}
+	return true;
+}
+
+/**
+ * End one child by ending its whole group: terminate, then kill after the grace.
+ *
+ * The wait is on the group rather than the direct child because a child that
+ * exits on SIGTERM can still leave a tool subprocess behind; only once no
+ * process of the group is left has the work this child started actually
+ * stopped. A group that outlasts the grace is killed, and the kill is what makes
+ * the second wait short instead of another grace.
+ */
+async function endGroup(pid: number, graceMs: number): Promise<void> {
+	if (!groupAlive(pid)) return;
+	signalGroup(pid, "SIGTERM");
+	if (await groupEnded(pid, graceMs)) return;
+	signalGroup(pid, "SIGKILL");
+	await groupEnded(pid, KILL_SETTLE_MS);
+}
+
 /**
  * Build a plain-terminal supervisor. Each one owns the children it opened; the
  * same child addressed to another instance is simply not alive there.
  */
 export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupervisor {
 	const spawnChild = deps.spawn ?? spawnDetached;
+	const graceMs = deps.graceMs ?? INTERRUPT_GRACE_MS;
 	const children = new Map<string, LiveChild>();
 
 	const handleOf = (id: string): SupervisorHandle => ({ supervisor, id });
@@ -195,9 +274,21 @@ export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupe
 		// one it already closed, has nothing left running.
 		ended: async (child: SupervisorHandle) => children.get(child.id)?.finished ?? true,
 
-		// A headless child cannot be steered from outside. Ending it early is an
-		// interrupt, which is a kill and belongs to its own path, not to this one.
-		stop: async () => {},
+		// A headless child cannot be steered from outside, so an interrupt ends it:
+		// its whole process group is terminated, then killed after the grace. Only a
+		// child this supervisor opened can be signalled, and a child that has already
+		// ended has nothing left to stop. Never rejects — `stop` is documented as
+		// silent, and an interrupt must not be blocked by a process that will not die.
+		stop: async (child: SupervisorHandle) => {
+			const record = children.get(child.id);
+			const pid = record?.proc.pid;
+			if (!record || record.finished || pid === undefined) return;
+			try {
+				await endGroup(pid, graceMs);
+			} catch {
+				// A group this process may not signal is not a failure the batch can act on.
+			}
+		},
 
 		close: async (child: SupervisorHandle) => {
 			const record = children.get(child.id);

@@ -152,7 +152,11 @@ export interface Supervisor {
 	open(request: OpenRequest): Promise<SupervisorHandle>;
 	/** True once the child is over, false while it is alive; null when the kind cannot tell. */
 	ended(child: SupervisorHandle): Promise<boolean | null>;
-	/** Stop one child: the operator's interrupt, not a kill. Never rejects. */
+	/**
+	 * Stop one child: the operator's interrupt. A pane host relays a keystroke into
+	 * the child's pane; a kind with no pane ends the child's process group instead.
+	 * Never rejects.
+	 */
 	stop(child: SupervisorHandle): Promise<void>;
 	close(child: SupervisorHandle): Promise<boolean>;
 	/**
