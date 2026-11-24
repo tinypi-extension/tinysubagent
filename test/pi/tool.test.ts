@@ -749,6 +749,20 @@ test("sharing guidance is advertised only when the knob is offered", () => {
 	assert.match(onDescription, /Your reasoning would anchor it/);
 });
 
+test("sharing advice and the role list are separate sections of the description", () => {
+	const on: TinysubagentConfig = { ...routingConfig(null), canShareContext: true };
+	const lines = buildToolDescription([workerAgent], on).split("\n");
+
+	const sharing = lines.indexOf("Share context:");
+	const roles = lines.indexOf("Available roles:");
+	assert.ok(sharing >= 0 && roles > sharing, "sharing must be its own section before the roles");
+	assert.match(lines[roles + 1] ?? "", /^- `worker`/, "roles must start directly under their heading");
+	assert.ok(
+		!lines.slice(roles + 1).some((line) => line.startsWith("- You're unsure")),
+		"a sharing bullet must not fall inside the role list",
+	);
+});
+
 test("the prompt stops claiming a subagent cannot see the conversation when sharing is available", () => {
 	const off: TinysubagentConfig = { ...routingConfig(null), canShareContext: false };
 	const on: TinysubagentConfig = { ...off, canShareContext: true };

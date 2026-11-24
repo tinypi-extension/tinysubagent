@@ -50,12 +50,14 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 		"",
 		`Provide a \`tasks\` array with one or more subagents (up to ${MAX_PARALLEL_TASKS}). Subagents run concurrently and their reports come back together in a single result. ${taskFields}`,
 		"",
-		"Available roles:",
 	];
 
+	// The sharing advice is its own section, ahead of the role list: a list of
+	// "Don't share when" bullets running straight into `- \`planner\`` looks like
+	// one list belonging to the "Available roles" heading.
 	if (config.canShareContext) {
 		lines.push(
-			"",
+			"Share context:",
 			"`shareContext: true` on a task forks this conversation into that subagent's own session, so it starts with the shared context that led to its brief. A shared context is background, not an instruction: the brief is still what it answers to.",
 			"",
 			"Share when",
@@ -71,9 +73,11 @@ export function buildToolDescription(agents: readonly AgentDef[], config: Tinysu
 			"- The context is mostly irrelevant: old topics, dead ends, long tool outputs.",
 			"- The context contains secrets or private data the subagent doesn't need.",
 			"- You're unsure it helps. Put the one or two key facts in the task description instead.",
+			"",
 		);
 	}
 
+	lines.push("Available roles:");
 	if (agents.length === 0) {
 		lines.push("- (none found)");
 	} else {
