@@ -162,6 +162,7 @@ function harness(supervisor: Supervisor, live: ToolDeps["live"]): Harness {
 		watchers,
 		supervisor,
 		live,
+		mode: "headless",
 		route: () => async () => ({ choice: "current" }),
 	});
 
