@@ -79,7 +79,13 @@ export interface PlainSupervisor extends Supervisor {
 	 * The end of a child's stderr as it stands, for a failure report; empty when
 	 * the child wrote nothing there. Present on this kind alone.
 	 */
-	stderr?(child: SupervisorHandle): string;
+	stderr(child: SupervisorHandle): string;
+	/**
+	 * The status the child's process exited with; null while it runs, and null for
+	 * a death by signal, which leaves no status behind. Present on this kind
+	 * alone, because it is the only one with a process of its own to ask.
+	 */
+	exitCode(child: SupervisorHandle): number | null;
 }
 
 /** One live child, kept only so its handle can be asked about later. */
@@ -88,6 +94,8 @@ interface LiveChild {
 	listeners: Set<(chunk: string) => void>;
 	/** Set by the process exiting, or by the spawn itself failing. */
 	finished: boolean;
+	/** The status it exited with; null for a death by signal, or before either. */
+	exitCode: number | null;
 	stderr: StderrTail;
 }
 
@@ -237,14 +245,24 @@ export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupe
 				stdio: ["ignore", "pipe", "pipe"],
 				detached: true,
 			});
-			const child: LiveChild = { proc, listeners: new Set(), finished: false, stderr: { lines: [], partial: "" } };
+			const child: LiveChild = {
+				proc,
+				listeners: new Set(),
+				finished: false,
+				exitCode: null,
+				stderr: { lines: [], partial: "" },
+			};
 			children.set(id, child);
 
-			const finish = (): void => {
+			// The status is kept rather than read later: it is only offered once, on the
+			// way out, and a child killed before its wrapper wrote the exit-code sidecar
+			// is classified from it.
+			const finish = (code: number | null): void => {
 				child.finished = true;
+				child.exitCode = code;
 			};
-			proc.once("exit", finish);
-			proc.once("error", finish);
+			proc.once("exit", (code: number | null) => finish(code));
+			proc.once("error", () => finish(null));
 
 			// Read both pipes for as long as the child holds them. Whoever wants the
 			// text subscribes through `output`; a subscriber that never arrives must
@@ -258,11 +276,12 @@ export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupe
 			proc.stderr?.setEncoding("utf8");
 			proc.stderr?.on("data", (chunk: string) => keepStderr(child.stderr, chunk));
 
-			// `detached` makes the child a process of its own, in its own group, so it
-			// outlives a restart of this one. `unref` — the pipes included — keeps it out
-			// of the count that holds this process open: a child nobody is waiting for
-			// must not be able to keep the orchestrator alive. Reading is unaffected
-			// while this process runs, which is the only time the text is wanted.
+			// `detached` makes the child the leader of a process group of its own, so
+			// `stop` can signal the whole group — the child's own tool subprocesses
+			// included — with one call. `unref` — the pipes included — keeps it out of
+			// the count that holds this process open: a child nobody is waiting for must
+			// not be able to keep the orchestrator alive. Reading is unaffected while
+			// this process runs, which is the only time the text is wanted.
 			proc.unref();
 			unrefStream(proc.stdout);
 			unrefStream(proc.stderr);
@@ -276,13 +295,15 @@ export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupe
 
 		// A headless child cannot be steered from outside, so an interrupt ends it:
 		// its whole process group is terminated, then killed after the grace. Only a
-		// child this supervisor opened can be signalled, and a child that has already
-		// ended has nothing left to stop. Never rejects — `stop` is documented as
-		// silent, and an interrupt must not be blocked by a process that will not die.
+		// child this supervisor opened can be signalled, and only the group's own
+		// liveness is read: a leader that has already exited can still leave the tool
+		// subprocesses it started behind, and they are what the interrupt is for.
+		// Never rejects — `stop` is documented as silent, and an interrupt must not be
+		// blocked by a process that will not die.
 		stop: async (child: SupervisorHandle) => {
 			const record = children.get(child.id);
 			const pid = record?.proc.pid;
-			if (!record || record.finished || pid === undefined) return;
+			if (!record || pid === undefined) return;
 			try {
 				await endGroup(pid, graceMs);
 			} catch {
@@ -313,6 +334,11 @@ export function createPlainSupervisor(deps: PlainSupervisorDeps = {}): PlainSupe
 			const record = children.get(child.id);
 			return record === undefined ? "" : readStderr(record.stderr);
 		},
+
+		// Read once the child's process is gone, as the fallback for a wrapper that
+		// died before writing its sidecar. No record is no status: a handle this
+		// supervisor never handed out, or one already released, has nothing to report.
+		exitCode: (child: SupervisorHandle) => children.get(child.id)?.exitCode ?? null,
 	};
 
 	return supervisor;

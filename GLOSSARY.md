@@ -1,6 +1,6 @@
 # tinysubagent
 
-A delegation layer for pi: an orchestrator session hands work to subagents that run in their own panes and each hand back one report.
+A delegation layer for pi: an orchestrator session hands work to subagents that run in their own panes under a pane host — or as their own processes without one — and each hand back one report.
 
 ## Delegation
 
@@ -9,7 +9,7 @@ The pi session that calls the subagent tool, owns the briefs, and receives the r
 _Avoid_: parent, caller, main agent
 
 **Subagent**:
-A separately launched agent process with its own context window and its own pane, started by one spawn. The window starts empty unless the brief is bought a shared context.
+A separately launched agent process with its own context window and, under a pane host, its own pane, started by one spawn. The window starts empty unless the brief is bought a shared context.
 _Avoid_: child agent, worker, worker agent
 
 **Child**:
@@ -29,11 +29,11 @@ The orchestrator's own branch, forked into a child's session file so the child i
 _Avoid_: inherited context, memory, history (a session record is the log, not what is shared)
 
 **Label**:
-The short name attached to a spawn so its pane, acknowledgment, and result can be told apart from its siblings.
+The short name attached to a spawn so its acknowledgment, result, and the pane it has can be told apart from its siblings.
 _Avoid_: id, title, name (a role has a name; a spawn has a label)
 
 **Spawn**:
-One act of opening a pane and starting a child with a role, brief, profile, and label — plus, optionally, a shared context.
+One act of starting a child — in its own pane under a pane host, as its own process otherwise — with a role, brief, profile, and label, plus, optionally, a shared context.
 _Avoid_: launch, run, invocation
 
 **Batch**:
@@ -41,7 +41,7 @@ All children started by a single tool call — one or more, up to four in parall
 _Avoid_: group, queue, set
 
 **Steer**:
-A message injected into a running session. A report no longer travels this way — the blocking call returns it — so a steer is only how a human redirects a child in its pane, or how the child's own reminder asks a finished turn to report.
+A message injected into a running session. A report no longer travels this way — the blocking call returns it — so a steer is only how a human redirects a child in its pane, where there is one, or how the child's own reminder asks a finished turn to report.
 _Avoid_: send, message, notify
 
 ## Report and outcome
@@ -59,11 +59,11 @@ The artifact a child leaves beside its session record to hand its result back. I
 _Avoid_: status file, marker, metadata
 
 **Settle**:
-The moment a child's agent loop finishes and nothing further will run. It is not an ending: the child stays at its prompt, and only a report, `/quit`, an exhausted reminder budget, or the pane's fate ends the wait.
+The moment a child's agent loop finishes and nothing further will run. It is not an ending: under a pane host the child stays at its prompt, and only a report, `/quit`, an exhausted reminder budget, or the pane's fate ends the wait.
 _Avoid_: finish, end, completion
 
 **Unreported turn end**:
-A settle with no report. The child is reminded to report, up to a fixed budget; the settle after that budget is spent writes a content-free completion, which ends the wait as a completion with no summary and leaves the pane open. Until then the child stays alive at its prompt with its context intact, and the wait continues.
+A settle with no report. The child is reminded to report, up to a fixed budget; the settle after that budget is spent writes a content-free completion, which ends the wait as a completion with no summary and, under a pane host, leaves the pane open. Until then the child stays alive at its prompt with its context intact, and the wait continues.
 _Avoid_: silent completion, implicit done
 
 **Interrupt**:
@@ -79,11 +79,11 @@ A wait ended because the pane disappeared without leaving any signal — no repo
 _Avoid_: interrupted, aborted, stopped
 
 **Interrupted**:
-A wait ended by that interrupt: the child's turn stopped where it was, its pane was then closed, and it carries no summary, so half a report is never read as a report. A session shutting down under a wait ends the wait the same way but leaves the pane open, and the outcome says which of the two happened rather than leaving it to be guessed.
+A wait ended by that interrupt: the child's turn stopped where it was, its pane, where it had one, was then closed, and it carries no summary, so half a report is never read as a report. A session shutting down under a wait ends the wait the same way but leaves the pane open, and the outcome says which of the two happened rather than leaving it to be guessed.
 _Avoid_: cancelled, stopped, killed
 
 **Refusal**:
-pi declining to run the prompt at all — no usable model or credentials. Nothing is reported and the child stays at its prompt, so a human can log in and drive it on. The wait ends on it only as a never-started failure, after the grace.
+pi declining to run the prompt at all — no usable model or credentials. Nothing is reported and, under a pane host, the child stays at its prompt, so a human can log in and drive it on. The wait ends on it only as a never-started failure, after the grace.
 _Avoid_: error, failure (a refusal happens before any run exists)
 
 **Never started**:

@@ -50,8 +50,11 @@ export function statusLabel(outcome: SubagentOutcome): string {
 		case "failed":
 			// `exit` means the process died before it could report how it went;
 			// anything else — an error, a missing output, a run that never started —
-			// is the reader's own reading of how it ended.
-			return outcome.reason === "exit" ? `failed (exit ${outcome.exitCode})` : `failed (${outcome.reason})`;
+			// is the reader's own reading of how it ended. A death by signal leaves no
+			// status at all, and `exit null` would read as one: the label says the status
+			// is unknown instead.
+			if (outcome.reason !== "exit") return `failed (${outcome.reason})`;
+			return outcome.exitCode === null ? "failed (exit status unknown)" : `failed (exit ${outcome.exitCode})`;
 		case "cancelled":
 			return "cancelled (pane closed without reporting)";
 		case "interrupted":
@@ -151,7 +154,9 @@ const NEVER_STARTED_REMEDY =
  * A child with no pane has nothing to point at, so the failure says what happened
  * instead of sending the reader to an address that does not exist — and a
  * never-started run, whose whole remedy used to be the pane it was left at, is
- * told what to do instead (see {@link NEVER_STARTED_REMEDY}).
+ * told what to do instead (see {@link NEVER_STARTED_REMEDY}). The same holds for
+ * a content-free completion there: its turn ended, but the pane the wording above
+ * promises was never opened, and the task is simply free to be delegated again.
  */
 export function emptySummaryText(
 	outcome: {
@@ -164,9 +169,12 @@ export function emptySummaryText(
 	paneId?: string,
 ): string {
 	if (outcome.kind === "completed") {
-		return outcome.via === "turn-end"
-			? "_(no summary: the child never reported — its turn ended without one, and its pane is still open)_"
-			: "_(no summary: the child never reported before its session exited)_";
+		if (outcome.via !== "turn-end") {
+			return "_(no summary: the child never reported before its session exited)_";
+		}
+		return paneId === undefined
+			? "_(no summary: the child never reported — its turn ended without one, and it has no pane; there is nothing left to inspect, so the task can simply be delegated again)_"
+			: "_(no summary: the child never reported — its turn ended without one, and its pane is still open)_";
 	}
 	if (outcome.kind === "interrupted") {
 		if (paneId === undefined) {

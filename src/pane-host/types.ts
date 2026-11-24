@@ -174,6 +174,14 @@ export interface Supervisor {
 	 * is absent there rather than present and empty.
 	 */
 	stderr?(child: SupervisorHandle): string;
+	/**
+	 * The status the child's process exited with, for a kind that supervises a
+	 * child as a process; null when it has not exited, or when it died by a signal
+	 * and so has no status to report. Only a kind with a process of its own to ask
+	 * has this: a pane child's ending is its pane's, and the member is absent there
+	 * rather than present and always null.
+	 */
+	exitCode?(child: SupervisorHandle): number | null;
 }
 
 /** A supervisor whose kind is a pane host: the only home of the pane-only operations. */

@@ -16,6 +16,10 @@
  * failure and cancellation. A shutdown leaves every pane open too: nothing was
  * relayed, and the waits simply end.
  *
+ * A plain child has no pane to leave open, so nothing about its ending is a
+ * reason to keep this module's state: its supervisor record and output
+ * listeners are released on every ending, once the batch is over.
+ *
  * An interrupt of the call's turn is relayed from here. The wait is the trigger:
  * when it starts, or when the signal aborts under it, one Esc goes into every
  * live sub pane — the batch's own children and any earlier call's still open,
@@ -189,7 +193,8 @@ export async function watchBatch(
 				//
 				// A child with no handle has nothing to close and nothing tracked, so the
 				// pane tracking is skipped rather than addressed blindly. A child supervised
-				// as a process is never in the tracker to begin with.
+				// as a process is never in the tracker to begin with; its own record is
+				// released once the batch is over, below.
 				if (child && outcome.kind === "completed" && outcome.via !== "turn-end") {
 					columns.drop(child.id);
 					void child.supervisor.close(child);
@@ -220,5 +225,13 @@ export async function watchBatch(
 		live?.clear();
 		signal?.removeEventListener("abort", forward);
 		for (const controller of controllers) watchers.delete(controller);
+		// A pane child's record belongs to the host and is left as its ending
+		// requires. A process child's record is this module's own state, and no rule
+		// about leaving a prompt open applies where there is no pane: release it
+		// whichever way the batch ended. Any stop this batch started has finished by
+		// the time it returns, so releasing the record cannot hide a pid from the
+		// interrupt that is tearing it down. `close` does its work before it yields, so
+		// a caller never sees a record that outlived the batch.
+		for (const child of processChildren) void child.supervisor.close(child);
 	}
 }

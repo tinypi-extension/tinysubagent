@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -46,6 +46,24 @@ async function until(check: () => Promise<boolean>, timeoutMs: number): Promise<
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
 	throw new Error(`condition not met within ${timeoutMs}ms`);
+}
+
+/** True while the process exists, including one that is only a zombie. */
+function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Wait for a process to announce its pid in a file, then read it. */
+async function readPid(file: string, timeoutMs = 20_000): Promise<number> {
+	await until(async () => existsSync(file), timeoutMs);
+	const pid = Number(readFileSync(file, "utf8").trim());
+	assert.ok(Number.isInteger(pid) && pid > 0, `no pid was written to ${file}`);
+	return pid;
 }
 
 test("with no pane host detected the chosen supervisor is the plain kind", () => {
@@ -151,6 +169,43 @@ test("output nobody subscribes to is still drained, on both streams", async () =
 		await until(async () => (await supervisor.ended(child)) === true, 20_000);
 		assert.equal(await supervisor.close(child), true);
 	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a stop still reaches the group after its leader has exited", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tinysubagent-plain-group-"));
+	const toolFile = join(dir, "tool.pid");
+	const script = join(dir, "leader-exits.sh");
+	// A tool subprocess of the child's own, in its group, ignoring TERM so only the
+	// kill can end it. The leader exits at once, so the group outlives the pid the
+	// supervisor recorded — and the interrupt is meant for the group.
+	writeFileSync(
+		script,
+		[
+			"#!/usr/bin/env bash",
+			`bash -c 'trap "" TERM; exec sleep 60' &`,
+			`echo "$!" > '${toolFile}'`,
+			"exit 0",
+			"",
+		].join("\n"),
+		"utf8",
+	);
+
+	const supervisor = createPlainSupervisor({ graceMs: 200 });
+	const child = await supervisor.open({ cwd: dir, scriptPath: script });
+	let toolPid: number | null = null;
+	try {
+		toolPid = await readPid(toolFile);
+		await until(async () => (await supervisor.ended(child)) === true, 20_000);
+		assert.ok(alive(toolPid), "the fixture's group died with its leader");
+
+		await supervisor.stop(child);
+		assert.equal(alive(toolPid), false, "a stop missed the group because its leader had exited");
+	} finally {
+		// Never leave the fixture's sleeper behind, however the assertions went.
+		if (toolPid !== null && alive(toolPid)) process.kill(toolPid, "SIGKILL");
+		await supervisor.close(child);
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
