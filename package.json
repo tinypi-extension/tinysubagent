@@ -1,6 +1,6 @@
 {
   "name": "tinysubagent",
-  "version": "0.4.7",
+  "version": "0.5.0",
   "description": "Minimal pane-native subagent spawning for pi on herdr or Rex — markdown agent roles, model profiles with classifier routing",
   "keywords": [
     "pi-package"
