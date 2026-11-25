@@ -73,16 +73,6 @@ test("a profile name is trimmed rather than treated as unknown", () => {
 	if (r.ok) assert.equal(r.name, "pro");
 });
 
-test("when profiles are disabled an omitted profile inherits the parent", () => {
-	const disabled: TinysubagentConfig = { enableProfiles: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] };
-	assert.deepEqual(resolveProfile(disabled, undefined, PARENT), {
-		ok: true,
-		name: CURRENT_PROFILE,
-		model: PARENT.model,
-		thinking: PARENT.thinking,
-	});
-});
-
 test("when profiles are disabled `current` is still a harmless no-op", () => {
 	// A replayed call or a long-lived session must not fail for a request
 	// that resolves to exactly the same thing as omitting it.

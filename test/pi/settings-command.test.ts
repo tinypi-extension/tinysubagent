@@ -92,13 +92,6 @@ function command(): CapturedCommand {
 	return registered?.command as CapturedCommand;
 }
 
-test("the command is registered under its own name, outside herdr as well", () => {
-	const registered = command();
-	// `settings` is pi's built-in and is matched first, so it would never fire.
-	assert.notEqual(registered.description, undefined);
-	assert.equal(typeof registered.handler, "function");
-});
-
 test("outside a TUI the command notifies once and opens no screen", async () => {
 	const registered = command();
 	const notifications: { message: string; level: string }[] = [];

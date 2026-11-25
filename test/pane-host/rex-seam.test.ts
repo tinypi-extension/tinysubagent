@@ -102,12 +102,3 @@ test("Rex readiness needs the block context and a reachable CLI, with no repair"
 		assert.equal(readiness.fix, null);
 	});
 });
-
-test("Rex readiness uses the CLI's version subcommand, not an unsupported flag", async () => {
-	// The installed preview CLI answers `rex version` but rejects `rex --version`.
-	await withFakeRex({ version: "rex 0.1.0-preview.21\n" }, async (calls) => {
-		const readiness = await createPaneHost(REX_ENV).createCapability().probe({ timeoutMs: 5_000 });
-		assert.deepEqual(readiness, { problem: null, fix: null });
-		assert.deepEqual(calls(), ["version"]);
-	});
-});

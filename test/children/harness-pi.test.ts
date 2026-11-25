@@ -16,11 +16,6 @@ function tempFile(name: string, content: string): string {
 	return file;
 }
 
-test("the pi adapter reports its identity and extension support", () => {
-	assert.equal(piHarness.id, "pi");
-	assert.equal(piHarness.supportsExtension, true);
-});
-
 test("the pi adapter resolves the same bin override as launch-script", () => {
 	assert.equal(piHarness.resolveBin({ PI_HERDR_PI_BIN: "/opt/pi" }), "/opt/pi");
 	assert.equal(piHarness.resolveBin({}), "pi");

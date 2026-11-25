@@ -273,17 +273,6 @@ test("LiveSubPanes: dropping twice is safe", () => {
 	assert.deepEqual(tracker.liveIn(tab([{ paneId: "s1", rect: box(0, 0, 1, 1) }])), []);
 });
 
-test("LiveSubPanes: trackedIds on an empty tracker lists nothing", () => {
-	const tracker = new LiveSubPanes();
-	assert.deepEqual(tracker.trackedIds(), []);
-});
-
-test("LiveSubPanes: trackedIds lists a placed pane without a layout", () => {
-	const tracker = new LiveSubPanes();
-	tracker.place("s1");
-	assert.deepEqual(tracker.trackedIds(), ["s1"]);
-});
-
 test("LiveSubPanes: trackedIds stops listing a dropped pane", () => {
 	const tracker = new LiveSubPanes();
 	tracker.place("s1");

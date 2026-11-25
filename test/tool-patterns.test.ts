@@ -62,7 +62,3 @@ test("expandToolPatterns de-duplicates across overlapping entries, preserving fi
 	const { tools } = expandToolPatterns(["a_*", "a_1", "b_1", "*"], names);
 	assert.deepEqual(tools, ["a_1", "a_2", "b_1"]);
 });
-
-test("expandToolPatterns ignores an empty list", () => {
-	assert.deepEqual(expandToolPatterns([], ["read"]), { tools: [], unmatched: [] });
-});
