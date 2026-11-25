@@ -87,6 +87,8 @@ function harness(
 		capability: { ensureReady: async () => null },
 		columns: options.columns ?? new LiveSubPanes(),
 		watchers,
+		// The dep is new and required; this fixture keeps the pane host it was written for.
+		mode: "pane",
 		route,
 	});
 

@@ -29,13 +29,14 @@ import { Text } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import { ackLine, formatShareCost, spawnNotice, type SpawnNoticeEntry } from "../present/ack.ts";
 import {
+	liveLinesComponent,
 	NOTE_NOTHING,
 	renderAck,
 	type AckDetails,
 	type SpawnedEntry,
 } from "../present/ack-render.ts";
 import { buildResultDetails, buildResultText, emptySummaryText, oneLine } from "../present/result.ts";
-import { buildPromptGuidelines, buildToolDescription } from "../present/describe.ts";
+import { buildPromptGuidelines, buildPromptSnippet, buildToolDescription } from "../present/describe.ts";
 import { readSharedContext } from "../children/shared-context.ts";
 import { discoverAgents } from "../config/agents.ts";
 import { type TinysubagentConfig } from "../config/config.ts";
@@ -47,14 +48,15 @@ import {
 	resolveCwd,
 	resolveProjectAgentDir,
 } from "../children/requests.ts";
-import { harnessFor } from "../children/harness/index.ts";
+import { harnessFor, type LaunchMode } from "../children/harness/index.ts";
 import { errorMessage } from "../children/contract.ts";
 import { parentModelSpec, parentThinking, spawnOne } from "../children/spawn.ts";
 import { routeProfiles, routingActive, type RouteFn } from "../systemone/route.ts";
 import type { SpawnContext, SpawnRequest, ToolParams } from "../children/contract.ts";
 import type { RunningSubagent } from "../children/watcher.ts";
 import { TOOL_NAME, type AgentDef } from "../types.ts";
-import type { CapabilityCheck, LiveSubPanes } from "../pane-host/index.ts";
+import type { CapabilityCheck, LiveSubPanes, Supervisor } from "../pane-host/index.ts";
+import type { LiveLineTuning } from "./live-lines.ts";
 import { watchBatch } from "./watch-batch.ts";
 
 function failure(message: string) {
@@ -90,7 +92,7 @@ function renderReport(details: AckDetails, theme: Theme): string[] {
 		const meta = [
 			entry.agent ? `agent \`${entry.agent}\`` : null,
 			entry.profile ? `profile \`${entry.profile}\`` : null,
-			`pane \`${entry.paneId}\``,
+			entry.paneId === undefined ? null : `pane \`${entry.paneId}\``,
 			formatShareCost(entry.sharedContext),
 		].filter((part): part is string => part !== null);
 		lines.push(theme.fg("muted", meta.join(" · ")));
@@ -100,11 +102,18 @@ function renderReport(details: AckDetails, theme: Theme): string[] {
 		const summary = entry.summary?.trim() ?? "";
 		lines.push(
 			summary === ""
-				? theme.fg("muted", emptySummaryText({ kind: entry.outcome, via: entry.via, cause: entry.cause }, entry.paneId))
+				? theme.fg("muted", emptySummaryText({ kind: entry.outcome, via: entry.via, cause: entry.cause, reason: entry.reason }, entry.paneId))
 				: entry.outcome === "failed"
 					? theme.fg("error", `Error: ${summary}`)
 					: summary,
 		);
+
+		// The same evidence the model reads: a failure's stderr tail, indented so no
+		// line of a program's output can pose as this report's own prose.
+		if (entry.stderr !== undefined && entry.stderr.trim() !== "") {
+			lines.push(theme.fg("muted", "Failure output (stderr tail):"));
+			for (const line of entry.stderr.split("\n")) lines.push(theme.fg("muted", `    ${line}`));
+		}
 	}
 
 	// What never became a child, after the children that did.
@@ -134,6 +143,13 @@ export interface ToolDeps {
 	/** Watchers still running, so a shutdown can end them; owned by the caller. */
 	watchers: Set<AbortController>;
 	/**
+	 * How this registration supervises children. Frozen with the config, because
+	 * the description, the snippet, the parameter schema and the profile refusals
+	 * are all the ones for this mode: what the model is offered here is what this
+	 * terminal can actually run.
+	 */
+	mode: LaunchMode;
+	/**
 	 * Warning keys this registration has already reported. One set per
 	 * registration is the session scope: the extension registers once per pi
 	 * session, and a reload starts a new registration with a fresh set. Optional
@@ -147,20 +163,32 @@ export interface ToolDeps {
 	 * `ctx.modelRegistry`; injectable so tests never touch the network.
 	 */
 	route: (ctx: ExtensionContext) => RouteFn;
+	/**
+	 * The supervisor every child of this registration goes through. Absent means
+	 * the seam's active kind; present so a test can spawn into a memory-only kind
+	 * and drive its output without a process.
+	 */
+	supervisor?: Supervisor;
+	/**
+	 * The live view's cadence, ticker and clock. Production takes the defaults;
+	 * a test supplies its own so a redraw happens when it asks, not on a wall
+	 * clock.
+	 */
+	live?: LiveLineTuning;
 }
 
 export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> {
-	const { pi, config, parameters, advertisedAgents, capability, columns, watchers } = deps;
+	const { pi, config, parameters, advertisedAgents, capability, columns, watchers, mode: launchMode } = deps;
 
 	return {
 		name: TOOL_NAME,
 		label: "Subagent",
-		description: buildToolDescription(advertisedAgents, config),
-		promptSnippet: "Delegate a task to a subagent running in its own herdr pane",
+		description: buildToolDescription(advertisedAgents, config, launchMode),
+		promptSnippet: buildPromptSnippet(launchMode),
 		promptGuidelines: buildPromptGuidelines(config),
 		parameters,
 
-		async execute(_toolCallId, rawParams, signal, _onUpdate, ctx: ExtensionContext) {
+		async execute(_toolCallId, rawParams, signal, onUpdate, ctx: ExtensionContext) {
 			const params = rawParams as ToolParams;
 
 			const problem = await capability.ensureReady();
@@ -208,12 +236,17 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			const classifierRouted = new Set<string>();
 			// Filled by the validation loop below, read again by the share refusal.
 			const profiles = new Map<string, ResolvedProfile>();
+			// Requests whose profile exists but cannot run in this mode. They fail on
+			// their own row, like a refused share: the request is sound and its
+			// siblings are still exactly what the caller asked for.
+			const refusedProfiles = new Map<SpawnRequest, string>();
 			let context: SpawnContext;
 			try {
-				if (routingActive(config)) {
+				if (routingActive(config, launchMode)) {
 					await routeProfiles(accepted, config, {
 						route: deps.route(ctx),
 						agents: discovered.agents,
+						mode: launchMode,
 						warn: (message) => routeWarnings.push(message),
 					});
 					if (config.classifier !== null) {
@@ -225,15 +258,25 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					}
 				}
 
-				// Validate every profile before opening any pane, so a bad batch fails
-				// whole rather than halfway. The resolved profiles are kept: a share has to
+				// Validate every profile before opening any pane. A name the config does
+				// not have, or profiles turned off, refuses the whole batch before
+				// anything launches; a profile this terminal cannot run is recorded and
+				// fails only its own row. The resolved profiles are kept: a share has to
 				// be judged against the harness a request actually runs on.
 				for (const request of accepted) {
-					const profile = resolveProfile(config, request.profile, {
-						model: parentModelSpec(ctx),
-						thinking: parentThinking(ctx),
-					});
+					const profile = resolveProfile(
+						config,
+						request.profile,
+						{ model: parentModelSpec(ctx), thinking: parentThinking(ctx) },
+						launchMode,
+					);
 					if (!profile.ok) {
+						// A profile this terminal cannot start is a per-row ending; an unknown
+						// name or disabled profiles still fail the batch whole.
+						if (profile.unavailable) {
+							refusedProfiles.set(request, profile.error);
+							continue;
+						}
 						return failure(profile.error);
 					}
 					profiles.set(request.name, profile);
@@ -254,6 +297,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					parentModel: parentModelSpec(ctx),
 					parentThinking: parentThinking(ctx),
 					columns,
+					supervisor: deps.supervisor,
 					reportedWarnings: deps.reportedWarnings,
 					// Read once for the batch, and only when the capability is on: a share the
 					// config never permitted must not reach a task even if the flag did.
@@ -300,7 +344,7 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 					// Refused before any launch file was written, so nothing of this request
 					// is left on disk: its pane was never opened and its siblings are launched
 					// as if it had not been asked for.
-					const refused = refusedShares.get(request);
+					const refused = refusedProfiles.get(request) ?? refusedShares.get(request);
 					if (refused) {
 						failures.push({ agent: request.agent, error: refused });
 						continue;
@@ -381,7 +425,25 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 			// the turn is relayed by this wait: one Esc into every live sub pane, every
 			// wait ends as `interrupted`, and the panes the relay typed into are closed
 			// behind it. Nothing is left running once the call returns.
-			const results = await watchBatch(runnings, signal, { watchers, columns });
+			//
+			// While it runs, the batch's live view travels the tool's partial channel:
+			// one line per child, redrawn on `watchBatch`'s cadence, never per chunk.
+			// The view is read here as `live` and drawn by `renderResult` below; when the
+			// report arrives it clears, so the finished result carries no tail.
+			const liveView = onUpdate
+				? (lines: readonly string[]): void => {
+					onUpdate({
+						content: [{ type: "text" as const, text: lines.join("\n") }],
+						details: { status: "running", live: [...lines] },
+					});
+				}
+				: undefined;
+			const results = await watchBatch(runnings, signal, {
+				watchers,
+				columns,
+				onLines: liveView,
+				live: deps.live,
+			});
 
 			// The batch ran, so its report is content whatever it says: a failed,
 			// cancelled or interrupted child is an ending the orchestrator has to read,
@@ -407,8 +469,12 @@ export function createTool(deps: ToolDeps): ToolDefinition<TSchema, AckDetails> 
 		 * plain, so nothing here affects what the model reads — it is the same parts
 		 * with the theme applied.
 		 */
-		renderResult(result, _options, theme) {
+		renderResult(result, options, theme) {
 			const details = result.details as AckDetails | undefined;
+
+			// The batch is still running: draw only its live lines, cut to the width,
+			// never wrapped. The final report replaces them when the call returns.
+			if (options.isPartial && details?.live) return liveLinesComponent(details.live);
 
 			// A finished batch: the report is the result, so draw it as one.
 			if (details?.status === "finished" && details.results) {

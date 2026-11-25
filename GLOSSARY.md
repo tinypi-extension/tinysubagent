@@ -1,6 +1,6 @@
 # tinysubagent
 
-A delegation layer for pi: an orchestrator session hands work to subagents that run in their own panes and each hand back one report.
+A delegation layer for pi: an orchestrator session hands work to subagents that run in their own panes under a pane host — or as their own processes without one — and each hand back one report.
 
 ## Delegation
 
@@ -9,7 +9,7 @@ The pi session that calls the subagent tool, owns the briefs, and receives the r
 _Avoid_: parent, caller, main agent
 
 **Subagent**:
-A separately launched agent process with its own context window and its own pane, started by one spawn. The window starts empty unless the brief is bought a shared context.
+A separately launched agent process with its own context window and, under a pane host, its own pane, started by one spawn. The window starts empty unless the brief is bought a shared context.
 _Avoid_: child agent, worker, worker agent
 
 **Child**:
@@ -29,11 +29,11 @@ The orchestrator's own branch, forked into a child's session file so the child i
 _Avoid_: inherited context, memory, history (a session record is the log, not what is shared)
 
 **Label**:
-The short name attached to a spawn so its pane, acknowledgment, and result can be told apart from its siblings.
+The short name attached to a spawn so its acknowledgment, result, and the pane it has can be told apart from its siblings.
 _Avoid_: id, title, name (a role has a name; a spawn has a label)
 
 **Spawn**:
-One act of opening a pane and starting a child with a role, brief, profile, and label — plus, optionally, a shared context.
+One act of starting a child — in its own pane under a pane host, as its own process otherwise — with a role, brief, profile, and label, plus, optionally, a shared context.
 _Avoid_: launch, run, invocation
 
 **Batch**:
@@ -41,7 +41,7 @@ All children started by a single tool call — one or more, up to four in parall
 _Avoid_: group, queue, set
 
 **Steer**:
-A message injected into a running session. A report no longer travels this way — the blocking call returns it — so a steer is only how a human redirects a child in its pane, or how the child's own reminder asks a finished turn to report.
+A message injected into a running session. A report no longer travels this way — the blocking call returns it — so a steer is only how a human redirects a child in its pane, where there is one, or how the child's own reminder asks a finished turn to report.
 _Avoid_: send, message, notify
 
 ## Report and outcome
@@ -59,39 +59,39 @@ The artifact a child leaves beside its session record to hand its result back. I
 _Avoid_: status file, marker, metadata
 
 **Settle**:
-The moment a child's agent loop finishes and nothing further will run. It is not an ending: the child stays at its prompt, and only a report, `/quit`, an exhausted reminder budget, or the pane's fate ends the wait.
+The moment a child's agent loop finishes and nothing further will run. It is not an ending: under a pane host the child stays at its prompt, and only a report, `/quit`, an exhausted reminder budget, or the pane's fate ends the wait.
 _Avoid_: finish, end, completion
 
 **Unreported turn end**:
-A settle with no report. The child is reminded to report, up to a fixed budget; the settle after that budget is spent writes a content-free completion, which ends the wait as a completion with no summary and leaves the pane open. Until then the child stays alive at its prompt with its context intact, and the wait continues.
+A settle with no report. The child is reminded to report, up to a fixed budget; the settle after that budget is spent writes a content-free completion, which ends the wait as a completion with no summary and, under a pane host, leaves the pane open. Until then the child stays alive at its prompt with its context intact, and the wait continues.
 _Avoid_: silent completion, implicit done
 
 **Interrupt**:
-An operator stopping the whole batch rather than one child: an interrupt in the orchestrator's pane is relayed to every live child, each turn stops where it is, and every pane stopped that way is then closed, so the operator stops the work from where they are instead of visiting each pane. Nothing is salvaged from a stopped turn.
+An operator stopping the whole batch rather than one child: an interrupt in the orchestrator's pane is relayed to every live child, each turn stops where it is, and every pane stopped that way is then closed — while under a plain terminal the same interrupt kills each child's process group instead, since there is no pane to close. Either way the operator stops the work from where they are instead of visiting each child.
 _Avoid_: cancel, abort, stop (an interrupt closes the pane it stopped)
 
 **Outcome**:
-What finally ended a wait: completed, failed, cancelled, or interrupted — plus how that was learned (a result report, an exit code, a legacy `failed` payload, or a vanished pane).
+What finally ended a wait: completed, failed, or interrupted — plus how that was learned (a result report or an exit code, still a legacy `failed` payload, or under a pane host a vanished pane, which is the one route a plain terminal cannot have).
 _Avoid_: status, state, verdict (a verdict is the internal reading that produces an outcome)
 
 **Cancelled**:
-A wait ended because the pane disappeared without leaving any signal — no report, no exit code. It is the one outcome that says the pane went unexpectedly — never that the extension closed it, which is what an interrupt does on purpose — and the one that says nothing about the work.
+A wait ended because the pane disappeared without leaving any signal — no report, no exit code. It is the one outcome that says the pane went unexpectedly — never that the extension closed it, which is what an interrupt does on purpose — and the one that says nothing about the work. It exists only under a pane host: a process that dies is learned from its exit code, so a plain terminal never reports a child as cancelled.
 _Avoid_: interrupted, aborted, stopped
 
 **Interrupted**:
-A wait ended by that interrupt: the child's turn stopped where it was, its pane was then closed, and it carries no summary, so half a report is never read as a report. A session shutting down under a wait ends the wait the same way but leaves the pane open, and the outcome says which of the two happened rather than leaving it to be guessed.
+A wait ended by that interrupt: the child's turn stopped where it was, its pane, where it had one, was then closed, and it carries no summary, so half a report is never read as a report. A session shutting down under a wait ends the wait the same way but leaves the pane open, and the outcome says which of the two happened rather than leaving it to be guessed.
 _Avoid_: cancelled, stopped, killed
 
 **Refusal**:
-pi declining to run the prompt at all — no usable model or credentials. Nothing is reported and the child stays at its prompt, so a human can log in and drive it on. The wait ends on it only as a never-started failure, after the grace.
+pi declining to run the prompt at all — no usable model or credentials. Nothing is reported and, under a pane host, the child stays at its prompt, so a human can log in and drive it on. The wait ends on it only as a never-started failure, after the grace.
 _Avoid_: error, failure (a refusal happens before any run exists)
 
 **Never started**:
-The failure a child is reported as when pi refused its prompt: no session entry of any role was written within the grace (90s), so no run ever began. Its pane is left open, because logging in there is still the fix.
+The failure a child is reported as when pi refused its prompt: no session entry of any role was written within the grace (90s), so no run ever began. Under a pane host its pane is left open, because logging in there is still the fix; in a plain terminal there is no pane to leave open, so the report has to carry the remedy instead of pointing at one.
 _Avoid_: no-output, silent failure
 
 **Hold open**:
-Keeping a child's pane visible briefly after an early crash, so a human can read why it failed instead of watching the pane vanish.
+Keeping a child's pane visible briefly after an early crash, so a human can read why it failed instead of watching the pane vanish. It has no plain-terminal counterpart: with no pane and no tty there is nothing to hold and nobody to read it, so the failure evidence has to reach the report.
 _Avoid_: keep alive, linger
 
 ## Roles and profiles
@@ -160,12 +160,20 @@ _Avoid_: config error
 
 ## Panes and layout
 
+**Supervisor**:
+How a live child is watched and stopped: as a pane in a pane host, or as its own process in a plain terminal. It is the seam a spawn goes through, and it is narrower than a pane host because watching and stopping are all a spawn needs.
+_Avoid_: host, backend, pane host (a pane host is one kind of supervisor)
+
 **Pane host**:
-A TUI that can host sub panes: herdr or Rex.
-_Avoid_: multiplexer, terminal emulator, backend
+A TUI that can host sub panes: herdr or Rex. One kind of supervisor.
+_Avoid_: multiplexer, terminal emulator, backend, supervisor
+
+**Plain terminal**:
+A session with no pane host detected. Every live child there is supervised as its own process instead of owning a pane, so nobody can watch it, steer it, or read a failure off its screen.
+_Avoid_: headless, no-tty, dumb terminal (headless describes the child's run, not the session)
 
 **Pane**:
-A terminal region a pane host manages: a pane in herdr, a block in Rex. Every live child owns one.
+A terminal region a pane host manages: a pane in herdr, a block in Rex. Every child supervised by a pane host owns one.
 _Avoid_: window, tab, split, terminal
 
 **Block**:
@@ -193,8 +201,12 @@ The rule that the orchestrator keeps three fifths of its rect and every live sub
 _Avoid_: split layout, balanced layout
 
 **Ack**:
-The spawn line — role, label, profile and the model it resolved to — for one child. It is drawn only when no wait follows, so a call that launched nothing still names what it declined to do.
-_Avoid_: confirmation, receipt, response
+The spawn line — role, label, profile and the model it resolved to — for one child. Under a pane host it is drawn only when no wait follows, so a call that launched nothing still names what it declined to do; in a plain terminal the same line opens that child's live line instead.
+_Avoid_: confirmation, receipt, response, live line (a live line moves, an ack does not)
+
+**Live line**:
+One of at most four per-child lines drawn while a batch runs in a plain terminal: role, label, elapsed time, and the tail of the child's streamed text, refreshed as it runs. They are replaced by the report when the call returns, so they are the only view of a child there is.
+_Avoid_: progress bar, status line, spinner, ack
 
 ## Readiness
 

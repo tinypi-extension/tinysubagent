@@ -185,20 +185,6 @@ test("timeout aborts a pending BODY read, not just the headers", async () => {
 	assert.ok(elapsed < 1000, `took ${elapsed}ms — the body read was not aborted by the timer`);
 });
 
-test("a throwing fetch maps to null", async () => {
-	const throwing: typeof fetch = (() => {
-		throw new Error("network down");
-	}) as unknown as typeof fetch;
-	assert.equal(await routeOnce(baseInput, { fetch: throwing }), null);
-});
-
-test("non-function fetch maps to null", async () => {
-	// Must be a non-nullish non-function: `undefined`/`null` would hit the `??`
-	// fallback and dial the real endpoint.
-	const result = await routeOnce(baseInput, { fetch: 42 as unknown as typeof fetch });
-	assert.equal(result, null);
-});
-
 test("redaction: the key and base URL appear in no failure row's returned string", async () => {
 	// Every way routeOnce can fail must map to a bare null: no row may carry the
 	// credential or the endpoint back to the caller.

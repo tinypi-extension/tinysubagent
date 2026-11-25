@@ -24,7 +24,7 @@ function result(
 		name,
 		agent: "worker",
 		profile: overrides.profile === undefined ? LIGHT : overrides.profile,
-		paneId: overrides.paneId ?? "w1:p2",
+		paneId: "paneId" in overrides ? overrides.paneId : "w1:p2",
 		task: overrides.task ?? `task for ${name}`,
 		sessionFile: "/sessions/x.jsonl",
 		outcome,
@@ -258,6 +258,28 @@ test("a silent result points at the pane rather than showing nothing", () => {
 		result("quiet", { kind: "failed", reason: "exit", exitCode: 1, summary: "  " }),
 	]);
 	assert.match(text, /_\(no output captured — inspect pane `w1:p2`\)_/);
+});
+
+test("a plain child's content-free turn-end promises no pane to inspect", () => {
+	const text = buildResultText([
+		result("quiet", { kind: "completed", via: "turn-end", summary: null }, { paneId: undefined }),
+	]);
+	// The pane wording would send the reader to a pane that was never opened, and
+	// imply there is something left to read there.
+	assert.doesNotMatch(text, /still open/);
+	assert.doesNotMatch(text, /inspect pane/);
+	assert.match(text, /never reported/);
+	assert.match(text, /nothing left to inspect/);
+	assert.match(text, /delegated again/);
+});
+
+test("a failure with no exit status is not labelled with a null one", () => {
+	// A wrapper killed before it could write its exit code, or a death by signal,
+	// leaves no status: the label says so instead of printing `exit null`.
+	assert.equal(
+		statusLabel({ kind: "failed", reason: "exit", exitCode: null, summary: null }),
+		"failed (exit status unknown)",
+	);
 });
 
 test("a shared child's meta states what the share cost, beside the facts it already gave", () => {

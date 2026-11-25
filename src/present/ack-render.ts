@@ -8,6 +8,7 @@
  */
 
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import type { ShareCost } from "../children/contract.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../types.ts";
@@ -18,7 +19,8 @@ import type { ResultDetail } from "./result.ts";
 export interface SpawnedEntry {
 	agent: string;
 	name: string;
-	paneId: string;
+	/** The child's pane, when it was supervised as one; absent for a process. */
+	paneId?: string;
 	profile: ResolvedProfile | null;
 	/** Present only for a child given the orchestrator's context. */
 	sharedContext?: ShareCost;
@@ -27,8 +29,14 @@ export interface SpawnedEntry {
 
 /** Every part of a call's outcome the TUI renders: spawn lines or a finished report. */
 export interface AckDetails {
-	/** `started`, `finished`, or `error`. */
+	/** `running`, `started`, `finished`, or `error`. */
 	status?: string;
+	/**
+	 * The live view of a batch that is still running: one line per child. Present
+	 * only on a partial update, so the finished result never carries a tail the
+	 * report would then repeat.
+	 */
+	live?: string[];
 	error?: string;
 	spawned?: SpawnedEntry[];
 	failed?: { agent: string; error: string }[];
@@ -50,6 +58,27 @@ export const THINKING_COLORS: Record<ThinkingLevel, ThemeColor> = {
 	xhigh: "thinkingXhigh",
 	max: "thinkingMax",
 };
+
+/**
+ * The live view as the TUI draws it: one row per child, cut to the width the
+ * host offers, never wrapped.
+ *
+ * `truncateToWidth` is what makes the second half true. `Text` word-wraps, so a
+ * long streamed tail would take rows the view does not own and push the batch
+ * above it — the scrolling region this view must not have. A cut line ends in
+ * the ellipsis, so an incomplete tail is never mistaken for the child's last
+ * word.
+ */
+export function liveLinesComponent(lines: readonly string[]): Component {
+	return {
+		render(width: number): string[] {
+			return lines.map((line) => truncateToWidth(line, width));
+		},
+		invalidate(): void {
+			// Nothing is cached: each render reads the lines the update carried.
+		},
+	};
+}
 
 /**
  * The coloured form of `ackLine`: same parts, same order, one colour each. The

@@ -44,10 +44,10 @@ export interface HerdrPluginInfo {
 }
 
 /**
- * True when this pi process is itself running inside a herdr pane. This is the
- * gate for registering the tool at all: outside herdr there is nothing to spawn
- * panes into, and the reference implementation's fallback (blocking subprocess)
- * is deliberately not part of tinysubagent.
+ * True when this pi process is itself running inside a herdr pane. This is what
+ * makes herdr the chosen supervisor, ahead of a plain terminal: with no host
+ * detected, children run as their own processes instead. It is not a
+ * registration gate — the tool is offered either way.
  */
 export function isInsideHerdr(env: NodeJS.ProcessEnv = process.env): boolean {
 	return env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && Boolean(env.HERDR_SOCKET_PATH);

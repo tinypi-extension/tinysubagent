@@ -11,6 +11,13 @@
 /** Which CLI a child runs on. */
 export type HarnessId = "pi" | "agy";
 
+/**
+ * How the child is supervised, as the launch sees it: a pane host runs it
+ * interactively in a pane, a plain terminal runs it headless and lets the child
+ * exit on its own.
+ */
+export type LaunchMode = "pane" | "headless";
+
 /** Everything {@link ChildHarness.buildArgv} needs. No env access: the caller resolves the bin. */
 export interface HarnessArgvSpec {
 	/** The resolved binary, argv[0]. */
@@ -24,6 +31,11 @@ export interface HarnessArgvSpec {
 	tools?: string[] | null;
 	/** The task is delivered as a file reference so the prompt never appears in `ps`. */
 	taskFile: string;
+	/**
+	 * How this child is supervised; absent means a pane host, the original shape.
+	 * A harness that needs different argv to run without a terminal says so here.
+	 */
+	mode?: LaunchMode;
 }
 
 /** What scraping the child's transcript for its last turn yields. */
@@ -40,6 +52,13 @@ export interface ChildHarness {
 	buildArgv(spec: HarnessArgvSpec): string[];
 	/** Whether the child takes pi's `-e <extension>` hook. */
 	supportsExtension: boolean;
+	/**
+	 * Whether this CLI can run with no pane to render into, as a plain child
+	 * process that exits on its own. This is the whole fact the profile list
+	 * needs to know before it offers a profile: a harness that is pane-only makes
+	 * every profile naming it unavailable in a plain terminal.
+	 */
+	runsHeadless: boolean;
 	/**
 	 * Where this harness keeps its per-run transcript. pi: the child session
 	 * jsonl the sidecars are named after. agy: not knowable up front (the

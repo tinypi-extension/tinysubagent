@@ -17,7 +17,12 @@ export interface SubagentResult {
 	name: string;
 	agent: string | null;
 	profile: ResolvedProfile | null;
-	paneId: string;
+	/**
+	 * The pane this child owns, when it is supervised as one. A child supervised as
+	 * a process has no pane and no label standing in for it, so the report simply
+	 * says nothing about a pane for it.
+	 */
+	paneId?: string;
 	task: string;
 	outcome: SubagentOutcome;
 	elapsedMs: number;
@@ -45,8 +50,11 @@ export function statusLabel(outcome: SubagentOutcome): string {
 		case "failed":
 			// `exit` means the process died before it could report how it went;
 			// anything else — an error, a missing output, a run that never started —
-			// is the reader's own reading of how it ended.
-			return outcome.reason === "exit" ? `failed (exit ${outcome.exitCode})` : `failed (${outcome.reason})`;
+			// is the reader's own reading of how it ended. A death by signal leaves no
+			// status at all, and `exit null` would read as one: the label says the status
+			// is unknown instead.
+			if (outcome.reason !== "exit") return `failed (${outcome.reason})`;
+			return outcome.exitCode === null ? "failed (exit status unknown)" : `failed (exit ${outcome.exitCode})`;
 		case "cancelled":
 			return "cancelled (pane closed without reporting)";
 		case "interrupted":
@@ -55,6 +63,18 @@ export function statusLabel(outcome: SubagentOutcome): string {
 			// while a shutdown under the wait leaves it open.
 			return outcome.cause === "shutdown" ? "interrupted (pane left open)" : "interrupted (pane closed)";
 	}
+}
+
+/**
+ * How one child's ending is named in the report.
+ *
+ * The pane wording {@link statusLabel} carries is true only of a child that has a
+ * pane. A plain child's interrupt stopped its processes and closed nothing, so it
+ * says that instead of naming a pane that never existed.
+ */
+function endingLabel(result: SubagentResult): string {
+	if (result.outcome.kind === "interrupted" && result.paneId === undefined) return "interrupted (process stopped)";
+	return statusLabel(result.outcome);
 }
 
 /** Collapse a task to a single readable line for the result header. */
@@ -87,6 +107,13 @@ function header(results: readonly SubagentResult[]): string {
 function interruptNote(results: readonly SubagentResult[]): string | null {
 	const interrupted = results.filter((result) => result.outcome.kind === "interrupted");
 	if (interrupted.length === 0) return null;
+	// A child with no pane was stopped as a process, so there is no pane fate to
+	// report — not even a shutdown's, because that kill runs here too.
+	if (interrupted.every((result) => result.paneId === undefined)) {
+		if (interrupted.length === results.length) return "The batch was interrupted: every child was stopped.";
+		if (interrupted.length === 1) return "The batch was interrupted: the interrupted child was stopped.";
+		return "The batch was interrupted: the interrupted children were stopped.";
+	}
 	const leftOpen = interrupted.some(
 		(result) => result.outcome.kind === "interrupted" && result.outcome.cause === "shutdown",
 	);
@@ -101,6 +128,20 @@ function interruptNote(results: readonly SubagentResult[]): string | null {
 }
 
 /**
+ * What a never-started child's report says where there is no pane to open.
+ *
+ * Under a pane host the remedy *is* the pane: it is left open at the child's
+ * prompt, so logging in there fixes the next attempt. A plain child has no pane,
+ * so the report carries the instruction instead — and it names the causes that
+ * actually produce this: no credential, a `pi` that will not run, and whatever
+ * the child printed before it gave up.
+ */
+const NEVER_STARTED_REMEDY =
+	"_(no output captured: pi never started, so no run happened. Log in to the provider its profile " +
+	"names — or fix the `pi` it launches — and delegate again; anything it printed before giving up " +
+	"is the diagnostic, quoted below when it wrote one.)_";
+
+/**
  * What to print in place of a summary a child did not leave.
  *
  * A failed child's pane is worth pointing at — the error is on screen there. A
@@ -109,22 +150,44 @@ function interruptNote(results: readonly SubagentResult[]): string | null {
  * pane open, while a session exit is gone and there is nothing to inspect. An
  * interrupt is the human's own doing, and its cause says what became of the pane:
  * the operator's interrupt closed it, a shutdown left it open.
+ *
+ * A child with no pane has nothing to point at, so the failure says what happened
+ * instead of sending the reader to an address that does not exist — and a
+ * never-started run, whose whole remedy used to be the pane it was left at, is
+ * told what to do instead (see {@link NEVER_STARTED_REMEDY}). The same holds for
+ * a content-free completion there: its turn ended, but the pane the wording above
+ * promises was never opened, and the task is simply free to be delegated again.
  */
 export function emptySummaryText(
-	outcome: { kind: SubagentOutcome["kind"]; via?: string; cause?: "interrupt" | "shutdown" },
-	paneId: string,
+	outcome: {
+		kind: SubagentOutcome["kind"];
+		via?: string;
+		cause?: "interrupt" | "shutdown";
+		/** The failure's kind, for the one remedy that is not about a pane. */
+		reason?: string;
+	},
+	paneId?: string,
 ): string {
 	if (outcome.kind === "completed") {
-		return outcome.via === "turn-end"
-			? "_(no summary: the child never reported — its turn ended without one, and its pane is still open)_"
-			: "_(no summary: the child never reported before its session exited)_";
+		if (outcome.via !== "turn-end") {
+			return "_(no summary: the child never reported before its session exited)_";
+		}
+		return paneId === undefined
+			? "_(no summary: the child never reported — its turn ended without one, and it has no pane; there is nothing left to inspect, so the task can simply be delegated again)_"
+			: "_(no summary: the child never reported — its turn ended without one, and its pane is still open)_";
 	}
 	if (outcome.kind === "interrupted") {
+		if (paneId === undefined) {
+			return "_(no summary: the child was interrupted and its processes were stopped)_";
+		}
 		return outcome.cause === "shutdown"
 			? "_(no summary: the child was interrupted and its pane was left open)_"
 			: "_(no summary: the child was interrupted and its pane was closed)_";
 	}
-	return `_(no output captured — inspect pane \`${paneId}\`)_`;
+	if (outcome.reason === "never-started" && paneId === undefined) return NEVER_STARTED_REMEDY;
+	return paneId === undefined
+		? "_(no output captured: the child ended without reporting)_"
+		: `_(no output captured — inspect pane \`${paneId}\`)_`;
 }
 
 function section(result: SubagentResult, index: number, total: number): string {
@@ -143,21 +206,40 @@ function section(result: SubagentResult, index: number, total: number): string {
 	const meta = [
 		result.agent ? `agent \`${result.agent}\`` : null,
 		result.profile ? `profile \`${resolvedProfileLabel(result.profile)}\`` : null,
-		`pane \`${result.paneId}\``,
+		result.paneId === undefined ? null : `pane \`${result.paneId}\``,
 		formatShareCost(result.sharedContext),
 	].filter((part): part is string => part !== null);
 
 	const heading =
 		total === 1
-			? `## ${result.name} — ${statusLabel(result.outcome)}, ${formatDuration(result.elapsedMs)}`
-			: `## ${index + 1}. ${result.name} — ${statusLabel(result.outcome)}, ${formatDuration(result.elapsedMs)}`;
+			? `## ${result.name} — ${endingLabel(result)}, ${formatDuration(result.elapsedMs)}`
+			: `## ${index + 1}. ${result.name} — ${endingLabel(result)}, ${formatDuration(result.elapsedMs)}`;
 
 	return [
 		heading,
 		meta.join(" · "),
 		`**Task:** ${oneLine(result.task)}`,
 		body,
-	].join("\n\n");
+		result.outcome.kind === "failed" ? stderrBlock(result.outcome.stderr) : null,
+	]
+		.filter((part): part is string => part !== null)
+		.join("\n\n");
+}
+
+/**
+ * A failed child's stderr, drawn as the last thing in its section.
+ *
+ * Indented rather than fenced: it is a program's own output and may hold any
+ * character, while four leading spaces cannot be closed by the first line of it.
+ * Bounded where it was kept, not here — the tail is already the end of it.
+ *
+ * `null` when there is nothing to quote, so a failure with no stderr stream reads
+ * exactly as it did before the tail existed.
+ */
+function stderrBlock(stderr: string | undefined): string | null {
+	if (stderr === undefined || stderr.trim() === "") return null;
+	const lines = stderr.split("\n").map((line) => `    ${line}`);
+	return ["**Failure output (stderr tail):**", "", ...lines].join("\n");
 }
 
 /** The report body: a header plus one labelled section per child. */
@@ -178,7 +260,8 @@ export interface ResultDetail {
 	name: string;
 	agent: string | null;
 	profile: string | null;
-	paneId: string;
+	/** Absent for a child supervised as a process: it has no pane to name. */
+	paneId?: string;
 	sessionFile: string;
 	task: string;
 	elapsedMs: number;
@@ -190,6 +273,11 @@ export interface ResultDetail {
 	cause?: "interrupt" | "shutdown";
 	reason?: string;
 	exitCode?: number | null;
+	/**
+	 * The tail of a failed child's stderr, when it had a stream of its own to write
+	 * one to. Absent for every other ending, and for a failure with nothing there.
+	 */
+	stderr?: string;
 	summary: string | null;
 	/** The share's two figures, or null for a child launched without one. */
 	sharedContext: ShareCost | null;
@@ -215,12 +303,13 @@ export function buildResultDetails(results: readonly SubagentResult[]): ResultDe
 				task: result.task,
 				elapsedMs: result.elapsedMs,
 				elapsed: formatDuration(result.elapsedMs),
-				status: statusLabel(outcome),
+				status: endingLabel(result),
 				outcome: outcome.kind,
 				via: outcome.kind === "completed" ? outcome.via : undefined,
 				cause: outcome.kind === "interrupted" ? outcome.cause : undefined,
 				reason: outcome.kind === "failed" ? outcome.reason : undefined,
 				exitCode: outcome.kind === "failed" ? outcome.exitCode : undefined,
+				stderr: outcome.kind === "failed" ? outcome.stderr : undefined,
 				summary: outcome.kind === "interrupted" ? null : outcome.summary,
 				sharedContext: result.sharedContext ?? null,
 			} satisfies ResultDetail;

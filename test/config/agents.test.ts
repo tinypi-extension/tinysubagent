@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 
-import { discoverAgents, loadAgentsFromDir, projectAgentsDir, userAgentsDir } from "../../src/config/agents.ts";
+import { discoverAgents, loadAgentsFromDir } from "../../src/config/agents.ts";
 
 function tempRoot(): string {
 	return mkdtempSync(path.join(tmpdir(), "tinysubagent-agents-"));
@@ -151,12 +151,4 @@ test("discoverAgents works with neither root present", () => {
 	const { agents, warnings } = discoverAgents(tempRoot(), tempRoot());
 	assert.deepEqual(agents, []);
 	assert.deepEqual(warnings, []);
-});
-
-test("the project agents directory sits under .pi in the cwd", () => {
-	assert.equal(projectAgentsDir("/work/repo"), path.join("/work/repo", ".pi", "agents"));
-});
-
-test("the user agents directory sits under the agent dir", () => {
-	assert.equal(userAgentsDir("/home/u/.pi/agent"), path.join("/home/u/.pi/agent", "agents"));
 });

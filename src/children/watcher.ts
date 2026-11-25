@@ -31,8 +31,12 @@
  * `NEVER_STARTED_MS` a session file that has not grown since the child launched
  * is itself a signal: the run never began, and the wait ends `failed
  * (never-started)` rather than hanging on the blocking call. More entries than it
- * launched with, of any role, mean a run happened and the ordinary rules apply;
- * and the pane is deliberately left open, because `/login` in it is still the fix.
+ * launched with, of any role, mean a run happened and the ordinary rules apply.
+ *
+ * What the report then says about the remedy depends on where the child is
+ * running: under a pane host the pane is deliberately left open, because `/login`
+ * in it is still the fix; a plain child has no pane to leave open, so its report
+ * carries the instruction instead (`emptySummaryText` in `present/result.ts`).
  *
  * "Grown since the child launched" rather than "non-empty" is what makes this
  * hold for a shared child: its session file holds a fork of the orchestrator's
@@ -47,7 +51,7 @@
  */
 
 import { readFileSync, rmSync } from "node:fs";
-import { paneHost } from "../pane-host/index.ts";
+import { paneChild, type SupervisorHandle } from "../pane-host/index.ts";
 import type { ResolvedProfile } from "../config/profiles.ts";
 import type { ShareCost } from "./contract.ts";
 import { readFailureNote, readFinalMessage, readSessionEntries } from "./session.ts";
@@ -72,9 +76,18 @@ export type SubagentOutcome =
 	 * The process ended badly — a non-zero exit or a wrapper-written failure —
 	 * or an older build declared a failed settle. The pane is deliberately left
 	 * open in every case.
+	 *
+	 * `stderr` is the tail of the child's own stderr, present only where the child
+	 * had a stream of its own to write it to — the evidence a human used to read
+	 * off a crashed pane. Absent, not empty, when there is nothing to quote, so
+	 * every other failure keeps the shape it always had.
 	 */
-	| { kind: "failed"; reason: FailureReason; exitCode: number | null; summary: string | null }
-	/** The pane vanished without leaving any signal. */
+	| { kind: "failed"; reason: FailureReason; exitCode: number | null; summary: string | null; stderr?: string }
+	/**
+	 * The pane vanished without leaving any signal. A statement about a pane, so it
+	 * needs one: a plain child's death is read from its process instead, and a
+	 * pane-less child can therefore never carry this outcome.
+	 */
 	| { kind: "cancelled"; summary: string | null }
 	/**
 	 * The wait was ended by an abort signal rather than by the child: the human
@@ -94,7 +107,19 @@ export interface RunningSubagent {
 	agent: string | null;
 	/** Resolved profile, for display only. */
 	profile: ResolvedProfile | null;
-	paneId: string;
+	/**
+	 * The pane this child owns, for the report's ``pane `x` `` line. A child
+	 * supervised as a pane always has one; a child supervised as a process has no
+	 * pane identity at all, and no label stands in for it.
+	 */
+	paneId?: string;
+	/**
+	 * The supervisor that owns this child and the address it gave back. Absent
+	 * when a child is described by a bare pane id alone — a fixture, or a caller
+	 * that predates the supervision seam; {@link childHandle} then addresses it
+	 * through the pane host.
+	 */
+	child?: SupervisorHandle;
 	/**
 	 * Whether this child's harness appends to {@link sessionFile} as it runs (pi),
 	 * or keeps its transcript elsewhere (agy). The never-started grace reads that
@@ -267,9 +292,16 @@ function classify(running: RunningSubagent): Classification | null {
 		}
 		if (exit.code === 0) {
 			// pi exited cleanly without reporting: the user quit the child session.
-			// The work that happened is still worth returning.
+			// Under a pane host the work that happened is still worth returning, and
+			// the session is where it is read. A plain child has no pane the summary
+			// would lead back to, so the same ending is content-free there: nothing it
+			// wrote is the report, and nothing is scraped to invent one.
 			return {
-				outcome: { kind: "completed", via: "session-exit", summary: summary() },
+				outcome: {
+					kind: "completed",
+					via: "session-exit",
+					summary: running.paneId === undefined ? null : summary(),
+				},
 				consume: [running.exitCodeFile],
 			};
 		}
@@ -283,11 +315,64 @@ function classify(running: RunningSubagent): Classification | null {
 }
 
 /**
+ * The handle a child is addressed through: the one its spawn returned, or — for
+ * a child described by a bare pane id — a pane child of the pane supervisor.
+ * Null only when a child has neither, which a spawn never produces: every child
+ * is opened through a supervisor and keeps its handle.
+ */
+export function childHandle(running: RunningSubagent): SupervisorHandle | null {
+	if (running.child) return running.child;
+	return running.paneId === undefined ? null : paneChild(running.paneId);
+}
+
+/**
+ * How a plain child ended when its process is gone and no sidecar explains it.
+ *
+ * The wrapper writes its exit-code sidecar before it exits, so a child whose
+ * process is gone and whose sidecar is missing was killed before it could write
+ * one — an OOM kill, a SIGKILL of the shell. Its own captured status is then the
+ * only reading left, and a status this kind could not capture (a death by
+ * signal) is still an ending: the wait reports the failure instead of waiting
+ * for a sidecar that will never land.
+ *
+ * No summary is read from the session here. A plain child that exits without
+ * reporting is the content-free completion: the work happened, and nothing it
+ * wrote is the report.
+ */
+function processEnding(child: SupervisorHandle): SubagentOutcome {
+	const code = child.supervisor.exitCode?.(child) ?? null;
+	return code === 0
+		? { kind: "completed", via: "turn-end", summary: null }
+		: { kind: "failed", reason: "exit", exitCode: code, summary: null };
+}
+
+/**
+ * The stderr a failure can quote, read from the child's own supervisor at the
+ * moment it is classified.
+ *
+ * Only a kind that gives a child a stream of its own has any, and only a failure
+ * wants it: a report is the child's word, an interrupt the human's, and neither
+ * needs a forensic tail. Nothing here is scraped — the text is what the child
+ * wrote, kept while it wrote it.
+ */
+function failureEvidence(running: RunningSubagent): string | undefined {
+	const child = childHandle(running);
+	if (child === null) return undefined;
+	const tail = child.supervisor.stderr?.(child) ?? "";
+	return tail === "" ? undefined : tail;
+}
+
+/**
  * Overridable bits of the wait loop. Only tests pass these; the defaults are what
  * production uses.
  */
 export interface WatcherDeps {
-	/** Pane liveness probe. Returns null when the answer is unknown. */
+	/**
+	 * Pane liveness probe, for a child addressed by its pane id. The default asks
+	 * the child's own supervisor whether its pane has ended. Without a pane id
+	 * there is no pane to probe: a process's end is read from the process itself,
+	 * through its supervisor. Returns null when unknown.
+	 */
 	paneExists?: (paneId: string) => Promise<boolean | null>;
 	pollIntervalMs?: number;
 	/** Empty-session grace before a run is called never-started. */
@@ -302,13 +387,17 @@ export interface WatcherDeps {
  * which of the two it was. The two are distinct because only one of them says
  * anything about the pane: a shutdown leaves it open at the child's prompt, an
  * operator's interrupt has its pane closed by the relay.
+ *
+ * A child with no pane has no cancellation to reach: a process that dies is its
+ * own ending, so `cancelled` is a pane host's outcome alone.
  */
 export function waitForSubagent(
 	running: RunningSubagent,
 	signal?: AbortSignal,
 	deps: WatcherDeps = {},
 ): Promise<SubagentOutcome> {
-	const paneExists = deps.paneExists ?? ((paneId: string) => paneHost.childExists(paneId));
+	const paneExists = deps.paneExists;
+	const child = childHandle(running);
 	const neverStartedMs = deps.neverStartedMs ?? NEVER_STARTED_MS;
 
 	return new Promise((resolve) => {
@@ -341,15 +430,27 @@ export function waitForSubagent(
 		const check = async (): Promise<void> => {
 			if (settled) return;
 
+			// A failure is the one ending a child's own stderr is evidence for: it is
+			// where a crash, or a prompt pi refused before any run, says why. The tail
+			// rides with the outcome so it reaches the report, and only ever on a
+			// failure — a completion hands back words, and an interrupt hands back none.
+			const evidenced = (outcome: SubagentOutcome): SubagentOutcome => {
+				if (outcome.kind !== "failed") return outcome;
+				const stderr = failureEvidence(running);
+				return stderr === undefined ? outcome : { ...outcome, stderr };
+			};
+
 			const classification = classify(running);
 			if (classification) {
-				finish(classification.outcome, classification.consume);
+				finish(evidenced(classification.outcome), classification.consume);
 				return;
 			}
 
 			// No signal, and nothing written since launch: a prompt pi refused never
 			// starts a run, so an unchanged session file is the only trace it leaves.
-			// The pane stays open — a human can still fix the credential and drive it on.
+			// A pane child is left at its prompt so a human can still fix the credential
+			// and drive it on; a pane-less one is given the same instruction in its
+			// report instead, because there is nobody to type into it.
 			// Only a harness that writes this file can be read this way: for any other
 			// the unchanged file is the normal state of a healthy run.
 			const graceElapsed = Date.now() - running.startedAt >= neverStartedMs;
@@ -359,17 +460,34 @@ export function waitForSubagent(
 					// A report can land between `classify` and here. It is the child's own
 					// word, so it outranks the inference; the next tick reads it properly.
 					if (readReport(running.reportFile) !== null) return;
-					finish({ kind: "failed", reason: "never-started", exitCode: null, summary: null });
+					finish(evidenced({ kind: "failed", reason: "never-started", exitCode: null, summary: null }));
 					return;
 				}
+			}
+
+			// No signal yet. A pane child whose pane is gone has nothing more to
+			// arrive, and so does a plain child whose process is gone: both are read
+			// from the child's own supervisor, and only the ending differs.
+			if (running.paneId === undefined) {
+				// A process that dies is not a cancellation — nothing vanished, the work
+				// simply stopped — and its death is not left to the sidecar alone: a
+				// wrapper killed before it could write one would hang the batch for the
+				// life of this process. A sidecar, when there is one, was already read by
+				// `classify` above and wins; this is the fallback for the death that left
+				// none. A local flag, so it is cheap enough to read every tick.
+				if (child === null || (await child.supervisor.ended(child)) !== true) return;
+				finish(evidenced(processEnding(child)));
+				return;
 			}
 
 			ticks += 1;
 			if (ticks % PANE_CHECK_EVERY !== 0) return;
 
-			// No signal yet. If the pane itself is gone, nothing more will arrive.
-			const alive = await paneExists(running.paneId);
-			if (alive === false) {
+			// Pane liveness costs a host subprocess, so it is read far less often.
+			const over = paneExists !== undefined
+				? (await paneExists(running.paneId)) === false
+				: child !== null && (await child.supervisor.ended(child)) === true;
+			if (over) {
 				finish({ kind: "cancelled", summary: readFinalMessage(running.sessionFile) });
 			}
 		};

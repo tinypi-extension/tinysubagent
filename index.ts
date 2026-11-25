@@ -1,19 +1,20 @@
 /**
- * tinysubagent — delegate work to subagents running in their own panes.
+ * tinysubagent — delegate work to subagents, each in its own place.
  *
- * A call blocks: the tool opens one pane per task, waits for the whole batch, and
+ * A call blocks: the tool opens one child per task, waits for the whole batch, and
  * returns every child's report in that one tool result. Nothing is delivered to
  * this session afterwards, so the report is the answer rather than a later
  * message. For a batch, every child's result is carried together, one section
  * each.
  *
- * The tool is only registered when this pi is itself running inside a detected
- * pane host. That is a deliberate choice over registering-and-failing: outside
- * one there is no pane to split, so offering the tool would only invite calls
- * that cannot work.
+ * The tool is registered in every pi session. Where a pane host is detected each
+ * child gets its own pane; in a plain terminal, where there is no pane to split,
+ * the same child runs as a headless process instead. Detection therefore chooses
+ * *how* a child is supervised, not whether delegation exists — registering and
+ * failing would refuse work the plain terminal can do.
  *
  * Only four things leave the orchestrator's process: the launch script it
- * writes, the pane-host command that runs it, the poll that
+ * writes, the supervisor command that starts it, the poll that
  * notices when the child is done, and — only when a `systemOneAPIKey` is
  * configured — the SystemOne routing request, which carries each task brief
  * to `systemOneBaseUrl` to choose the child's profile. Everything else is a
@@ -27,7 +28,7 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./src/config/agents.ts";
 import { loadConfig } from "./src/config/config.ts";
-import { activatePaneHost, detectPaneHost, LiveSubPanes, paneHost } from "./src/pane-host/index.ts";
+import { activatePaneHost, launchModeOf, LiveSubPanes, supervisor } from "./src/pane-host/index.ts";
 import { buildParameters } from "./src/present/describe.ts";
 import { registerLifecycle } from "./src/pi/lifecycle.ts";
 import { offerPluginFix, type PluginFixGuard } from "./src/pi/plugin-fix.ts";
@@ -36,8 +37,8 @@ import { createSettingsScreen } from "./src/pi/settings-tui.ts";
 import { createRouteFn, type ClassifierRegistry } from "./src/systemone/route.ts";
 
 export default function tinysubagent(pi: ExtensionAPI): void {
-	// Registered above the pane-host guard: editing a config file needs no pane,
-	// so the command has to exist in every pi session, not only hosted ones. The call is
+	// Registered first: editing a config file needs no child, so the command has to
+	// exist in every pi session, whatever kind of terminal this is. The call is
 	// optional so a host that offers no commands still gets the tool below it.
 	pi.registerCommand?.("subagent-settings", {
 		description: "Edit tinysubagent profiles (enableProfiles + profiles.<name>)",
@@ -52,11 +53,15 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 		},
 	});
 
+	// Detection chooses the kind of supervisor, and nothing else: under a pane host
+	// a child gets a pane, and in a plain terminal it runs as a headless process.
 	activatePaneHost();
-	if (!detectPaneHost()) return;
+	// Read once, right after activation: the schema, the description and every
+	// refusal below advertise what this terminal can run.
+	const mode = launchModeOf(supervisor);
 
 	const { config, warnings: configWarnings } = loadConfig(process.cwd(), getAgentDir());
-	const parameters = buildParameters(config);
+	const parameters = buildParameters(config, mode);
 	// Roles are advertised at registration time, when there is no session context
 	// yet — the process cwd is the best available answer.
 	const advertisedAgents = discoverAgents(process.cwd()).agents;
@@ -68,7 +73,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 	const fixOffered: PluginFixGuard = { value: false };
 
 	/** Cached capability probe for this registration. */
-	const capability = paneHost.createCapability();
+	const capability = supervisor.createCapability();
 
 	/**
 	 * The sub panes this registration opened, tracked for the layout planner. One
@@ -103,6 +108,7 @@ export default function tinysubagent(pi: ExtensionAPI): void {
 			capability,
 			columns,
 			watchers,
+			mode,
 			reportedWarnings,
 			// The pinned devDependency (pi-coding-agent@0.85.1) lags the runtime pi,
 			// whose registry has `findOfType`/`classify`; one cast at the seam.

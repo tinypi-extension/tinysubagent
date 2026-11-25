@@ -1,10 +1,12 @@
 /**
- * Turning a validated request into a running pane.
+ * Turning a validated request into a running child.
  *
  * This module owns the whole spawn recipe: resolve the role, resolve the
  * profile, plan the artifact paths, generate the wrapper script, write it, and
- * ask the pane host for a pane. It is deliberately free of any pi extension API so the
- * recipe can be exercised directly by tests and by the smoke harness.
+ * ask the chosen supervisor to start it — a pane where a pane host owns this
+ * terminal, a detached process where none does. It is deliberately free of any
+ * pi extension API so the recipe can be exercised directly by tests and by the
+ * smoke harness.
  *
  * Nothing here waits for a child. Waiting is the watcher's job.
  */
@@ -17,10 +19,15 @@ import { childExtensionPath } from "../paths.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	LiveSubPanes,
-	paneHost,
+	launchModeOf,
+	paneHostOf,
 	planPlacement,
 	planResizes,
+	supervisor as activeSupervisor,
+	type PaneHost,
 	type Placement,
+	type Supervisor,
+	type SupervisorHandle,
 } from "../pane-host/index.ts";
 import { resolveProfile } from "../config/profiles.ts";
 import { declaresSpawnTool, resolveToolList } from "../tool-list.ts";
@@ -40,10 +47,24 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		return { ok: false, error: `unknown agent "${request.agent}". Available: ${available}.` };
 	}
 
-	const profile = resolveProfile(context.config, request.profile, {
-		model: context.parentModel,
-		thinking: context.parentThinking,
-	});
+	// Which supervisor runs this child, decided once and read three times: whether
+	// this profile can run here at all, how the child is launched, and how it is
+	// opened below. A context may name its own supervisor (a test with an injected
+	// spawn); otherwise the seam's active kind decides, and no call site reads a
+	// terminal's environment itself.
+	const seam: Supervisor = context.supervisor ?? activeSupervisor;
+	const panes = paneHostOf(seam);
+	// The mode is a property of the supervision kind, not of an argv default: a
+	// pane renders the child's UI, so a pane child is interactive; a plain terminal
+	// has nowhere to render it, so a plain child runs headless and exits on its own.
+	const mode = launchModeOf(seam);
+
+	const profile = resolveProfile(
+		context.config,
+		request.profile,
+		{ model: context.parentModel, thinking: context.parentThinking },
+		mode,
+	);
 	if (!profile.ok) return { ok: false, error: profile.error };
 
 	const harness = harnessFor(profile);
@@ -112,6 +133,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// The one entry a role's list cannot have is the way to hand the result back.
 	// The resolver appends it whenever an allowlist exists.
 	const id = runId();
+
 	const paths = buildLaunchPaths({
 		sessionDir: context.sessionDir,
 		sessionId: context.sessionId,
@@ -130,6 +152,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		thinking: profile.thinking,
 		tools,
 		taskFile: paths.taskFile,
+		mode,
 	});
 
 	const script = buildLaunchScript({
@@ -146,6 +169,7 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 		exitCodeFile: paths.exitCodeFile,
 		launchPrefix: resolveLaunchPrefix(context.env, context.cwd),
 		harness: profile.harness,
+		mode,
 	});
 
 	// The shared context: a fork of the orchestrator's branch, written where the
@@ -173,30 +197,36 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 	// One source for both layout reads below: the pane this pi is running in is
 	// the orchestrator, so it is both the birth split target and the reference
-	// rect the 3/5 pass measures against.
-	const orchestratorPaneId = paneHost.currentPaneId(context.env);
+	// rect the 3/5 pass measures against. The pane-only operations come from the
+	// chosen supervisor's pane kind; another kind of supervisor simply has none.
+	const orchestratorPaneId = panes?.currentPaneId(context.env) ?? null;
 	const columns = context.columns;
 
 	// Without a tracker this stays the original call: split right off the
 	// orchestrator. With one, the placement decides target and direction.
-	const placement = columns && orchestratorPaneId
-		? await resolvePlacement(columns, orchestratorPaneId, warnings)
+	const placement = panes && columns && orchestratorPaneId
+		? await resolvePlacement(panes, columns, orchestratorPaneId, warnings)
 		: null;
 	const targetPaneId = placement?.targetPaneId ?? orchestratorPaneId;
 	const direction = placement?.direction ?? "right";
 
-	let paneId: string;
+	let child: SupervisorHandle;
 	try {
-		paneId = await paneHost.openChild({
+		child = await seam.open({
 			cwd: context.cwd,
-			targetPaneId,
-			direction,
 			scriptPath: paths.scriptFile,
 			label: request.name,
-			focus: false,
+			// A placement only means something to a kind that has panes. Asking a plain
+			// terminal for one would be asking it to place something it does not have.
+			...(panes ? { pane: { targetPaneId, direction, focus: false } } : {}),
 		});
 	} catch (error) {
-		return { ok: false, error: `could not open a pane: ${errorMessage(error)}` };
+		return {
+			ok: false,
+			error: panes
+				? `could not open a pane: ${errorMessage(error)}`
+				: `could not start the child: ${errorMessage(error)}`,
+		};
 	}
 
 	// The resize pass only runs when the pane is tracked. It reads the layout a
@@ -204,12 +234,12 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 	// produced — the first read's geometry is stale the moment the pane opens.
 	// Both the read and every resize are best-effort: a failed read means no
 	// pass, and a failed resize leaves the pane open and usable.
-	if (columns && orchestratorPaneId) {
-		await applySpawnResizes(columns, orchestratorPaneId, paneId, warnings);
+	if (panes && columns && orchestratorPaneId) {
+		await applySpawnResizes(panes, columns, orchestratorPaneId, child.id, warnings);
 	}
 
-	// Cosmetic: a rename failure must not fail the spawn.
-	void paneHost.renameChild(paneId, request.name);
+	// Cosmetic: a rename failure must not fail the spawn. Only a pane can be named.
+	if (panes) void panes.renameChild(child.id, request.name);
 
 	return {
 		ok: true,
@@ -219,7 +249,8 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 			name: request.name,
 			agent: request.agent,
 			profile: { name: profile.name, model: profile.model, thinking: profile.thinking },
-			paneId,
+			paneId: panes ? child.id : undefined,
+			child,
 			writesSession: harness.writesSession,
 			sessionFile: paths.childSessionFile,
 			// The whole file the child launches with, header included: the watcher's
@@ -239,11 +270,12 @@ export async function spawnOne(request: SpawnRequest, context: SpawnContext): Pr
 
 /** Resolve where a new pane should be placed, using the current layout. */
 async function resolvePlacement(
+	panes: PaneHost,
 	columns: LiveSubPanes,
 	orchestratorPaneId: string,
 	warnings: string[],
 ): Promise<Placement> {
-	const layout = await paneHost.readLayout(orchestratorPaneId);
+	const layout = await panes.readLayout(orchestratorPaneId);
 	if (!layout) warnings.push("could not read the pane layout; placement falls back to the orchestrator pane");
 	// A failed read must not prune the tracker, so the empty case skips
 	// `liveIn` (which forgets every id the tab does not report) and plans a
@@ -254,19 +286,20 @@ async function resolvePlacement(
 
 /** Record the pane and apply the initial resize pass. */
 async function applySpawnResizes(
+	panes: PaneHost,
 	columns: LiveSubPanes,
 	orchestratorPaneId: string,
 	paneId: string,
 	warnings: string[],
 ): Promise<void> {
 	columns.place(paneId);
-	const layout = await paneHost.readLayout(orchestratorPaneId);
+	const layout = await panes.readLayout(orchestratorPaneId);
 	if (!layout) {
 		warnings.push("could not read the pane layout after opening the sub pane; the layout pass was skipped");
 		return;
 	}
 	for (const op of planResizes(layout, orchestratorPaneId, columns.liveIn(layout), paneId)) {
-		if (!await paneHost.resizeChild(op)) {
+		if (!await panes.resizeChild(op)) {
 			warnings.push(`could not resize sub pane ${op.paneId}; the sub pane is still open and usable`);
 		}
 	}

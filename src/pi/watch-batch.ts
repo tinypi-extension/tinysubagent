@@ -16,24 +16,53 @@
  * failure and cancellation. A shutdown leaves every pane open too: nothing was
  * relayed, and the waits simply end.
  *
+ * A plain child has no pane to leave open, so nothing about its ending is a
+ * reason to keep this module's state: its supervisor record and output
+ * listeners are released on every ending, once the batch is over.
+ *
  * An interrupt of the call's turn is relayed from here. The wait is the trigger:
  * when it starts, or when the signal aborts under it, one Esc goes into every
  * live sub pane — the batch's own children and any earlier call's still open,
  * idle ones included — every wait ends as `interrupted`, and then each of those
  * panes is closed. The Esc is what stops the turn; the close is what stops the
  * child from being left behind with nobody waiting on it.
+ *
+ * A child with no pane cannot be typed at, so an interrupt ends it the only way
+ * it can: its own supervisor's `stop`, which kills its process group. The same
+ * stop runs when a shutdown aborts the waits directly, because a session going
+ * away must not leave a child's processes behind either.
  */
 
-import { paneHost, type LiveSubPanes } from "../pane-host/index.ts";
+import { paneChild, type LiveSubPanes } from "../pane-host/index.ts";
 import { relayInterrupt } from "../children/interrupt.ts";
-import { waitForSubagent, type RunningSubagent } from "../children/watcher.ts";
+import { childHandle, waitForSubagent, type RunningSubagent } from "../children/watcher.ts";
 import type { SubagentResult } from "../present/result.ts";
+import { createLiveLines, type LiveChild, type LiveLineTuning } from "./live-lines.ts";
 
 export interface WatchBatchDeps {
 	/** Watchers still running, so a shutdown can end them; owned by the caller. */
 	watchers: Set<AbortController>;
 	/** The sub panes this registration opened; a child whose pane was closed is dropped here. */
 	columns: LiveSubPanes;
+	/**
+	 * The tool call's partial channel, in the shape a live view draws: the whole
+	 * batch as one line per child, then an empty view when the result arrives.
+	 * Absent when the caller has no partial state to draw into.
+	 */
+	onLines?: (lines: readonly string[]) => void;
+	/** The live view's cadence, ticker and clock; production's defaults when absent. */
+	live?: LiveLineTuning;
+}
+
+/** One child as the live view needs it. */
+function liveChild(running: RunningSubagent): LiveChild {
+	return {
+		agent: running.agent ?? running.name,
+		name: running.name,
+		profile: running.profile,
+		sharedContext: running.sharedContext,
+		startedAt: running.startedAt,
+	};
 }
 
 /**
@@ -57,6 +86,44 @@ export async function watchBatch(
 		watchers.add(controller);
 		return controller;
 	});
+	const children = runnings.map(childHandle);
+
+	// The children a pane relay cannot reach: a child with no pane id is supervised
+	// as a process, and the only way to stop it is its own supervisor's `stop` — a
+	// kill, not an Esc. This is the seam's own distinction, not a second kind
+	// check: a pane child is addressed by the id the column tracker holds.
+	const processChildren = children.filter(
+		(child, index): child is NonNullable<typeof child> => child !== null && runnings[index]?.paneId === undefined,
+	);
+
+	// Started at most once, by whichever path ends the batch: an interrupt's relay
+	// and a shutdown's direct abort must not both kill, and a batch that ends any
+	// other way must kill nothing.
+	let stopping: Promise<void>[] | null = null;
+	const stopProcessChildren = (): Promise<void>[] => {
+		stopping ??= processChildren.map((child) => child.supervisor.stop(child));
+		return stopping;
+	};
+
+	// The live view exists only where the children stream their output. A pane
+	// child has no `output` member — it is addressed by its pane, and the pane is
+	// the view — so a pane-host batch draws no lines even when a channel was
+	// offered. This is the seam's own distinction, not a second kind check.
+	const live =
+		deps.onLines !== undefined &&
+		children.every((child) => child !== null && typeof child.supervisor.output === "function")
+			? createLiveLines(runnings.map(liveChild), { onLines: deps.onLines, ...deps.live })
+			: null;
+
+	// Subscribe before the first wait: a child starts writing as soon as it is
+	// spawned, and a stream nobody reads is a pipe that fills. Each reader only
+	// updates its own tail; the ticker is the sole redraw. A child's subscription
+	// ends with its own wait, so a settled child adds no text to the view while
+	// its siblings still run.
+	const stops = children.map((child, index) => {
+		if (child === null) return () => {};
+		return child.supervisor.output?.(child, live?.reader(index) ?? (() => {})) ?? (() => {});
+	});
 
 	// The call's signal is not a pane's fate on its own: forwarding it relays the
 	// interrupt, ends every wait, and then closes the panes it interrupted. Each
@@ -78,24 +145,42 @@ export async function watchBatch(
 	const forward = (): void => {
 		if (forwarded) return;
 		const paneIds = columns.trackedIds();
-		forwarded = relayInterrupt(paneIds).then(() => {
+		forwarded = relayInterrupt(paneIds).then(async () => {
 			for (const controller of controllers) controller.abort("interrupt");
 			for (const paneId of paneIds) {
 				columns.drop(paneId);
-				void paneHost.closeChild(paneId);
+				const child = paneChild(paneId);
+				void child.supervisor.close(child);
 			}
+			// After the abort, so every wait has already ended as `interrupted`: a child
+			// killed first could exit and be read as a failure instead of an interrupt.
+			await Promise.all(stopProcessChildren());
 		});
 	};
+
+	// The session edge does not pass through `forward`: the lifecycle aborts each
+	// watcher directly, with no relay and no pane close. A child with no pane still
+	// has a process to end, so it is stopped here — and the abort is what makes the
+	// wait read as `shutdown` before an exit code can be classified.
+	for (const controller of controllers) {
+		controller.signal.addEventListener("abort", () => {
+			if (controller.signal.reason === "shutdown") void stopProcessChildren();
+		}, { once: true });
+	}
 	signal?.addEventListener("abort", forward, { once: true });
 	// An abort that landed before this wait was reached still relays: the listener
 	// would never fire for it.
 	if (signal?.aborted) forward();
 
 	try {
+		live?.start();
 		const results = await Promise.all(
 			runnings.map(async (running, index) => {
 				const controller = controllers[index];
+				const child = children[index] ?? null;
+				const stopOutput = stops[index] ?? (() => {});
 				const outcome = await waitForSubagent(running, controller?.signal);
+				stopOutput();
 				if (controller) watchers.delete(controller);
 				// A wait that ended because the child is over closes its pane: a report and a
 				// session exit are both the child leaving, so nothing is left to read there.
@@ -105,9 +190,14 @@ export async function watchBatch(
 				// there is a reason to read. An interrupt is not closed here either: it was
 				// already closed by the relay that ended it. No rebalance runs here: the layout
 				// is set at spawn time and a close never revisits it.
-				if (outcome.kind === "completed" && outcome.via !== "turn-end") {
-					columns.drop(running.paneId);
-					void paneHost.closeChild(running.paneId);
+				//
+				// A child with no handle has nothing to close and nothing tracked, so the
+				// pane tracking is skipped rather than addressed blindly. A child supervised
+				// as a process is never in the tracker to begin with; its own record is
+				// released once the batch is over, below.
+				if (child && outcome.kind === "completed" && outcome.via !== "turn-end") {
+					columns.drop(child.id);
+					void child.supervisor.close(child);
 				}
 
 				return {
@@ -124,9 +214,24 @@ export async function watchBatch(
 			}),
 		);
 		await forwarded;
+		// A shutdown aborted the waits directly; whatever it started is awaited here,
+		// so the call never returns while a child's group is still being torn down.
+		if (stopping !== null) await Promise.all(stopping);
 		return results;
 	} finally {
+		// The report is the result now: the live lines go with the frame that drew
+		// them. The empty view is sent before this function returns, so a host never
+		// has to guess that a finished call means the old lines are stale.
+		live?.clear();
 		signal?.removeEventListener("abort", forward);
 		for (const controller of controllers) watchers.delete(controller);
+		// A pane child's record belongs to the host and is left as its ending
+		// requires. A process child's record is this module's own state, and no rule
+		// about leaving a prompt open applies where there is no pane: release it
+		// whichever way the batch ended. Any stop this batch started has finished by
+		// the time it returns, so releasing the record cannot hide a pid from the
+		// interrupt that is tearing it down. `close` does its work before it yields, so
+		// a caller never sees a record that outlived the batch.
+		for (const child of processChildren) void child.supervisor.close(child);
 	}
 }

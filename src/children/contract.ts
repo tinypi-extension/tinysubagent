@@ -10,7 +10,7 @@
  */
 
 import type { TinysubagentConfig } from "../config/config.ts";
-import type { LiveSubPanes } from "../pane-host/index.ts";
+import type { LiveSubPanes, Supervisor } from "../pane-host/index.ts";
 import type { AgentDef, ThinkingLevel } from "../types.ts";
 import type { RunningSubagent } from "./watcher.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -99,6 +99,12 @@ export interface SpawnContext {
 	 * nothing to remember.
 	 */
 	reportedWarnings?: Set<string>;
+	/**
+	 * The supervisor this spawn goes through. Absent means the seam's active kind,
+	 * which is what production uses; a test passes one to pin the kind — and, for a
+	 * plain terminal, the child-spawn behind it — without activating globals.
+	 */
+	supervisor?: Supervisor;
 }
 
 export interface Spawned {

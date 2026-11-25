@@ -73,16 +73,6 @@ test("a profile name is trimmed rather than treated as unknown", () => {
 	if (r.ok) assert.equal(r.name, "pro");
 });
 
-test("when profiles are disabled an omitted profile inherits the parent", () => {
-	const disabled: TinysubagentConfig = { enableProfiles: false, profiles: {}, env: {}, systemOne: null, classifier: null, sources: [] };
-	assert.deepEqual(resolveProfile(disabled, undefined, PARENT), {
-		ok: true,
-		name: CURRENT_PROFILE,
-		model: PARENT.model,
-		thinking: PARENT.thinking,
-	});
-});
-
 test("when profiles are disabled `current` is still a harmless no-op", () => {
 	// A replayed call or a long-lived session must not fail for a request
 	// that resolves to exactly the same thing as omitting it.
@@ -194,4 +184,59 @@ test("resolvedProfileLabel omits absent fields", () => {
 test("resolvedProfileLabel includes the agy harness and thinking", () => {
 	assert.equal(resolvedProfileLabel({ name: "gemini", harness: "agy", model: "gm", thinking: "low" }), "gemini (agy, gm, low)");
 	assert.equal(resolvedProfileLabel({ name: "fast", harness: "pi", model: "m" }), "fast (m)");
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// One list authority, two supervision modes
+// ────────────────────────────────────────────────────────────────────────────
+
+const MIXED_HARNESS = enabled({
+	gemini: { harness: "agy", model: "gm", thinking: "medium" },
+	light: { model: "oc-openai/deepseek-flash", thinking: "low" },
+});
+
+test("in a plain terminal the offered profile list drops every profile that cannot run there", () => {
+	assert.deepEqual(availableProfileNames(MIXED_HARNESS, "headless"), ["current", "light"]);
+	// The pane host is unchanged: it is exactly the mode the agy profile runs in.
+	assert.deepEqual(availableProfileNames(MIXED_HARNESS, "pane"), ["current", "gemini", "light"]);
+});
+
+test("a plain-terminal list may be just `current`, which is never filtered", () => {
+	// Nothing in `current` needs a pane: it is this session's own model and thinking.
+	const onlyAgy = enabled({ gemini: { harness: "agy", model: "gm" } });
+	assert.deepEqual(availableProfileNames(onlyAgy, "headless"), ["current"]);
+});
+
+test("an explicit request for a profile that cannot run here names the pane host", () => {
+	const r = resolveProfile(MIXED_HARNESS, "gemini", PARENT, "headless");
+	assert.equal(r.ok, false);
+	if (r.ok) return;
+	assert.match(r.error, /"gemini"/);
+	assert.match(r.error, /pane host/);
+	// It is a profile this config has, so it must not read as a name that does not exist.
+	assert.doesNotMatch(r.error, /unknown profile/);
+	// The same request under a pane host is exactly what it always was.
+	assert.deepEqual(resolveProfile(MIXED_HARNESS, "gemini", PARENT, "pane"), {
+		ok: true,
+		name: "gemini",
+		harness: "agy",
+		model: "gm",
+		thinking: "medium",
+	});
+});
+
+test("the unknown-name error lists only the profiles this mode can offer", () => {
+	const r = resolveProfile(MIXED_HARNESS, "nope", PARENT, "headless");
+	assert.equal(r.ok, false);
+	if (r.ok) return;
+	assert.match(r.error, /unknown profile "nope"/);
+	assert.doesNotMatch(r.error, /gemini/);
+});
+
+test("the profile parameter description offers only the profiles this mode can run", () => {
+	const plain = profileParamDescription(MIXED_HARNESS, false, "headless");
+	assert.match(plain, /`light`/);
+	assert.doesNotMatch(plain, /gemini/);
+	// Under a pane host the agy profile is offered, with its harness and thinking.
+	assert.match(profileParamDescription(MIXED_HARNESS, false, "pane"), /`gemini` \(agy, gm, medium\)/);
 });

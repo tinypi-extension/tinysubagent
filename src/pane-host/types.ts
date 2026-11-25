@@ -70,8 +70,8 @@ export interface CapabilityCheck {
 }
 
 /**
- * The host-neutral pane-host seam. Only the adapter knows which CLI and which
- * environment variables back these operations.
+ * The pane-only operations of one host. Only the adapter knows which CLI and
+ * which environment variables back them.
  */
 export interface PaneHost {
 	readonly kind: PaneHostKind;
@@ -94,4 +94,98 @@ export interface PaneHost {
 	 * Herdr resolves as soon as the sends are issued; never rejects.
 	 */
 	relayInterrupt(paneIds: readonly string[]): Promise<void>;
+}
+
+/**
+ * The kinds of supervisor this extension can choose: a pane host, or the plain
+ * terminal that has none.
+ */
+export type SupervisorKind = PaneHostKind | "plain";
+
+/**
+ * Where a child's pane is born, when the chosen kind of supervisor is a pane
+ * host. A kind with no panes has nowhere to put it and ignores this.
+ */
+export interface PanePlacement {
+	/** Pane to split; null asks the adapter for its own anchor. */
+	targetPaneId: string | null;
+	direction: "right" | "down";
+	focus: boolean;
+}
+
+/** One child to start, described without naming a kind. */
+export interface OpenRequest {
+	cwd: string;
+	/** Path to the generated wrapper script the child runs. */
+	scriptPath: string;
+	/** The child's short name, shown as its label where the kind supports one. */
+	label?: string;
+	/** Pane hosts only: where the child's pane is born. */
+	pane?: PanePlacement;
+}
+
+/**
+ * One live child, addressed for supervision: the supervisor that opened it and
+ * the address this child has there. Only that supervisor can end, stop or close
+ * it, so no later call has to guess which kind of child this is.
+ */
+export interface SupervisorHandle {
+	readonly supervisor: Supervisor;
+	readonly id: string;
+}
+
+/**
+ * The seam every spawn goes through: open a child, learn when its wait is over,
+ * stop it, close it — and the detection and readiness that decide whether this
+ * pi process may spawn at all.
+ *
+ * Deliberately narrower than a pane host: layout, resize, rename, focus and
+ * relay-by-typing-Esc are not here, because only a pane host can honour them.
+ */
+export interface Supervisor {
+	readonly kind: SupervisorKind;
+	/** True when this pi process is running under this kind of supervisor. */
+	detectedIn(env: NodeJS.ProcessEnv): boolean;
+	/** Fresh readiness cache, one per extension registration. */
+	createCapability(): CapabilityCheck;
+	/** Open a child and return the handle that addresses it from here on. */
+	open(request: OpenRequest): Promise<SupervisorHandle>;
+	/** True once the child is over, false while it is alive; null when the kind cannot tell. */
+	ended(child: SupervisorHandle): Promise<boolean | null>;
+	/**
+	 * Stop one child: the operator's interrupt. A pane host relays a keystroke into
+	 * the child's pane; a kind with no pane ends the child's process group instead.
+	 * Never rejects.
+	 */
+	stop(child: SupervisorHandle): Promise<void>;
+	close(child: SupervisorHandle): Promise<boolean>;
+	/**
+	 * Subscribe to a child's stdout as text; returns the unsubscribe.
+	 *
+	 * Only a kind that reads a child's output has this: a pane child is addressed
+	 * by its pane, not by a stream, so the member is absent there rather than
+	 * present and inert.
+	 */
+	output?(child: SupervisorHandle, onText: (chunk: string) => void): () => void;
+	/**
+	 * The end of a child's stderr as it stands, for a failure report; empty when the
+	 * child wrote nothing there. Only a kind that gives a child a stderr stream of
+	 * its own has this: a pane child's crash is readable on its pane, so the member
+	 * is absent there rather than present and empty.
+	 */
+	stderr?(child: SupervisorHandle): string;
+	/**
+	 * The status the child's process exited with, for a kind that supervises a
+	 * child as a process; null when it has not exited, or when it died by a signal
+	 * and so has no status to report. Only a kind with a process of its own to ask
+	 * has this: a pane child's ending is its pane's, and the member is absent there
+	 * rather than present and always null.
+	 */
+	exitCode?(child: SupervisorHandle): number | null;
+}
+
+/** A supervisor whose kind is a pane host: the only home of the pane-only operations. */
+export interface PaneHostSupervisor extends Supervisor {
+	readonly kind: PaneHostKind;
+	readonly panes: PaneHost;
 }

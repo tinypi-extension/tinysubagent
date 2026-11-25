@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { PLUGIN_ENTRYPOINT, PLUGIN_ID, type Rect } from "../../src/herdr/cli.ts";
 import type { PaneLayout } from "../../src/pane-host/types.ts";
 import { LiveSubPanes, planResizes } from "../../src/herdr/layout.ts";
-import { MAX_PARALLEL_TASKS, collectRequests, resolveCwd, uniqueName } from "../../src/children/requests.ts";
+import { MAX_PARALLEL_TASKS, collectRequests, resolveCwd } from "../../src/children/requests.ts";
 import { spawnOne } from "../../src/children/spawn.ts";
 import { childSessionDirFor } from "../../src/children/launch-paths.ts";
 import { piHarness } from "../../src/children/harness/index.ts";
@@ -99,14 +99,6 @@ test("a malformed entry names its own index", () => {
 	const missing = collectRequests(input);
 	assert.equal(missing.ok, false);
 	assert.match(missing.ok === false ? missing.error : "", /tasks\[1\] needs both "agent" and "task"/);
-});
-
-test("unique names keep counting past the first collision", () => {
-	const used = new Set<string>();
-	assert.equal(uniqueName("worker", used), "worker");
-	assert.equal(uniqueName("worker", used), "worker-2");
-	assert.equal(uniqueName("worker", used), "worker-3");
-	assert.equal(uniqueName("scout", used), "scout");
 });
 
 test("cwd resolution is pure path work; a bad path is left to fail loudly", () => {

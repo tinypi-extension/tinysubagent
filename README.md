@@ -1,22 +1,30 @@
 # tinysubagent
 
 Pane-native subagent spawning for [Pi](https://pi.dev). Define roles as markdown files and
-delegate to them. Each subagent runs in its own sub pane — a [Herdr TUI](https://herdr.dev/) pane in the
-right-hand column or a [Rex App](https://www.superlogical.com/rex/docs/automate/cli) block — with its own context window, and hands its report back as this
-call's result.
+delegate to them. Each subagent runs in its own sub pane in:
+  - [Herdr TUI](https://herdr.dev/) pane in the
+right-hand column 
+  - [Rex App](https://www.superlogical.com/rex/docs/automate/cli) block — with its own context window, and hands its report back as this call's result.
+
+Without one, children run as headless processes in a plain terminal.
 
 - **One blocking call:** the tool waits for the whole batch and returns every report in one result. No fire-and-forget, no second batch until it returns.
-- **Esc stops the batch:** an interrupt in the orchestrator's pane is relayed to every live sub pane, so each child's turn stops where it is, is reported `interrupted`, and its pane is closed — nothing is left running.
+- **Esc stops the batch:** under a pane host, an interrupt stops each child's turn and closes its pane. In a plain terminal, it kills the batch's child process groups.
 - **Parallel batches:** one or more tasks (up to 4), reporting together in one result.
-- **Model profiles:** optional named profiles with a shared `model` and `thinking` setting for pi or agy.
+- **Model profiles:** optional named profiles with a shared `model` and `thinking` setting for pi or agy where supported.
 - **Per-child `env`:** static variables for subagents, without touching the orchestrator's env.
 
-The tool registers inside a herdr pane or a Rex block. Outside both hosts there is no pane to
-split, so it is not offered; when herdr and Rex variables are both present, herdr wins.
+A pane host is the richer option: you can watch and steer children in their panes. In a plain
+terminal, transient live lines are the only view while the batch runs; the call still returns one
+report per child. You cannot watch a child in a pane, steer it, or read its screen's scrollback.
+A non-zero exit's report includes its exit code and the last 20 lines of stderr; a child that never starts gets an
+actionable remedy in its report. A detected pane host takes precedence, including when it is not
+ready; herdr wins if herdr and Rex are both detected. See [why panes are one supervisor](docs/adr/0004-panes-are-one-supervisor.md)
+and [why plain-terminal children cannot be steered](docs/adr/0005-a-plain-terminal-child-cannot-be-steered.md).
 
 ## Requirements
-- Pi coding agent.
-- Either a [Herdr TUI](https://herdr.dev/) pane (version 0.8.2 or newer) or a [Rex App](https://www.superlogical.com/rex/docs/automate/cli) block with
+- Pi coding agent. 
+- For the richer pane experience, either a [Herdr TUI](https://herdr.dev/) pane (version 0.8.2 or newer) or a [Rex App](https://www.superlogical.com/rex/docs/automate/cli) block with
   `REX_SESSION` and `REX_BLOCK` exported and `rex` reachable on `PATH`.
 
 ## Install
@@ -52,8 +60,9 @@ herdr plugin list                        # verify: enabled  [local:/path/to/new/
 
 ### Verify (herdr only)
 
-`pi list` shows tinysubagent, `herdr plugin list` shows the plugin enabled, and pi restarted inside
-a herdr pane lists a `subagent` tool with your roles. Otherwise see [Troubleshooting](#troubleshooting).
+`pi list` shows tinysubagent. In a plain terminal, restart pi and confirm the `subagent` tool is
+available. For herdr, `herdr plugin list` should show the plugin enabled and pi restarted inside a
+herdr pane should list `subagent` with your roles. Otherwise see [Troubleshooting](#troubleshooting).
 
 ## Define a role
 
@@ -166,7 +175,7 @@ a shared model and thinking level, translated to the harness's supported setting
 
 Install and sign in to the `agy` CLI separately. Agy profiles launch interactively in their own
 herdr pane; the model may pause for approval, and you can review or steer it there. Agy cannot ennforce an alllowlist: the `defaultTools` floor and a role's `tools`
-list are both ignored.
+list are both ignored. Agy profiles are hidden in a plain terminal.
 
 Each run gets a temporary workspace containing its Stop hook. To let agy load the hook without a
 first-run trust prompt, tinysubagent temporarily adds that workspace to
